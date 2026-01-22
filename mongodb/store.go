@@ -49,15 +49,40 @@ type Config struct {
 
 	// ReconnectBackoff is the wait time before reconnecting change stream.
 	ReconnectBackoff time.Duration
+
+	// AutoCreateIndexes controls whether indexes are created automatically on Connect.
+	// Default is true. Set to false if you want to manage indexes manually.
+	AutoCreateIndexes bool
+
+	// Capped enables capped collection mode.
+	// Capped collections have a fixed size and automatically remove oldest documents.
+	// Note: Capped collections cannot have unique indexes, so tag-based lookups
+	// may return multiple entries. Use with caution.
+	Capped bool
+
+	// CappedSizeBytes is the maximum size in bytes for a capped collection.
+	// Only used when Capped is true. Default is 100MB.
+	CappedSizeBytes int64
+
+	// CappedMaxDocuments is the maximum number of documents in a capped collection.
+	// Only used when Capped is true. Default is 0 (no document limit, only size limit).
+	CappedMaxDocuments int64
+
+	// Logger is the logger for the store. If nil, uses slog.Default().
+	Logger *slog.Logger
 }
 
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
 	return Config{
-		Database:         "config",
-		Collection:       "entries",
-		WatchBufferSize:  100,
-		ReconnectBackoff: 5 * time.Second,
+		Database:          "config",
+		Collection:        "entries",
+		WatchBufferSize:   100,
+		ReconnectBackoff:  5 * time.Second,
+		AutoCreateIndexes: true,
+		Capped:            false,
+		CappedSizeBytes:   100 * 1024 * 1024, // 100MB
+		CappedMaxDocuments: 0,                 // No document limit
 	}
 }
 
@@ -114,6 +139,18 @@ func WithConfig(cfg Config) Option {
 		if cfg.ReconnectBackoff > 0 {
 			s.cfg.ReconnectBackoff = cfg.ReconnectBackoff
 		}
+		// Boolean fields need explicit handling
+		s.cfg.AutoCreateIndexes = cfg.AutoCreateIndexes
+		s.cfg.Capped = cfg.Capped
+		if cfg.CappedSizeBytes > 0 {
+			s.cfg.CappedSizeBytes = cfg.CappedSizeBytes
+		}
+		if cfg.CappedMaxDocuments > 0 {
+			s.cfg.CappedMaxDocuments = cfg.CappedMaxDocuments
+		}
+		if cfg.Logger != nil {
+			s.cfg.Logger = cfg.Logger
+		}
 	}
 }
 
@@ -128,6 +165,40 @@ func WithDatabase(name string) Option {
 func WithCollection(name string) Option {
 	return func(s *Store) {
 		s.cfg.Collection = name
+	}
+}
+
+// WithAutoCreateIndexes controls whether indexes are created automatically on Connect.
+func WithAutoCreateIndexes(enabled bool) Option {
+	return func(s *Store) {
+		s.cfg.AutoCreateIndexes = enabled
+	}
+}
+
+// WithCapped enables capped collection mode with the specified size.
+// Capped collections have a fixed size and automatically remove oldest documents.
+// sizeBytes is the maximum size in bytes (must be > 0).
+// maxDocuments is the optional maximum number of documents (0 = no limit).
+//
+// Note: Capped collections cannot have unique indexes, so the unique constraint
+// on (namespace, key, tags) will not be enforced. Consider using regular collections
+// for production use where uniqueness is important.
+func WithCapped(sizeBytes int64, maxDocuments int64) Option {
+	return func(s *Store) {
+		s.cfg.Capped = true
+		if sizeBytes > 0 {
+			s.cfg.CappedSizeBytes = sizeBytes
+		}
+		if maxDocuments > 0 {
+			s.cfg.CappedMaxDocuments = maxDocuments
+		}
+	}
+}
+
+// WithLogger sets the logger for the store.
+func WithLogger(logger *slog.Logger) Option {
+	return func(s *Store) {
+		s.cfg.Logger = logger
 	}
 }
 
@@ -157,7 +228,7 @@ var (
 	_ config.StatsProvider = (*Store)(nil)
 )
 
-// Connect initializes the store (creates indexes and starts change stream listener).
+// Connect initializes the store (optionally creates collection/indexes and starts change stream listener).
 // The MongoDB client must already be connected.
 func (s *Store) Connect(ctx context.Context) error {
 	if s.client == nil {
@@ -165,36 +236,107 @@ func (s *Store) Connect(ctx context.Context) error {
 	}
 
 	s.database = s.client.Database(s.cfg.Database)
+
+	// Create capped collection if configured
+	if s.cfg.Capped {
+		if err := s.ensureCappedCollection(ctx); err != nil {
+			return config.WrapStoreError("create_collection", "mongodb", "", err)
+		}
+	}
+
 	s.collection = s.database.Collection(s.cfg.Collection)
 
-	// Create indexes
-	if err := s.createIndexes(ctx); err != nil {
-		return config.WrapStoreError("create_indexes", "mongodb", "", err)
+	// Create indexes if auto-creation is enabled
+	if s.cfg.AutoCreateIndexes {
+		if err := s.EnsureIndexes(ctx); err != nil {
+			return config.WrapStoreError("create_indexes", "mongodb", "", err)
+		}
 	}
 
 	// Start change stream listener
 	s.watchWg.Add(1)
 	go s.watchChangeStream()
 
+	s.logger().Info("mongodb store connected",
+		"database", s.cfg.Database,
+		"collection", s.cfg.Collection,
+		"capped", s.cfg.Capped,
+	)
+
 	return nil
 }
 
-func (s *Store) createIndexes(ctx context.Context) error {
+// ensureCappedCollection creates the collection as a capped collection if it doesn't exist.
+func (s *Store) ensureCappedCollection(ctx context.Context) error {
+	// Check if collection already exists
+	collections, err := s.database.ListCollectionNames(ctx, bson.M{"name": s.cfg.Collection})
+	if err != nil {
+		return fmt.Errorf("failed to list collections: %w", err)
+	}
+
+	if len(collections) > 0 {
+		// Collection exists, check if it's capped
+		// Note: We can't convert a regular collection to capped, so just log a warning
+		s.logger().Debug("collection already exists, skipping capped collection creation",
+			"collection", s.cfg.Collection)
+		return nil
+	}
+
+	// Create capped collection
+	opts := options.CreateCollection().
+		SetCapped(true).
+		SetSizeInBytes(s.cfg.CappedSizeBytes)
+
+	if s.cfg.CappedMaxDocuments > 0 {
+		opts.SetMaxDocuments(s.cfg.CappedMaxDocuments)
+	}
+
+	if err := s.database.CreateCollection(ctx, s.cfg.Collection, opts); err != nil {
+		return fmt.Errorf("failed to create capped collection: %w", err)
+	}
+
+	s.logger().Info("created capped collection",
+		"collection", s.cfg.Collection,
+		"sizeBytes", s.cfg.CappedSizeBytes,
+		"maxDocuments", s.cfg.CappedMaxDocuments,
+	)
+
+	return nil
+}
+
+// logger returns the configured logger or the default logger.
+func (s *Store) logger() *slog.Logger {
+	if s.cfg.Logger != nil {
+		return s.cfg.Logger
+	}
+	return slog.Default()
+}
+
+// EnsureIndexes creates the required indexes on the collection.
+// This is called automatically during Connect if AutoCreateIndexes is true (default).
+// You can also call this manually if you disabled auto-creation.
+//
+// For regular collections, creates:
+//   - Unique composite index on (namespace, key, tags)
+//   - Index on namespace
+//   - Index on key
+//   - Index on tags
+//   - Index on type
+//   - Index on updated_at (descending)
+//
+// For capped collections, the unique index is skipped as capped collections
+// don't support unique indexes.
+func (s *Store) EnsureIndexes(ctx context.Context) error {
+	if s.collection == nil {
+		return fmt.Errorf("collection not initialized, call Connect first")
+	}
+
 	indexes := []mongo.IndexModel{
 		{
 			Keys: bson.D{{Key: "namespace", Value: 1}},
 		},
 		{
 			Keys: bson.D{{Key: "key", Value: 1}},
-		},
-		{
-			// Unique index on (namespace, key, tags) - this is the entry identity
-			Keys: bson.D{
-				{Key: "namespace", Value: 1},
-				{Key: "key", Value: 1},
-				{Key: "tags", Value: 1},
-			},
-			Options: options.Index().SetUnique(true),
 		},
 		{
 			Keys: bson.D{{Key: "updated_at", Value: -1}},
@@ -207,8 +349,41 @@ func (s *Store) createIndexes(ctx context.Context) error {
 		},
 	}
 
-	_, err := s.collection.Indexes().CreateMany(ctx, indexes)
-	return err
+	// Add unique composite index only for non-capped collections
+	// Capped collections don't support unique indexes
+	if !s.cfg.Capped {
+		indexes = append(indexes, mongo.IndexModel{
+			// Unique index on (namespace, key, tags) - this is the entry identity
+			Keys: bson.D{
+				{Key: "namespace", Value: 1},
+				{Key: "key", Value: 1},
+				{Key: "tags", Value: 1},
+			},
+			Options: options.Index().SetUnique(true),
+		})
+	} else {
+		// For capped collections, add a non-unique composite index for lookups
+		indexes = append(indexes, mongo.IndexModel{
+			Keys: bson.D{
+				{Key: "namespace", Value: 1},
+				{Key: "key", Value: 1},
+				{Key: "tags", Value: 1},
+			},
+		})
+	}
+
+	created, err := s.collection.Indexes().CreateMany(ctx, indexes)
+	if err != nil {
+		return err
+	}
+
+	s.logger().Debug("indexes ensured",
+		"collection", s.cfg.Collection,
+		"indexCount", len(created),
+		"capped", s.cfg.Capped,
+	)
+
+	return nil
 }
 
 // Close stops the change stream listener and closes all watchers.
