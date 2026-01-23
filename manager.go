@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -45,13 +46,6 @@ import (
 //	if err := prodConfig.Set(ctx, "app/database/timeout", 30); err != nil {
 //	    return err
 //	}
-// CacheStats contains cache statistics.
-type CacheStats struct {
-	Hits   int64 // Number of cache hits
-	Misses int64 // Number of cache misses
-	Size   int64 // Number of cached entries
-}
-
 type Manager interface {
 	// Connect establishes connection to the backend and starts watching.
 	// Must be called before any other operations.
@@ -67,15 +61,39 @@ type Manager interface {
 	// Refresh forces a cache refresh for a specific key.
 	Refresh(ctx context.Context, namespace, key string) error
 
-	// RefreshAll forces a refresh of all cached entries.
-	RefreshAll(ctx context.Context) error
-
 	// Health performs a health check on the manager and underlying store.
 	// Returns nil if healthy, or an error describing the issue.
+	// Includes watch status - returns an error if watch has consecutive failures.
 	Health(ctx context.Context) error
 
-	// CacheStats returns cache statistics for observability.
+	// CacheStats returns statistics about the internal cache.
+	// This can be used for monitoring cache effectiveness.
 	CacheStats() CacheStats
+
+	// WatchStatus returns the current status of the watch connection.
+	// Use this for observability and monitoring.
+	WatchStatus() WatchStatus
+}
+
+// WatchStatus provides observability into the watch connection state.
+// Applications can use this to monitor watch health and implement
+// their own alerting or circuit breaking logic if needed.
+type WatchStatus struct {
+	// Connected indicates if the manager is connected to the store.
+	Connected bool `json:"connected"`
+
+	// ConsecutiveFailures is the number of consecutive watch failures.
+	// Resets to 0 when watch successfully connects.
+	ConsecutiveFailures int32 `json:"consecutive_failures"`
+
+	// LastError is the most recent watch error message (empty if no error).
+	LastError string `json:"last_error,omitempty"`
+
+	// LastAttempt is when the last watch connection was attempted.
+	LastAttempt time.Time `json:"last_attempt,omitempty"`
+
+	// Cache contains cache statistics for correlation with watch health.
+	Cache CacheStats `json:"cache"`
 }
 
 // manager is the default Manager implementation.
@@ -89,9 +107,11 @@ type manager struct {
 	watchCancel context.CancelFunc
 	watchWg     sync.WaitGroup
 
-	// Circuit breaker for watch failures
-	watchFailures   atomic.Int32  // consecutive failures
-	circuitOpenTime atomic.Int64  // unix timestamp when circuit opened (0 = closed)
+	// Watch backoff configuration and status
+	watchBackoff  WatchBackoffConfig
+	watchFailures atomic.Int32          // consecutive failures for observability
+	lastWatchErr  atomic.Pointer[string] // last watch error message (nil = no error)
+	lastWatchTime atomic.Int64          // unix timestamp of last watch attempt
 
 	// Config cache
 	configMu sync.RWMutex
@@ -109,26 +129,39 @@ var _ Manager = (*manager)(nil)
 // The manager always maintains an internal cache for resilience. If the backend
 // store becomes temporarily unavailable, cached values will continue to be served.
 // This ensures your application keeps working during database outages.
-func New(opts ...Option) *manager {
+//
+// Returns an error if cache initialization fails.
+func New(opts ...Option) (*manager, error) {
 	o := newManagerOptions()
 	for _, opt := range opts {
 		opt(o)
 	}
 
-	m := &manager{
-		status:  0,
-		store:   o.store,
-		codec:   o.codec,
-		logger:  o.logger.With("component", "config"),
-		configs: make(map[string]*config),
-		// Always create internal cache for resilience
-		cache: NewMemoryCache(WithMemoryCacheTTL(o.cacheTTL)),
+	// Create internal cache for resilience (bounded, no expiration)
+	cache, err := newMemoryCache(0) // Use default capacity
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize cache: %w", err)
 	}
 
-	return m
+	m := &manager{
+		status:       0,
+		store:        o.store,
+		codec:        o.codec,
+		logger:       o.logger.With("component", "config"),
+		watchBackoff: o.watchBackoff,
+		configs:      make(map[string]*config),
+		cache:        cache,
+	}
+
+	return m, nil
 }
 
 // Connect establishes connection to the backend and starts watching.
+//
+// The provided context is used only for the initial store connection.
+// The watch goroutine runs independently with its own context until Close() is called.
+// This is intentional: the watch should continue running even if the Connect context
+// times out, as the watch is a long-running background operation.
 func (m *manager) Connect(ctx context.Context) error {
 	if m.store == nil {
 		return ErrStoreNotConnected
@@ -138,21 +171,20 @@ func (m *manager) Connect(ctx context.Context) error {
 		return ErrManagerClosed
 	}
 
-	// Connect to store
+	// Connect to store (uses caller's context for connection timeout)
 	if err := m.store.Connect(ctx); err != nil {
 		atomic.StoreInt32(&m.status, 0)
 		return err
 	}
 
-	// Start watching for changes if store supports it (for internal cache invalidation)
+	// Start watching for changes (for internal cache invalidation)
+	// Uses independent context - watch should run until Close(), not until Connect's context expires
 	// This uses the store's native change stream (MongoDB Change Streams, PostgreSQL LISTEN/NOTIFY)
-	if ws, ok := m.store.(watchableStore); ok {
-		watchCtx, cancel := context.WithCancel(context.Background())
-		m.watchCancel = cancel
+	watchCtx, cancel := context.WithCancel(context.Background())
+	m.watchCancel = cancel
 
-		m.watchWg.Add(1)
-		go m.watchChanges(watchCtx, ws)
-	}
+	m.watchWg.Add(1)
+	go m.watchChanges(watchCtx)
 
 	m.logger.Info("config manager connected")
 	return nil
@@ -174,19 +206,6 @@ func (m *manager) Close(ctx context.Context) error {
 	if m.store != nil {
 		if err := m.store.Close(ctx); err != nil {
 			m.logger.Error("failed to close store", "error", err)
-		}
-	}
-
-	// Flush and close cache
-	if m.cache != nil {
-		if err := m.cache.Flush(ctx); err != nil {
-			m.logger.Error("failed to flush cache", "error", err)
-		}
-		// Close cache if it implements io.Closer (to stop cleanup goroutine)
-		if closer, ok := m.cache.(interface{ Close() error }); ok {
-			if err := closer.Close(); err != nil {
-				m.logger.Error("failed to close cache", "error", err)
-			}
 		}
 	}
 
@@ -254,22 +273,22 @@ func (m *manager) Refresh(ctx context.Context, namespace, key string) error {
 	return nil
 }
 
-// RefreshAll forces a refresh of all cached entries.
-func (m *manager) RefreshAll(ctx context.Context) error {
-	if !m.isConnected() {
-		return ErrManagerClosed
-	}
-
-	if m.cache != nil {
-		return m.cache.Flush(ctx)
-	}
-	return nil
-}
-
 // Health performs a health check on the manager and underlying store.
+// Returns an error if the manager is closed, the store is unhealthy,
+// or if watch has experienced multiple consecutive failures.
 func (m *manager) Health(ctx context.Context) error {
 	if !m.isConnected() {
 		return ErrManagerClosed
+	}
+
+	// Check watch status - report unhealthy if multiple consecutive failures
+	failures := m.watchFailures.Load()
+	if failures >= 3 {
+		lastErr := ""
+		if p := m.lastWatchErr.Load(); p != nil {
+			lastErr = *p
+		}
+		return &WatchHealthError{ConsecutiveFailures: failures, LastError: lastErr}
 	}
 
 	// Check if store supports health checks
@@ -281,37 +300,42 @@ func (m *manager) Health(ctx context.Context) error {
 	return nil
 }
 
-// CacheStats returns cache statistics for observability.
+// CacheStats returns statistics about the internal cache.
 func (m *manager) CacheStats() CacheStats {
-	if cs, ok := m.cache.(cacheStats); ok {
-		return CacheStats{
-			Hits:   cs.Hits(),
-			Misses: cs.Misses(),
-			Size:   cs.Size(),
-		}
+	if m.cache != nil {
+		return m.cache.Stats()
 	}
 	return CacheStats{}
 }
 
-// Circuit breaker constants for watch failures
-const (
-	circuitBreakerThreshold = 5               // consecutive failures before opening circuit
-	circuitBreakerTimeout   = 5 * time.Minute // how long circuit stays open
-)
+// WatchStatus returns the current status of the watch connection.
+func (m *manager) WatchStatus() WatchStatus {
+	status := WatchStatus{
+		Connected:           m.isConnected(),
+		ConsecutiveFailures: m.watchFailures.Load(),
+		Cache:               m.CacheStats(),
+	}
+
+	if p := m.lastWatchErr.Load(); p != nil {
+		status.LastError = *p
+	}
+
+	if ts := m.lastWatchTime.Load(); ts > 0 {
+		status.LastAttempt = time.Unix(ts, 0)
+	}
+
+	return status
+}
 
 // watchChanges handles cache invalidation based on store's change stream.
 // The store provides the change stream (e.g., MongoDB change streams, PostgreSQL LISTEN/NOTIFY).
-// It implements retry with exponential backoff and circuit breaker for resilience.
-func (m *manager) watchChanges(ctx context.Context, ws watchableStore) {
+// Uses exponential backoff for reconnection - the internal cache provides resilience
+// during backend unavailability, so aggressive circuit breaking is not needed.
+func (m *manager) watchChanges(ctx context.Context) {
 	defer m.watchWg.Done()
 
-	const (
-		initialBackoff = 100 * time.Millisecond
-		maxBackoff     = 30 * time.Second
-		backoffFactor  = 2
-	)
-
-	backoff := initialBackoff
+	cfg := m.watchBackoff
+	backoff := cfg.InitialBackoff
 
 	for {
 		// Check if context is cancelled before attempting to watch
@@ -321,41 +345,22 @@ func (m *manager) watchChanges(ctx context.Context, ws watchableStore) {
 		default:
 		}
 
-		// Check circuit breaker state
-		if m.isCircuitOpen() {
-			m.logger.Warn("watch circuit breaker is open, waiting before retry",
-				"timeout", circuitBreakerTimeout)
-
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(circuitBreakerTimeout):
-				// Reset circuit breaker after timeout
-				m.resetCircuitBreaker()
-				m.logger.Info("watch circuit breaker reset, attempting reconnect")
-			}
-		}
-
-		changes, err := ws.Watch(ctx, WatchFilter{})
+		m.lastWatchTime.Store(time.Now().Unix())
+		changes, err := m.store.Watch(ctx, WatchFilter{})
 		if err != nil {
 			if err == ErrWatchNotSupported {
 				// Store doesn't support watching, exit without retry
+				m.logger.Debug("store does not support watching")
 				return
 			}
 
 			failures := m.watchFailures.Add(1)
-			m.logger.Error("failed to start watching",
+			errMsg := err.Error()
+			m.lastWatchErr.Store(&errMsg)
+			m.logger.Warn("failed to start watching",
 				"error", err,
 				"backoff", backoff,
 				"consecutive_failures", failures)
-
-			// Open circuit breaker if too many failures
-			if failures >= circuitBreakerThreshold {
-				m.openCircuitBreaker()
-				m.logger.Error("watch circuit breaker opened due to consecutive failures",
-					"failures", failures,
-					"threshold", circuitBreakerThreshold)
-			}
 
 			// Wait with backoff before retrying
 			select {
@@ -365,13 +370,14 @@ func (m *manager) watchChanges(ctx context.Context, ws watchableStore) {
 			}
 
 			// Increase backoff for next retry (with cap)
-			backoff = min(time.Duration(float64(backoff)*backoffFactor), maxBackoff)
+			backoff = min(time.Duration(float64(backoff)*cfg.BackoffFactor), cfg.MaxBackoff)
 			continue
 		}
 
 		// Successfully connected, reset failures and backoff
 		m.watchFailures.Store(0)
-		backoff = initialBackoff
+		m.lastWatchErr.Store(nil)
+		backoff = cfg.InitialBackoff
 		m.logger.Debug("watch started successfully")
 
 		// Process changes until channel closes or context cancelled
@@ -391,30 +397,8 @@ func (m *manager) watchChanges(ctx context.Context, ws watchableStore) {
 		case <-time.After(backoff):
 		}
 
-		backoff = min(time.Duration(float64(backoff)*backoffFactor), maxBackoff)
+		backoff = min(time.Duration(float64(backoff)*cfg.BackoffFactor), cfg.MaxBackoff)
 	}
-}
-
-// isCircuitOpen returns true if the circuit breaker is currently open.
-func (m *manager) isCircuitOpen() bool {
-	openTime := m.circuitOpenTime.Load()
-	if openTime == 0 {
-		return false
-	}
-	// Circuit is open, check if timeout has elapsed
-	elapsed := time.Since(time.Unix(openTime, 0))
-	return elapsed < circuitBreakerTimeout
-}
-
-// openCircuitBreaker opens the circuit breaker.
-func (m *manager) openCircuitBreaker() {
-	m.circuitOpenTime.Store(time.Now().Unix())
-}
-
-// resetCircuitBreaker resets the circuit breaker to closed state.
-func (m *manager) resetCircuitBreaker() {
-	m.circuitOpenTime.Store(0)
-	m.watchFailures.Store(0)
 }
 
 // processWatchEvents handles incoming change events.
@@ -434,23 +418,36 @@ func (m *manager) processWatchEvents(ctx context.Context, changes <-chan ChangeE
 }
 
 // handleChange processes a change event and updates the cache.
+// This function is safe to call even during shutdown - cache operations
+// are protected by the cache's internal lock, and we gracefully handle
+// the case where the manager is closing.
 func (m *manager) handleChange(ctx context.Context, change ChangeEvent) {
-	// Check if manager is still connected (avoid race with Close())
+	// Use defer/recover to handle any panics during shutdown gracefully.
+	// This protects against edge cases in the race between handleChange and Close().
+	defer func() {
+		if r := recover(); r != nil {
+			// Only log if not during shutdown
+			if m.isConnected() {
+				m.logger.Error("panic in handleChange", "recover", r)
+			}
+		}
+	}()
+
+	// Early return if manager is closing or closed
 	if !m.isConnected() {
 		return
 	}
 
-	if m.cache == nil {
+	// Cache reference - capture once to avoid race with Close()
+	cache := m.cache
+	if cache == nil {
 		return
 	}
-
-	// Build cache key with tags (without namespace - cache methods take it separately)
-	ck := cacheKey(change.Key, change.Tags)
 
 	switch change.Type {
 	case ChangeTypeSet:
 		if change.Value != nil {
-			if err := m.cache.Set(ctx, change.Namespace, ck, change.Value); err != nil {
+			if err := cache.Set(ctx, change.Namespace, change.Key, change.Value); err != nil {
 				// Only log if still connected (avoid spurious errors during shutdown)
 				if m.isConnected() {
 					m.logger.Warn("failed to update cache", "namespace", change.Namespace, "key", change.Key, "error", err)
@@ -458,7 +455,7 @@ func (m *manager) handleChange(ctx context.Context, change ChangeEvent) {
 			}
 		}
 	case ChangeTypeDelete:
-		if err := m.cache.Delete(ctx, change.Namespace, ck); err != nil {
+		if err := cache.Delete(ctx, change.Namespace, change.Key); err != nil {
 			// Only log if still connected (avoid spurious errors during shutdown)
 			if m.isConnected() {
 				m.logger.Warn("failed to invalidate cache", "namespace", change.Namespace, "key", change.Key, "error", err)

@@ -13,14 +13,13 @@ import (
 // store is temporarily unavailable, cached values will be returned. This ensures
 // your application continues working even during database outages.
 type Reader interface {
-	// Get retrieves a configuration value by key and optional tags.
-	// The combination of (namespace, key, tags) uniquely identifies an entry.
+	// Get retrieves a configuration value by key.
 	//
 	// Get uses an internal cache for resilience. If the store is unavailable,
 	// it will return a cached value if one exists. This is intentional - for
 	// use cases like feature flags and rate limits, having slightly stale
 	// configuration is better than failing completely.
-	Get(ctx context.Context, key string, tags ...Tag) (Value, error)
+	Get(ctx context.Context, key string) (Value, error)
 
 	// Find returns a page of keys and values matching the filter.
 	// Use Page.NextCursor() to paginate through results.
@@ -31,12 +30,10 @@ type Reader interface {
 // Use this interface for gRPC/HTTP servers to manage config.
 type Writer interface {
 	// Set creates or updates a configuration value.
-	// Use WithTags option to specify tags for the entry.
 	Set(ctx context.Context, key string, value any, opts ...SetOption) error
 
-	// Delete removes a configuration value by key and optional tags.
-	// The combination of (namespace, key, tags) uniquely identifies an entry.
-	Delete(ctx context.Context, key string, tags ...Tag) error
+	// Delete removes a configuration value by key.
+	Delete(ctx context.Context, key string) error
 }
 
 // Config combines Reader and Writer for a specific namespace.
@@ -62,10 +59,10 @@ func (c *config) Namespace() string {
 	return c.namespace
 }
 
-// Get retrieves a configuration value by key and optional tags.
+// Get retrieves a configuration value by key.
 // It first attempts to fetch from the store. If the store is unavailable,
 // it falls back to cached values for resilience.
-func (c *config) Get(ctx context.Context, key string, tags ...Tag) (Value, error) {
+func (c *config) Get(ctx context.Context, key string) (Value, error) {
 	if !c.manager.isConnected() {
 		return nil, ErrManagerClosed
 	}
@@ -75,14 +72,11 @@ func (c *config) Get(ctx context.Context, key string, tags ...Tag) (Value, error
 		return nil, err
 	}
 
-	// Build cache key (without namespace - cache methods take it separately)
-	ck := cacheKey(key, tags)
-
 	// Try to fetch from store first
-	value, err := c.manager.store.Get(ctx, c.namespace, key, tags...)
+	value, err := c.manager.store.Get(ctx, c.namespace, key)
 	if err == nil {
 		// Update cache with fresh value
-		if cacheErr := c.manager.cache.Set(ctx, c.namespace, ck, value); cacheErr != nil {
+		if cacheErr := c.manager.cache.Set(ctx, c.namespace, key, value); cacheErr != nil {
 			c.manager.logger.Warn("failed to cache value", "key", key, "error", cacheErr)
 		}
 		return value, nil
@@ -90,10 +84,11 @@ func (c *config) Get(ctx context.Context, key string, tags ...Tag) (Value, error
 
 	// If store error is NOT "not found", try cache as fallback for resilience
 	if !IsNotFound(err) {
-		if cachedValue, cacheErr := c.manager.cache.Get(ctx, c.namespace, ck); cacheErr == nil {
-			c.manager.logger.Warn("serving cached value due to store error",
+		if cachedValue, cacheErr := c.manager.cache.Get(ctx, c.namespace, key); cacheErr == nil {
+			c.manager.logger.Warn("serving stale cached value due to store error",
 				"namespace", c.namespace, "key", key, "store_error", err)
-			return cachedValue, nil
+			// Mark the value as stale so callers know it came from cache due to error
+			return MarkStale(cachedValue), nil
 		}
 	}
 
@@ -142,25 +137,22 @@ func (c *config) Set(ctx context.Context, key string, value any, opts ...SetOpti
 		typ = detectType(value)
 	}
 
-	// Create Value with tags
+	// Create Value with write mode
 	val := NewValue(value,
 		WithValueCodec(codecToUse),
 		WithValueType(typ),
-		WithValueTags(setOpts.tags),
+		WithValueWriteMode(setOpts.writeMode),
 	)
 
-	// Set in store
-	if err := c.manager.store.Set(ctx, c.namespace, key, val); err != nil {
+	// Set in store - returns the stored value with updated metadata
+	newValue, err := c.manager.store.Set(ctx, c.namespace, key, val)
+	if err != nil {
 		return err
 	}
 
-	// Build cache key (without namespace - cache methods take it separately)
-	ck := cacheKey(key, setOpts.tags)
-
-	// Update cache with new value from store (to get updated metadata)
-	// Re-fetch to get the value with updated metadata (version, timestamps)
-	if newValue, err := c.manager.store.Get(ctx, c.namespace, key, setOpts.tags...); err == nil {
-		if cacheErr := c.manager.cache.Set(ctx, c.namespace, ck, newValue); cacheErr != nil {
+	// Update cache with the returned value
+	if newValue != nil {
+		if cacheErr := c.manager.cache.Set(ctx, c.namespace, key, newValue); cacheErr != nil {
 			c.manager.logger.Warn("failed to cache value", "key", key, "error", cacheErr)
 		}
 	}
@@ -168,8 +160,8 @@ func (c *config) Set(ctx context.Context, key string, value any, opts ...SetOpti
 	return nil
 }
 
-// Delete removes a configuration value.
-func (c *config) Delete(ctx context.Context, key string, tags ...Tag) error {
+// Delete removes a configuration value by key.
+func (c *config) Delete(ctx context.Context, key string) error {
 	if !c.manager.isConnected() {
 		return ErrManagerClosed
 	}
@@ -179,15 +171,12 @@ func (c *config) Delete(ctx context.Context, key string, tags ...Tag) error {
 		return err
 	}
 
-	if err := c.manager.store.Delete(ctx, c.namespace, key, tags...); err != nil {
+	if err := c.manager.store.Delete(ctx, c.namespace, key); err != nil {
 		return err
 	}
 
-	// Build cache key (without namespace - cache methods take it separately)
-	ck := cacheKey(key, tags)
-
 	// Remove from cache
-	if cacheErr := c.manager.cache.Delete(ctx, c.namespace, ck); cacheErr != nil {
+	if cacheErr := c.manager.cache.Delete(ctx, c.namespace, key); cacheErr != nil {
 		c.manager.logger.Warn("failed to remove from cache", "key", key, "error", cacheErr)
 	}
 

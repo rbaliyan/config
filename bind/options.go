@@ -1,38 +1,16 @@
 package bind
 
 import (
-	"context"
-
 	"github.com/rbaliyan/config/codec"
 )
 
 // Option configures the Binder.
 type Option func(*Binder)
 
-// Hooks allow custom logic at different points in the binding process.
-type Hooks struct {
-	// BeforeGet is called before getting a value.
-	BeforeGet func(ctx context.Context, key string) error
-
-	// BeforeSet is called before setting a value.
-	BeforeSet func(ctx context.Context, key string, value any) error
-
-	// AfterUnmarshal is called after unmarshaling a value.
-	AfterUnmarshal func(ctx context.Context, key string, value any) error
-}
-
 // WithCodec sets the codec for encoding/decoding values.
 func WithCodec(c codec.Codec) Option {
 	return func(b *Binder) {
 		b.codec = c
-	}
-}
-
-// WithValidator adds a validator to the binder.
-// Multiple validators can be added and will be run in order.
-func WithValidator(v Validator) Option {
-	return func(b *Binder) {
-		b.validators = append(b.validators, v)
 	}
 }
 
@@ -54,56 +32,34 @@ func WithValidator(v Validator) Option {
 //	}
 func WithTagValidation() Option {
 	return func(b *Binder) {
-		b.validators = append(b.validators, NewTagValidator("validate"))
+		b.validator = NewTagValidator("validate")
 	}
 }
 
 // WithCustomTagValidation enables struct tag validation with a custom tag name.
 func WithCustomTagValidation(tagName string) Option {
 	return func(b *Binder) {
-		b.validators = append(b.validators, NewTagValidator(tagName))
-	}
-}
-
-// WithJSONSchema adds JSON Schema validation.
-// The schema should be valid JSON Schema bytes.
-func WithJSONSchema(schema []byte) Option {
-	return func(b *Binder) {
-		v, err := NewJSONSchemaValidator(schema)
-		if err == nil {
-			b.validators = append(b.validators, v)
-		}
-	}
-}
-
-// WithHooks sets validation hooks.
-func WithHooks(h Hooks) Option {
-	return func(b *Binder) {
-		b.hooks = h
-	}
-}
-
-// WithValidatorFunc adds a custom validation function.
-func WithValidatorFunc(fn func(any) error) Option {
-	return func(b *Binder) {
-		b.validators = append(b.validators, ValidatorFunc(fn))
+		b.validator = NewTagValidator(tagName)
 	}
 }
 
 // WithFieldTag sets the struct tag name used for field mapping.
 // Default is "json". Common alternatives: "yaml", "config", "mapstructure".
 //
-// Fields tagged with `tagname:"-"` will be ignored during both
-// marshalling (SetStruct) and unmarshalling (GetStruct, BindPrefix).
+// Supported tag options:
+//   - "-": Field is ignored during both marshalling and unmarshalling
+//   - "omitempty": Field is omitted if it has a zero value
+//   - "nonrecursive": Nested struct is stored as a single value (not flattened)
 //
 // Example:
 //
 //	binder := bind.New(cfg, bind.WithFieldTag("config"))
 //
 //	type DatabaseConfig struct {
-//	    Host     string `config:"host"`
-//	    Port     int    `config:"port"`
-//	    Password string `config:"-"` // ignored - won't be stored or loaded
+//	    Host     string      `config:"host"`
+//	    Port     int         `config:"port"`
+//	    Password string      `config:"-"`            // ignored
+//	    Creds    Credentials `config:"creds,nonrecursive"` // stored as single JSON
 //	}
 func WithFieldTag(tagName string) Option {
 	return func(b *Binder) {

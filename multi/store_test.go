@@ -60,7 +60,7 @@ func TestMultiStore_SetAndGet_Fallback(t *testing.T) {
 	val := config.NewValue(42)
 
 	// Set should write to both stores
-	if err := ms.Set(ctx, "ns", "key", val); err != nil {
+	if _, err := ms.Set(ctx, "ns", "key", val); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
 
@@ -136,7 +136,7 @@ func TestMultiStore_SetAndGet_ReadThrough_WriteAll(t *testing.T) {
 
 	// Set via multi-store writes to all stores for consistency
 	val := config.NewValue("new-value")
-	if err := ms.Set(ctx, "ns", "key", val); err != nil {
+	if _, err := ms.Set(ctx, "ns", "key", val); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
 
@@ -173,7 +173,7 @@ func TestMultiStore_Delete_Fallback(t *testing.T) {
 
 	// Set value in both stores
 	val := config.NewValue("value")
-	ms.Set(ctx, "ns", "key", val)
+	_, _ = ms.Set(ctx, "ns", "key", val)
 
 	// Delete should remove from both
 	if err := ms.Delete(ctx, "ns", "key"); err != nil {
@@ -322,7 +322,7 @@ func TestMultiStore_WriteThrough(t *testing.T) {
 
 	// Set should write to all stores
 	val := config.NewValue("sync-value")
-	if err := ms.Set(ctx, "ns", "key", val); err != nil {
+	if _, err := ms.Set(ctx, "ns", "key", val); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
 
@@ -375,9 +375,9 @@ func TestMultiStore_Stats(t *testing.T) {
 	defer ms.Close(ctx)
 
 	// Set some values
-	ms.Set(ctx, "ns1", "key1", config.NewValue("value1"))
-	ms.Set(ctx, "ns1", "key2", config.NewValue(42))
-	ms.Set(ctx, "ns2", "key3", config.NewValue(true))
+	_, _ = ms.Set(ctx, "ns1", "key1", config.NewValue("value1"))
+	_, _ = ms.Set(ctx, "ns1", "key2", config.NewValue(42))
+	_, _ = ms.Set(ctx, "ns2", "key3", config.NewValue(true))
 
 	// Memory stores implement StatsProvider
 	stats, err := ms.Stats(ctx)

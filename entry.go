@@ -16,10 +16,6 @@ type entry struct {
 	// Namespace is the configuration namespace.
 	Namespace string `json:"namespace" bson:"namespace"`
 
-	// Tags is the sorted tag string "key1=value1,key2=value2".
-	// Together with Namespace and Key, this forms the unique identifier.
-	Tags string `json:"tags" bson:"tags"`
-
 	// Value is the raw configuration value as bytes.
 	Value []byte `json:"value" bson:"value"`
 
@@ -62,15 +58,12 @@ func (e *entry) toValue() (Value, error) {
 		return nil, ErrNotFound
 	}
 
-	// Parse tags from string
-	tags, _ := ParseTags(e.Tags)
-
 	return NewValueFromBytes(
 		e.Value,
 		e.Codec,
 		WithValueType(e.Type),
 		WithValueMetadata(e.Version, e.CreatedAt, e.UpdatedAt),
-		WithValueTags(tags),
+		WithValueEntryID(e.ID),
 	)
 }
 
@@ -81,19 +74,4 @@ func (e *entry) fullKey() string {
 		return e.Key
 	}
 	return e.Namespace + "/" + e.Key
-}
-
-// keySeparator is used to separate key components to avoid collisions.
-// Using null byte as it's virtually never used in config keys.
-const keySeparator = "\x00"
-
-// cacheKey returns the cache lookup key (without namespace, since cache methods take it separately).
-// Format: "key" or "key\x00tags" if tags present.
-// Uses null byte separator to avoid collisions with keys containing colons.
-func cacheKey(key string, tags []Tag) string {
-	tagStr := FormatTags(tags)
-	if tagStr == "" {
-		return key
-	}
-	return key + keySeparator + tagStr
 }

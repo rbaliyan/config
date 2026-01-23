@@ -51,19 +51,15 @@ type Config struct {
 
 	// ReconnectBackoff is the wait time before reconnecting listener.
 	ReconnectBackoff time.Duration
-
-	// NotificationFetchTimeout is the timeout for fetching values during notification processing.
-	NotificationFetchTimeout time.Duration
 }
 
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
 	return Config{
-		Table:                    "config_entries",
-		NotifyChannel:            "config_changes",
-		WatchBufferSize:          100,
-		ReconnectBackoff:         5 * time.Second,
-		NotificationFetchTimeout: 5 * time.Second,
+		Table:            "config_entries",
+		NotifyChannel:    "config_changes",
+		WatchBufferSize:  100,
+		ReconnectBackoff: 5 * time.Second,
 	}
 }
 
@@ -76,12 +72,19 @@ type watchEntry struct {
 }
 
 // notifyPayload is the JSON structure sent via NOTIFY.
+// For insert/update, includes the full entry data for cache invalidation.
+// For delete, Value/Codec/Type are omitted.
 type notifyPayload struct {
 	Operation string `json:"op"` // "insert", "update", "delete"
 	Namespace string `json:"namespace"`
 	Key       string `json:"key"`
-	Tags      string `json:"tags"` // Sorted "key1=value1,key2=value2"
 	Version   int64  `json:"version"`
+	// Entry data (only present for insert/update)
+	Value     []byte      `json:"value,omitempty"`      // Base64-encoded by json.Marshal
+	Codec     string      `json:"codec,omitempty"`      // Codec name
+	Type      config.Type `json:"type,omitempty"`       // Value type
+	CreatedAt *time.Time  `json:"created_at,omitempty"` // Creation timestamp
+	UpdatedAt *time.Time  `json:"updated_at,omitempty"` // Update timestamp
 }
 
 // Option configures the PostgreSQL store.
@@ -101,9 +104,6 @@ func WithConfig(cfg Config) Option {
 		}
 		if cfg.ReconnectBackoff > 0 {
 			s.cfg.ReconnectBackoff = cfg.ReconnectBackoff
-		}
-		if cfg.NotificationFetchTimeout > 0 {
-			s.cfg.NotificationFetchTimeout = cfg.NotificationFetchTimeout
 		}
 	}
 }
@@ -148,6 +148,7 @@ var (
 	_ config.Store         = (*Store)(nil)
 	_ config.HealthChecker = (*Store)(nil)
 	_ config.StatsProvider = (*Store)(nil)
+	_ config.BulkStore     = (*Store)(nil)
 )
 
 // Connect initializes the store (creates schema and starts notification listener).
@@ -188,25 +189,22 @@ func (s *Store) createSchema(ctx context.Context) error {
 			id BIGSERIAL PRIMARY KEY,
 			key TEXT NOT NULL,
 			namespace TEXT NOT NULL,
-			tags TEXT NOT NULL DEFAULT '',
 			value BYTEA NOT NULL,
 			codec TEXT NOT NULL DEFAULT 'json',
 			type INTEGER NOT NULL DEFAULT 0,
 			version BIGINT NOT NULL DEFAULT 1,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			UNIQUE(namespace, key, tags)
+			UNIQUE(namespace, key)
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_%s_namespace ON %s(namespace);
 		CREATE INDEX IF NOT EXISTS idx_%s_key ON %s(key);
 		CREATE INDEX IF NOT EXISTS idx_%s_namespace_key ON %s(namespace, key);
-		CREATE INDEX IF NOT EXISTS idx_%s_tags ON %s(tags);
 		CREATE INDEX IF NOT EXISTS idx_%s_type ON %s(type);
 		CREATE INDEX IF NOT EXISTS idx_%s_updated_at ON %s(updated_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_%s_key_prefix ON %s(key text_pattern_ops);
 	`, s.cfg.Table,
-		s.cfg.Table, s.cfg.Table,
 		s.cfg.Table, s.cfg.Table,
 		s.cfg.Table, s.cfg.Table,
 		s.cfg.Table, s.cfg.Table,
@@ -219,6 +217,8 @@ func (s *Store) createSchema(ctx context.Context) error {
 	}
 
 	// Create trigger function for NOTIFY
+	// Includes full entry data for insert/update to enable cache updates without refetching.
+	// Note: PostgreSQL NOTIFY has 8KB payload limit. Large values may be truncated.
 	triggerFunc := fmt.Sprintf(`
 		CREATE OR REPLACE FUNCTION notify_%s_changes()
 		RETURNS TRIGGER AS $$
@@ -230,18 +230,22 @@ func (s *Store) createSchema(ctx context.Context) error {
 					'op', 'delete',
 					'namespace', OLD.namespace,
 					'key', OLD.key,
-					'tags', OLD.tags,
 					'version', OLD.version
 				)::text;
 				PERFORM pg_notify('%s', payload);
 				RETURN OLD;
 			ELSE
+				-- Include full entry data for cache invalidation
 				payload := json_build_object(
 					'op', lower(TG_OP),
 					'namespace', NEW.namespace,
 					'key', NEW.key,
-					'tags', NEW.tags,
-					'version', NEW.version
+					'version', NEW.version,
+					'value', encode(NEW.value, 'base64'),
+					'codec', NEW.codec,
+					'type', NEW.type,
+					'created_at', NEW.created_at,
+					'updated_at', NEW.updated_at
 				)::text;
 				PERFORM pg_notify('%s', payload);
 				RETURN NEW;
@@ -290,8 +294,8 @@ func (s *Store) Close(ctx context.Context) error {
 	return nil
 }
 
-// Get retrieves a configuration value by namespace, key, and optional tags.
-func (s *Store) Get(ctx context.Context, namespace, key string, tags ...config.Tag) (config.Value, error) {
+// Get retrieves a configuration value by namespace and key.
+func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, error) {
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
 	}
@@ -299,22 +303,22 @@ func (s *Store) Get(ctx context.Context, namespace, key string, tags ...config.T
 		return nil, err
 	}
 
-	tagsStr := config.FormatTags(tags)
 	query := fmt.Sprintf(`
-		SELECT key, namespace, tags, value, codec, type, version, created_at, updated_at
-		FROM %s WHERE namespace = $1 AND key = $2 AND tags = $3
+		SELECT id, key, namespace, value, codec, type, version, created_at, updated_at
+		FROM %s WHERE namespace = $1 AND key = $2
 	`, s.cfg.Table)
 
 	var (
-		k, ns, tagsResult, codecName string
-		value                        []byte
-		valueType                    config.Type
-		version                      int64
-		createdAt, updatedAt         time.Time
+		id                   int64
+		k, ns, codecName     string
+		value                []byte
+		valueType            config.Type
+		version              int64
+		createdAt, updatedAt time.Time
 	)
 
-	err := s.db.QueryRowContext(ctx, query, namespace, key, tagsStr).Scan(
-		&k, &ns, &tagsResult, &value, &codecName, &valueType, &version, &createdAt, &updatedAt,
+	err := s.db.QueryRowContext(ctx, query, namespace, key).Scan(
+		&id, &k, &ns, &value, &codecName, &valueType, &version, &createdAt, &updatedAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -324,73 +328,124 @@ func (s *Store) Get(ctx context.Context, namespace, key string, tags ...config.T
 		return nil, config.WrapStoreError("get", "postgres", key, err)
 	}
 
-	// Parse tags from result
-	parsedTags, _ := config.ParseTags(tagsResult)
-
 	return config.NewValueFromBytes(
 		value,
 		codecName,
 		config.WithValueType(valueType),
 		config.WithValueMetadata(version, createdAt, updatedAt),
-		config.WithValueTags(parsedTags),
+		config.WithValueEntryID(fmt.Sprintf("%d", id)),
 	)
 }
 
 // Set creates or updates a configuration value.
-// Tags are extracted from value.Metadata().Tags().
-func (s *Store) Set(ctx context.Context, namespace, key string, value config.Value) error {
+// Returns the stored Value with updated metadata (version, timestamps).
+func (s *Store) Set(ctx context.Context, namespace, key string, value config.Value) (config.Value, error) {
 	if s.closed.Load() {
-		return config.ErrStoreClosed
+		return nil, config.ErrStoreClosed
 	}
 	if err := config.ValidateNamespace(namespace); err != nil {
-		return err
+		return nil, err
 	}
 	if key == "" {
-		return config.ErrInvalidKey
+		return nil, config.ErrInvalidKey
 	}
 
 	// Marshal the value
 	data, err := value.Marshal()
 	if err != nil {
-		return config.WrapStoreError("marshal", "postgres", key, err)
+		return nil, config.WrapStoreError("marshal", "postgres", key, err)
 	}
 
-	// Get tags from value metadata
-	var tagsStr string
-	if value.Metadata() != nil {
-		tagsStr = config.FormatTags(value.Metadata().Tags())
+	var query string
+	var result sql.Result
+
+	writeMode := value.WriteMode()
+	switch writeMode {
+	case config.WriteModeCreate:
+		// Insert only if not exists - use ON CONFLICT DO NOTHING
+		query = fmt.Sprintf(`
+			INSERT INTO %s (key, namespace, value, codec, type, version, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, 1, NOW(), NOW())
+			ON CONFLICT (namespace, key) DO NOTHING
+		`, s.cfg.Table)
+
+		result, err = s.db.ExecContext(ctx, query,
+			key,
+			namespace,
+			data,
+			value.Codec(),
+			value.Type(),
+		)
+		if err != nil {
+			return nil, config.WrapStoreError("set", "postgres", key, err)
+		}
+
+		// Check if insert happened
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			return nil, &config.KeyExistsError{Key: key, Namespace: namespace}
+		}
+
+	case config.WriteModeUpdate:
+		// Update only if exists
+		query = fmt.Sprintf(`
+			UPDATE %s SET
+				value = $3,
+				codec = $4,
+				type = $5,
+				version = version + 1,
+				updated_at = NOW()
+			WHERE namespace = $2 AND key = $1
+		`, s.cfg.Table)
+
+		result, err = s.db.ExecContext(ctx, query,
+			key,
+			namespace,
+			data,
+			value.Codec(),
+			value.Type(),
+		)
+		if err != nil {
+			return nil, config.WrapStoreError("set", "postgres", key, err)
+		}
+
+		// Check if update happened
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
+		}
+
+	default:
+		// Upsert with version increment using unique constraint on (namespace, key)
+		query = fmt.Sprintf(`
+			INSERT INTO %s (key, namespace, value, codec, type, version, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, 1, NOW(), NOW())
+			ON CONFLICT (namespace, key) DO UPDATE SET
+				value = EXCLUDED.value,
+				codec = EXCLUDED.codec,
+				type = EXCLUDED.type,
+				version = %s.version + 1,
+				updated_at = NOW()
+		`, s.cfg.Table, s.cfg.Table)
+
+		_, err = s.db.ExecContext(ctx, query,
+			key,
+			namespace,
+			data,
+			value.Codec(),
+			value.Type(),
+		)
+		if err != nil {
+			return nil, config.WrapStoreError("set", "postgres", key, err)
+		}
 	}
 
-	// Upsert with version increment using unique constraint on (namespace, key, tags)
-	query := fmt.Sprintf(`
-		INSERT INTO %s (key, namespace, tags, value, codec, type, version, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 1, NOW(), NOW())
-		ON CONFLICT (namespace, key, tags) DO UPDATE SET
-			value = EXCLUDED.value,
-			codec = EXCLUDED.codec,
-			type = EXCLUDED.type,
-			version = %s.version + 1,
-			updated_at = NOW()
-	`, s.cfg.Table, s.cfg.Table)
-
-	_, err = s.db.ExecContext(ctx, query,
-		key,
-		namespace,
-		tagsStr,
-		data,
-		value.Codec(),
-		value.Type(),
-	)
-
-	if err != nil {
-		return config.WrapStoreError("set", "postgres", key, err)
-	}
-
-	return nil
+	// Fetch the stored value with updated metadata
+	return s.Get(ctx, namespace, key)
 }
 
-// Delete removes a configuration value by namespace, key, and optional tags.
-func (s *Store) Delete(ctx context.Context, namespace, key string, tags ...config.Tag) error {
+// Delete removes a configuration value by namespace and key.
+func (s *Store) Delete(ctx context.Context, namespace, key string) error {
 	if s.closed.Load() {
 		return config.ErrStoreClosed
 	}
@@ -398,9 +453,8 @@ func (s *Store) Delete(ctx context.Context, namespace, key string, tags ...confi
 		return err
 	}
 
-	tagsStr := config.FormatTags(tags)
-	query := fmt.Sprintf(`DELETE FROM %s WHERE namespace = $1 AND key = $2 AND tags = $3`, s.cfg.Table)
-	result, err := s.db.ExecContext(ctx, query, namespace, key, tagsStr)
+	query := fmt.Sprintf(`DELETE FROM %s WHERE namespace = $1 AND key = $2`, s.cfg.Table)
+	result, err := s.db.ExecContext(ctx, query, namespace, key)
 	if err != nil {
 		return config.WrapStoreError("delete", "postgres", key, err)
 	}
@@ -430,12 +484,6 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 	argNum := 1
 	limit := filter.Limit()
 
-	// Add tag filter if specified (AND logic - all must match)
-	var tagsFilter string
-	if filterTags := filter.Tags(); len(filterTags) > 0 {
-		tagsFilter = config.FormatTags(filterTags)
-	}
-
 	// Keys mode: get specific keys (no pagination)
 	if keys := filter.Keys(); len(keys) > 0 {
 		placeholders := make([]string, len(keys))
@@ -445,17 +493,11 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 			argNum++
 		}
 		query := fmt.Sprintf(`
-			SELECT id, key, namespace, tags, value, codec, type, version, created_at, updated_at
+			SELECT id, key, namespace, value, codec, type, version, created_at, updated_at
 			FROM %s WHERE namespace = $%d AND key IN (%s)
 		`, s.cfg.Table, argNum, strings.Join(placeholders, ","))
 		args = append(args, namespace)
 		argNum++
-
-		if tagsFilter != "" {
-			query += fmt.Sprintf(" AND tags = $%d", argNum)
-			args = append(args, tagsFilter)
-			argNum++
-		}
 
 		query += " ORDER BY id"
 
@@ -468,17 +510,11 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 
 	// Prefix mode: get all keys matching prefix
 	query := fmt.Sprintf(`
-		SELECT id, key, namespace, tags, value, codec, type, version, created_at, updated_at
+		SELECT id, key, namespace, value, codec, type, version, created_at, updated_at
 		FROM %s WHERE namespace = $%d
 	`, s.cfg.Table, argNum)
 	args = append(args, namespace)
 	argNum++
-
-	if tagsFilter != "" {
-		query += fmt.Sprintf(" AND tags = $%d", argNum)
-		args = append(args, tagsFilter)
-		argNum++
-	}
 
 	if prefix := filter.Prefix(); prefix != "" {
 		query += fmt.Sprintf(" AND key LIKE $%d", argNum)
@@ -520,29 +556,26 @@ func (s *Store) executeListQuery(ctx context.Context, query string, args []any) 
 	var lastID int64
 	for rows.Next() {
 		var (
-			id                           int64
-			k, ns, tagsResult, codecName string
-			value                        []byte
-			valueType                    config.Type
-			version                      int64
-			createdAt, updatedAt         time.Time
+			id                   int64
+			k, ns, codecName     string
+			value                []byte
+			valueType            config.Type
+			version              int64
+			createdAt, updatedAt time.Time
 		)
 
 		if err := rows.Scan(
-			&id, &k, &ns, &tagsResult, &value, &codecName, &valueType, &version, &createdAt, &updatedAt,
+			&id, &k, &ns, &value, &codecName, &valueType, &version, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, "", config.WrapStoreError("list", "postgres", "", err)
 		}
-
-		// Parse tags from result
-		parsedTags, _ := config.ParseTags(tagsResult)
 
 		val, err := config.NewValueFromBytes(
 			value,
 			codecName,
 			config.WithValueType(valueType),
 			config.WithValueMetadata(version, createdAt, updatedAt),
-			config.WithValueTags(parsedTags),
+			config.WithValueEntryID(fmt.Sprintf("%d", id)),
 		)
 		if err != nil {
 			continue
@@ -661,6 +694,187 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	return stats, nil
 }
 
+// GetMany retrieves multiple values in a single operation.
+func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (map[string]config.Value, error) {
+	if s.closed.Load() {
+		return nil, config.ErrStoreClosed
+	}
+	if err := config.ValidateNamespace(namespace); err != nil {
+		return nil, err
+	}
+	if len(keys) == 0 {
+		return make(map[string]config.Value), nil
+	}
+
+	// Build query with placeholders
+	placeholders := make([]string, len(keys))
+	args := make([]any, len(keys)+1)
+	args[0] = namespace
+	for i, key := range keys {
+		placeholders[i] = fmt.Sprintf("$%d", i+2)
+		args[i+1] = key
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, key, namespace, value, codec, type, version, created_at, updated_at
+		FROM %s WHERE namespace = $1 AND key IN (%s)
+	`, s.cfg.Table, strings.Join(placeholders, ","))
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, config.WrapStoreError("get_many", "postgres", "", err)
+	}
+	defer rows.Close()
+
+	results := make(map[string]config.Value, len(keys))
+	for rows.Next() {
+		var (
+			id                   int64
+			k, ns, codecName     string
+			value                []byte
+			valueType            config.Type
+			version              int64
+			createdAt, updatedAt time.Time
+		)
+
+		if err := rows.Scan(&id, &k, &ns, &value, &codecName, &valueType, &version, &createdAt, &updatedAt); err != nil {
+			return nil, config.WrapStoreError("get_many", "postgres", "", err)
+		}
+
+		val, err := config.NewValueFromBytes(
+			value,
+			codecName,
+			config.WithValueType(valueType),
+			config.WithValueMetadata(version, createdAt, updatedAt),
+			config.WithValueEntryID(fmt.Sprintf("%d", id)),
+		)
+		if err != nil {
+			continue
+		}
+		results[k] = val
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, config.WrapStoreError("get_many", "postgres", "", err)
+	}
+
+	return results, nil
+}
+
+// SetMany creates or updates multiple values in a single operation.
+// Returns a BulkWriteError if any individual set fails, indicating which keys
+// succeeded and which failed. Successfully set values are persisted even if some fail.
+func (s *Store) SetMany(ctx context.Context, namespace string, values map[string]config.Value) error {
+	if s.closed.Load() {
+		return config.ErrStoreClosed
+	}
+	if err := config.ValidateNamespace(namespace); err != nil {
+		return err
+	}
+	if len(values) == 0 {
+		return nil
+	}
+
+	keyErrors := make(map[string]error)
+	succeeded := make([]string, 0, len(values))
+
+	// Use a transaction for atomicity
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return config.WrapStoreError("set_many", "postgres", "", err)
+	}
+	defer tx.Rollback()
+
+	// Prepare the upsert statement
+	query := fmt.Sprintf(`
+		INSERT INTO %s (key, namespace, value, codec, type, version, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, 1, NOW(), NOW())
+		ON CONFLICT (namespace, key) DO UPDATE SET
+			value = EXCLUDED.value,
+			codec = EXCLUDED.codec,
+			type = EXCLUDED.type,
+			version = %s.version + 1,
+			updated_at = NOW()
+	`, s.cfg.Table, s.cfg.Table)
+
+	stmt, err := tx.PrepareContext(ctx, query)
+	if err != nil {
+		return config.WrapStoreError("set_many", "postgres", "", err)
+	}
+	defer stmt.Close()
+
+	for key, value := range values {
+		if key == "" {
+			keyErrors[key] = &config.InvalidKeyError{Key: key, Reason: "key cannot be empty"}
+			continue
+		}
+
+		data, err := value.Marshal()
+		if err != nil {
+			keyErrors[key] = config.WrapStoreError("marshal", "postgres", key, err)
+			continue
+		}
+
+		_, err = stmt.ExecContext(ctx, key, namespace, data, value.Codec(), value.Type())
+		if err != nil {
+			keyErrors[key] = config.WrapStoreError("set_many", "postgres", key, err)
+		} else {
+			succeeded = append(succeeded, key)
+		}
+	}
+
+	// Commit even if some entries failed - partial success is acceptable
+	if err := tx.Commit(); err != nil {
+		return config.WrapStoreError("set_many", "postgres", "", err)
+	}
+
+	if len(keyErrors) > 0 {
+		return &config.BulkWriteError{
+			Errors:    keyErrors,
+			Succeeded: succeeded,
+		}
+	}
+	return nil
+}
+
+// DeleteMany removes multiple values in a single operation.
+// Returns the number of entries actually deleted.
+func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string) (int64, error) {
+	if s.closed.Load() {
+		return 0, config.ErrStoreClosed
+	}
+	if err := config.ValidateNamespace(namespace); err != nil {
+		return 0, err
+	}
+	if len(keys) == 0 {
+		return 0, nil
+	}
+
+	// Build query with placeholders
+	placeholders := make([]string, len(keys))
+	args := make([]any, len(keys)+1)
+	args[0] = namespace
+	for i, key := range keys {
+		placeholders[i] = fmt.Sprintf("$%d", i+2)
+		args[i+1] = key
+	}
+
+	query := fmt.Sprintf(`DELETE FROM %s WHERE namespace = $1 AND key IN (%s)`,
+		s.cfg.Table, strings.Join(placeholders, ","))
+
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, config.WrapStoreError("delete_many", "postgres", "", err)
+	}
+
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, config.WrapStoreError("delete_many", "postgres", "", err)
+	}
+
+	return deleted, nil
+}
+
 // listenNotifications processes LISTEN/NOTIFY events.
 func (s *Store) listenNotifications() {
 	defer s.watchWg.Done()
@@ -693,26 +907,34 @@ func (s *Store) listenNotifications() {
 				continue
 			}
 
-			// Parse tags from payload
-			tags, _ := config.ParseTags(payload.Tags)
-
 			event := config.ChangeEvent{
 				Type:      eventType,
 				Namespace: payload.Namespace,
 				Key:       payload.Key,
-				Tags:      tags,
 				Timestamp: time.Now().UTC(),
 			}
 
-			// Fetch full record for non-delete events
-			if eventType != config.ChangeTypeDelete {
-				ctx, cancel := context.WithTimeout(context.Background(), s.cfg.NotificationFetchTimeout)
-				if val, err := s.Get(ctx, payload.Namespace, payload.Key, tags...); err == nil {
-					event.Value = val
+			// For insert/update, create Value from the payload data
+			// Note: json.Unmarshal automatically base64-decodes []byte fields
+			if eventType == config.ChangeTypeSet && len(payload.Value) > 0 {
+				var createdAt, updatedAt time.Time
+				if payload.CreatedAt != nil {
+					createdAt = *payload.CreatedAt
 				}
-				cancel()
-			} else {
-				event.Value = nil
+				if payload.UpdatedAt != nil {
+					updatedAt = *payload.UpdatedAt
+				}
+				val, err := config.NewValueFromBytes(
+					payload.Value,
+					payload.Codec,
+					config.WithValueType(payload.Type),
+					config.WithValueMetadata(payload.Version, createdAt, updatedAt),
+				)
+				if err == nil {
+					event.Value = val
+				} else {
+					slog.Warn("postgres: failed to create value from notification", "error", err)
+				}
 			}
 
 			s.dispatchEvent(event)

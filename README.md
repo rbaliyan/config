@@ -7,12 +7,12 @@ A type-safe, namespace-aware configuration library for Go with support for multi
 - **Multiple Storage Backends**: Memory, PostgreSQL, MongoDB
 - **Multi-Store**: Combine stores for caching, fallback, or replication patterns
 - **Namespace Isolation**: Organize configuration by environment, tenant, or service
-- **Tags**: Multi-dimensional entry organization with tag-based filtering
 - **Built-in Resilience**: Internal cache ensures app works during backend outages
 - **Type-safe Values**: Strongly typed access with automatic conversion
 - **Codecs**: JSON, YAML, TOML encoding support
 - **OpenTelemetry**: Tracing and metrics instrumentation
 - **Struct Binding**: Bind configuration to Go structs with validation
+- **Live Binding**: Auto-reload structs on config changes via polling
 
 ## Design Philosophy
 
@@ -182,6 +182,31 @@ cfg.Set(ctx, "app/config", value,
 )
 ```
 
+### Conditional Writes
+
+Control create/update behavior with conditional write options:
+
+```go
+// Create only - fails if key already exists
+err := cfg.Set(ctx, "feature/flag", true, config.WithIfNotExists())
+if config.IsKeyExists(err) {
+    // Key already existed, value not changed
+}
+
+// Update only - fails if key doesn't exist
+err = cfg.Set(ctx, "feature/flag", false, config.WithIfExists())
+if config.IsNotFound(err) {
+    // Key didn't exist, nothing updated
+}
+
+// Default (upsert) - creates or updates
+cfg.Set(ctx, "feature/flag", true) // Always succeeds
+```
+
+These options leverage atomic database operations:
+- **PostgreSQL**: Uses `ON CONFLICT DO NOTHING` / `UPDATE` with row count checks
+- **MongoDB**: Uses `InsertOne` / `FindOneAndUpdate` with upsert control
+
 ### Listing Values
 
 ```go
@@ -193,7 +218,8 @@ page, err := cfg.Find(ctx, config.NewFilter().
     Build())
 
 for key, val := range page.Results() {
-    fmt.Printf("%s = %v\n", key, val.Raw())
+    str, _ := val.String()
+    fmt.Printf("%s = %s\n", key, str)
 }
 
 // Pagination: check if len(results) < limit to determine if more pages exist
@@ -290,46 +316,6 @@ if err == nil {
 }
 ```
 
-## Tags
-
-Tag entries for multi-dimensional organization. Tags are part of an entry's identity - the same key with different tags creates separate entries.
-
-```go
-// Set with tags
-cfg.Set(ctx, "database/host", "prod-db.example.com",
-    config.WithTags(
-        config.MustTag("env", "production"),
-        config.MustTag("region", "us-west"),
-    ),
-)
-
-// Same key, different tags = different entry
-cfg.Set(ctx, "database/host", "dev-db.example.com",
-    config.WithTags(config.MustTag("env", "development")),
-)
-
-// Get with tags (must match exactly)
-val, err := cfg.Get(ctx, "database/host",
-    config.MustTag("env", "production"),
-    config.MustTag("region", "us-west"),
-)
-
-// Delete with tags
-cfg.Delete(ctx, "database/host", config.MustTag("env", "development"))
-
-// Find by tags
-page, _ := cfg.Find(ctx, config.NewFilter().
-    WithPrefix("database/").
-    WithTags(config.MustTag("env", "production")).
-    Build())
-
-// Access tags from value
-tags := val.Metadata().Tags()
-for _, t := range tags {
-    fmt.Printf("%s=%s\n", t.Key(), t.Value())
-}
-```
-
 ## OpenTelemetry Instrumentation
 
 Wrap stores with tracing and metrics. Both are disabled by default and must be explicitly enabled.
@@ -355,7 +341,7 @@ Metrics exported:
 
 ## Struct Binding
 
-Bind configuration to Go structs with validation.
+Bind configuration to Go structs with validation. Struct fields are automatically mapped to hierarchical keys using the configured struct tag (default: `json`).
 
 ```go
 import "github.com/rbaliyan/config/bind"
@@ -368,9 +354,99 @@ type DatabaseConfig struct {
 binder := bind.New(cfg, bind.WithTagValidation())
 bound := binder.Bind()
 
+// Store a struct - creates keys: database/host, database/port
+err := bound.SetStruct(ctx, "database", DatabaseConfig{Host: "localhost", Port: 5432})
+
+// Retrieve a struct - reads keys: database/host, database/port
 var dbConfig DatabaseConfig
-err := bound.GetStruct(ctx, "database", &dbConfig)
+err = bound.GetStruct(ctx, "database", &dbConfig)
 ```
+
+Nested structs are also supported:
+
+```go
+type AppConfig struct {
+    Name  string      `json:"name"`
+    Cache CacheConfig `json:"cache"`
+}
+
+type CacheConfig struct {
+    TTL     int  `json:"ttl"`
+    Enabled bool `json:"enabled"`
+}
+
+// SetStruct creates: app/name, app/cache/ttl, app/cache/enabled
+err := bound.SetStruct(ctx, "app", AppConfig{
+    Name: "myapp",
+    Cache: CacheConfig{TTL: 300, Enabled: true},
+})
+```
+
+Use `nonrecursive` to store a nested struct as a single JSON value instead of flattening:
+
+```go
+type Credentials struct {
+    Username string `json:"username"`
+    Password string `json:"password"`
+}
+
+type AppConfig struct {
+    Name  string      `json:"name"`
+    Creds Credentials `json:"creds,nonrecursive"` // Store as single JSON value
+}
+
+// SetStruct creates: app/name, app/creds (not app/creds/username, app/creds/password)
+// Useful when fields are tightly coupled and should be updated atomically
+```
+
+## Live Binding (Auto-Reload)
+
+Keep a struct automatically synchronized with configuration using polling:
+
+```go
+import "github.com/rbaliyan/config/live"
+
+type DatabaseConfig struct {
+    Host string `json:"host"`
+    Port int    `json:"port"`
+}
+
+var dbConfig DatabaseConfig
+binding, err := live.Bind(ctx, cfg, "database", &dbConfig,
+    live.WithPollInterval(10*time.Second),
+    live.WithOnReload(func() {
+        log.Println("config reloaded")
+    }),
+    live.WithOnError(func(err error) {
+        log.Printf("reload error: %v", err)
+    }),
+)
+if err != nil {
+    return err
+}
+defer binding.Stop()
+
+// dbConfig is automatically kept in sync with the backend
+http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+    // Safe concurrent access using Get()
+    binding.Get(func(target any) {
+        cfg := target.(*DatabaseConfig)
+        fmt.Fprintf(w, "Host: %s, Port: %d", cfg.Host, cfg.Port)
+    })
+})
+```
+
+Options:
+- `WithPollInterval(d)` - Set polling interval (default: 30s)
+- `WithOnReload(fn)` - Callback after successful reload
+- `WithOnError(fn)` - Callback on reload error
+
+Methods:
+- `Stop()` - Stop background polling
+- `ReloadNow(ctx)` - Force immediate reload
+- `LastReload()` - Get last reload timestamp
+- `LastError()` - Get last error (nil if successful)
+- `Get(fn)` - Safe concurrent read access
 
 ## Codecs
 
@@ -421,6 +497,8 @@ if err != nil {
         // Key doesn't exist
     case config.IsTypeMismatch(err):
         // Type conversion failed
+    case config.IsKeyExists(err):
+        // Key already exists (from WithIfNotExists)
     default:
         // Other error
     }
@@ -434,7 +512,6 @@ mgr := config.New(
     config.WithStore(store),           // Required: storage backend
     config.WithCodec(yamlCodec),       // Optional: default codec (default: JSON)
     config.WithLogger(slogLogger),     // Optional: custom logger
-    config.WithCacheTTL(5*time.Minute),// Optional: cache TTL (default: 5 min)
 )
 ```
 

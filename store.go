@@ -7,9 +7,14 @@ import (
 	"time"
 )
 
+// DefaultNamespace is the default namespace (empty string).
+// Use this when you don't need namespace separation.
+const DefaultNamespace = ""
+
 // validNamespace matches valid namespace names: alphanumeric, underscore, dash.
 // Empty namespace is allowed (represents default namespace).
-var validNamespace = regexp.MustCompile(`^[a-zA-Z0-9_-]*$`)
+// Non-empty namespaces must start with an alphanumeric character.
+var validNamespace = regexp.MustCompile(`^([a-zA-Z0-9][a-zA-Z0-9_-]*)?$`)
 
 // validKey matches valid key characters: alphanumeric, underscore, dash, dot, slash.
 // Keys must not be empty and must not contain path traversal sequences.
@@ -84,35 +89,28 @@ type Store interface {
 	// Close releases resources and closes the connection.
 	Close(ctx context.Context) error
 
-	// Get retrieves a configuration value by namespace, key, and optional tags.
-	// The combination of (namespace, key, tags) uniquely identifies an entry.
+	// Get retrieves a configuration value by namespace and key.
 	// Returns ErrNotFound if the entry does not exist.
-	Get(ctx context.Context, namespace, key string, tags ...Tag) (Value, error)
+	Get(ctx context.Context, namespace, key string) (Value, error)
 
 	// Set creates or updates a configuration value.
-	// Tags are extracted from the Value's metadata.
 	// The version is auto-incremented on each update.
-	Set(ctx context.Context, namespace, key string, value Value) error
+	// Returns the stored Value with updated metadata (version, timestamps).
+	Set(ctx context.Context, namespace, key string, value Value) (Value, error)
 
-	// Delete removes a configuration value by namespace, key, and optional tags.
-	// The combination of (namespace, key, tags) uniquely identifies an entry.
+	// Delete removes a configuration value by namespace and key.
 	// Returns ErrNotFound if the entry does not exist.
-	Delete(ctx context.Context, namespace, key string, tags ...Tag) error
+	Delete(ctx context.Context, namespace, key string) error
 
 	// Find returns a page of keys and values matching the filter within a namespace.
 	// Use Page.NextCursor() to paginate through results.
 	Find(ctx context.Context, namespace string, filter Filter) (Page, error)
-}
 
-// watchableStore is an internal interface for stores that support change notifications.
-// This is used internally by the Manager for cache invalidation.
-// Store implementations should implement this interface to enable automatic
-// cache synchronization across application restarts and multi-instance deployments.
-type watchableStore interface {
-	Store
-	// Watch returns a channel that receives change events.
+	// Watch returns a channel that receives change events for cache invalidation.
 	// The channel is closed when the context is cancelled.
-	// Returns ErrWatchNotSupported if the store doesn't support watching.
+	// This is used by the Manager for automatic cache synchronization.
+	// For stores that don't support real-time watching (e.g., file-based),
+	// return ErrWatchNotSupported.
 	Watch(ctx context.Context, filter WatchFilter) (<-chan ChangeEvent, error)
 }
 
@@ -181,10 +179,6 @@ type Filter interface {
 
 	// Cursor returns the pagination cursor (entry ID) for continuing from a previous result.
 	Cursor() string
-
-	// Tags returns tags to filter by. Only entries containing all specified tags
-	// (AND logic, exact match) will be returned.
-	Tags() []Tag
 }
 
 // Page represents a page of results from a Find operation.
@@ -249,7 +243,6 @@ type FilterBuilder struct {
 	prefix string
 	limit  int
 	cursor string
-	tags   []Tag
 }
 
 // NewFilter creates a new FilterBuilder.
@@ -285,12 +278,6 @@ func (b *FilterBuilder) WithCursor(cursor string) *FilterBuilder {
 	return b
 }
 
-// WithTags adds tag filtering (AND logic - all must match exactly).
-func (b *FilterBuilder) WithTags(tags ...Tag) *FilterBuilder {
-	b.tags = SortTags(tags)
-	return b
-}
-
 // Build creates the Filter.
 func (b *FilterBuilder) Build() Filter {
 	return &filter{
@@ -298,7 +285,6 @@ func (b *FilterBuilder) Build() Filter {
 		prefix: b.prefix,
 		limit:  b.limit,
 		cursor: b.cursor,
-		tags:   b.tags,
 	}
 }
 
@@ -308,14 +294,12 @@ type filter struct {
 	prefix string
 	limit  int
 	cursor string
-	tags   []Tag
 }
 
 func (f *filter) Keys() []string { return f.keys }
 func (f *filter) Prefix() string { return f.prefix }
 func (f *filter) Limit() int     { return f.limit }
 func (f *filter) Cursor() string { return f.cursor }
-func (f *filter) Tags() []Tag    { return f.tags }
 
 // WatchFilter specifies criteria for watching changes.
 type WatchFilter struct {
@@ -336,10 +320,6 @@ type ChangeEvent struct {
 
 	// Key is the key that changed.
 	Key string
-
-	// Tags identifies which tagged entry changed.
-	// Required because (namespace, key, tags) uniquely identifies an entry.
-	Tags []Tag
 
 	// Value is the new value (nil for Delete events).
 	Value Value

@@ -7,12 +7,38 @@ import (
 	"github.com/rbaliyan/config/codec"
 )
 
+// WatchBackoffConfig configures the exponential backoff for watch reconnection.
+// When the watch connection fails, the manager will retry with exponential backoff.
+// This prevents hammering the backend while allowing quick recovery.
+type WatchBackoffConfig struct {
+	// InitialBackoff is the initial wait time between reconnection attempts.
+	// Default: 100ms
+	InitialBackoff time.Duration
+
+	// MaxBackoff is the maximum wait time between reconnection attempts.
+	// Default: 30 seconds
+	MaxBackoff time.Duration
+
+	// BackoffFactor is the multiplier applied to backoff after each failure.
+	// Default: 2.0
+	BackoffFactor float64
+}
+
+// DefaultWatchBackoffConfig returns the default watch backoff configuration.
+func DefaultWatchBackoffConfig() WatchBackoffConfig {
+	return WatchBackoffConfig{
+		InitialBackoff: 100 * time.Millisecond,
+		MaxBackoff:     30 * time.Second,
+		BackoffFactor:  2.0,
+	}
+}
+
 // managerOptions holds configuration for the Manager (unexported).
 type managerOptions struct {
-	store    Store
-	codec    codec.Codec
-	logger   *slog.Logger
-	cacheTTL time.Duration
+	store        Store
+	codec        codec.Codec
+	logger       *slog.Logger
+	watchBackoff WatchBackoffConfig
 }
 
 // Option configures the Manager.
@@ -21,9 +47,9 @@ type Option func(*managerOptions)
 // newManagerOptions creates options with defaults.
 func newManagerOptions() *managerOptions {
 	return &managerOptions{
-		codec:    codec.Default(),
-		logger:   slog.Default(),
-		cacheTTL: 5 * time.Minute,
+		codec:        codec.Default(),
+		logger:       slog.Default(),
+		watchBackoff: DefaultWatchBackoffConfig(),
 	}
 }
 
@@ -56,17 +82,30 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
-// WithCacheTTL sets the time-to-live for cached configuration values.
-// Default is 5 minutes. The cache is used for resilience - if the backend
-// store becomes unavailable, cached values can still be served.
+// WithWatchBackoff configures the exponential backoff for watch reconnection.
+// When the watch connection fails, the manager retries with exponential backoff
+// to prevent hammering the backend while allowing quick recovery.
 //
-// Note: The cache is automatically invalidated via the store's Watch mechanism
-// (e.g., MongoDB Change Streams, PostgreSQL LISTEN/NOTIFY), so in normal
-// operation, values are refreshed much sooner than the TTL.
-func WithCacheTTL(ttl time.Duration) Option {
+// Example:
+//
+//	mgr := config.New(
+//	    config.WithStore(store),
+//	    config.WithWatchBackoff(config.WatchBackoffConfig{
+//	        InitialBackoff: 200 * time.Millisecond,
+//	        MaxBackoff:     1 * time.Minute,
+//	        BackoffFactor:  1.5,
+//	    }),
+//	)
+func WithWatchBackoff(cfg WatchBackoffConfig) Option {
 	return func(o *managerOptions) {
-		if ttl > 0 {
-			o.cacheTTL = ttl
+		if cfg.InitialBackoff > 0 {
+			o.watchBackoff.InitialBackoff = cfg.InitialBackoff
+		}
+		if cfg.MaxBackoff > 0 {
+			o.watchBackoff.MaxBackoff = cfg.MaxBackoff
+		}
+		if cfg.BackoffFactor > 0 {
+			o.watchBackoff.BackoffFactor = cfg.BackoffFactor
 		}
 	}
 }
@@ -75,22 +114,13 @@ func WithCacheTTL(ttl time.Duration) Option {
 type SetOption func(*setOptions)
 
 type setOptions struct {
-	tags  []Tag
-	codec codec.Codec
-	typ   Type
+	codec     codec.Codec
+	typ       Type
+	writeMode WriteMode
 }
 
 func newSetOptions() *setOptions {
 	return &setOptions{}
-}
-
-// WithTags sets tags for the configuration entry.
-// Tags are key-value pairs used for categorization and filtering.
-// The combination of (namespace, key, tags) uniquely identifies an entry.
-func WithTags(tags ...Tag) SetOption {
-	return func(o *setOptions) {
-		o.tags = SortTags(tags)
-	}
 }
 
 // WithSetCodec sets the codec for encoding the value.
@@ -106,5 +136,41 @@ func WithSetCodec(c codec.Codec) SetOption {
 func WithType(t Type) SetOption {
 	return func(o *setOptions) {
 		o.typ = t
+	}
+}
+
+// WithIfNotExists configures Set to only create the key if it doesn't exist.
+// Returns ErrKeyExists if the key already exists.
+//
+// This is useful for implementing "create-only" semantics where you want to
+// ensure you don't accidentally overwrite an existing value.
+//
+// Example:
+//
+//	err := cfg.Set(ctx, "lock/owner", "instance-1", config.WithIfNotExists())
+//	if config.IsKeyExists(err) {
+//	    // Key was already taken by another instance
+//	}
+func WithIfNotExists() SetOption {
+	return func(o *setOptions) {
+		o.writeMode = WriteModeCreate
+	}
+}
+
+// WithIfExists configures Set to only update the key if it already exists.
+// Returns ErrNotFound if the key doesn't exist.
+//
+// This is useful for implementing "update-only" semantics where you want to
+// ensure the key was previously created.
+//
+// Example:
+//
+//	err := cfg.Set(ctx, "app/timeout", 60, config.WithIfExists())
+//	if config.IsNotFound(err) {
+//	    // Key doesn't exist, need to create it first
+//	}
+func WithIfExists() SetOption {
+	return func(o *setOptions) {
+		o.writeMode = WriteModeUpdate
 	}
 }

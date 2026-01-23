@@ -2,6 +2,7 @@ package mongodb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -56,7 +57,7 @@ type Config struct {
 
 	// Capped enables capped collection mode.
 	// Capped collections have a fixed size and automatically remove oldest documents.
-	// Note: Capped collections cannot have unique indexes, so tag-based lookups
+	// Note: Capped collections cannot have unique indexes, so lookups
 	// may return multiple entries. Use with caution.
 	Capped bool
 
@@ -67,6 +68,12 @@ type Config struct {
 	// CappedMaxDocuments is the maximum number of documents in a capped collection.
 	// Only used when Capped is true. Default is 0 (no document limit, only size limit).
 	CappedMaxDocuments int64
+
+	// EnablePreImages enables change stream pre-images for the collection.
+	// This is required for delete events to include the deleted document's data.
+	// Requires MongoDB 6.0+ and creates the collection with changeStreamPreAndPostImages enabled.
+	// Default is false.
+	EnablePreImages bool
 
 	// Logger is the logger for the store. If nil, uses slog.Default().
 	Logger *slog.Logger
@@ -99,7 +106,7 @@ type mongoEntry struct {
 	ID        primitive.ObjectID `bson:"_id,omitempty"`
 	Key       string             `bson:"key"`
 	Namespace string             `bson:"namespace"`
-	Tags      string             `bson:"tags"` // Sorted "key1=value1,key2=value2"
+	Tags      string             `bson:"tags"` // Sorted "key1=value1,key2=value2" format
 	Value     []byte             `bson:"value"`
 	Codec     string             `bson:"codec"`
 	Type      config.Type        `bson:"type"`
@@ -109,15 +116,12 @@ type mongoEntry struct {
 }
 
 func (e *mongoEntry) toValue() (config.Value, error) {
-	// Parse tags from stored string
-	tags, _ := config.ParseTags(e.Tags)
-
 	return config.NewValueFromBytes(
 		e.Value,
 		e.Codec,
 		config.WithValueType(e.Type),
 		config.WithValueMetadata(e.Version, e.CreatedAt, e.UpdatedAt),
-		config.WithValueTags(tags),
+		config.WithValueEntryID(e.ID.Hex()),
 	)
 }
 
@@ -181,7 +185,7 @@ func WithAutoCreateIndexes(enabled bool) Option {
 // maxDocuments is the optional maximum number of documents (0 = no limit).
 //
 // Note: Capped collections cannot have unique indexes, so the unique constraint
-// on (namespace, key, tags) will not be enforced. Consider using regular collections
+// on (namespace, key) will not be enforced. Consider using regular collections
 // for production use where uniqueness is important.
 func WithCapped(sizeBytes int64, maxDocuments int64) Option {
 	return func(s *Store) {
@@ -199,6 +203,16 @@ func WithCapped(sizeBytes int64, maxDocuments int64) Option {
 func WithLogger(logger *slog.Logger) Option {
 	return func(s *Store) {
 		s.cfg.Logger = logger
+	}
+}
+
+// WithPreImages enables change stream pre-images for the collection.
+// This allows delete events to include the deleted document's namespace and key.
+// Requires MongoDB 6.0+ and will create the collection with changeStreamPreAndPostImages enabled.
+// Without pre-images, delete events cannot determine the key and will be skipped.
+func WithPreImages(enabled bool) Option {
+	return func(s *Store) {
+		s.cfg.EnablePreImages = enabled
 	}
 }
 
@@ -226,6 +240,7 @@ var (
 	_ config.Store         = (*Store)(nil)
 	_ config.HealthChecker = (*Store)(nil)
 	_ config.StatsProvider = (*Store)(nil)
+	_ config.BulkStore     = (*Store)(nil)
 )
 
 // Connect initializes the store (optionally creates collection/indexes and starts change stream listener).
@@ -241,6 +256,13 @@ func (s *Store) Connect(ctx context.Context) error {
 	if s.cfg.Capped {
 		if err := s.ensureCappedCollection(ctx); err != nil {
 			return config.WrapStoreError("create_collection", "mongodb", "", err)
+		}
+	}
+
+	// Enable pre-images if configured (for delete event support)
+	if s.cfg.EnablePreImages {
+		if err := s.ensurePreImagesEnabled(ctx); err != nil {
+			return config.WrapStoreError("enable_pre_images", "mongodb", "", err)
 		}
 	}
 
@@ -261,6 +283,7 @@ func (s *Store) Connect(ctx context.Context) error {
 		"database", s.cfg.Database,
 		"collection", s.cfg.Collection,
 		"capped", s.cfg.Capped,
+		"preImages", s.cfg.EnablePreImages,
 	)
 
 	return nil
@@ -304,6 +327,51 @@ func (s *Store) ensureCappedCollection(ctx context.Context) error {
 	return nil
 }
 
+// ensurePreImagesEnabled enables change stream pre-images on the collection.
+// This requires MongoDB 6.0+ and allows delete events to include the deleted document.
+func (s *Store) ensurePreImagesEnabled(ctx context.Context) error {
+	// Check if collection already exists
+	collections, err := s.database.ListCollectionNames(ctx, bson.M{"name": s.cfg.Collection})
+	if err != nil {
+		return fmt.Errorf("failed to list collections: %w", err)
+	}
+
+	if len(collections) == 0 {
+		// Collection doesn't exist, create it with pre-images enabled
+		opts := options.CreateCollection().
+			SetChangeStreamPreAndPostImages(bson.M{"enabled": true})
+
+		if err := s.database.CreateCollection(ctx, s.cfg.Collection, opts); err != nil {
+			return fmt.Errorf("failed to create collection with pre-images: %w", err)
+		}
+
+		s.logger().Info("created collection with pre-images enabled",
+			"collection", s.cfg.Collection,
+		)
+	} else {
+		// Collection exists, try to enable pre-images via collMod
+		cmd := bson.D{
+			{Key: "collMod", Value: s.cfg.Collection},
+			{Key: "changeStreamPreAndPostImages", Value: bson.M{"enabled": true}},
+		}
+
+		if err := s.database.RunCommand(ctx, cmd).Err(); err != nil {
+			// Log warning but don't fail - collection might already have it enabled
+			// or MongoDB version might not support it
+			s.logger().Warn("failed to enable pre-images on existing collection",
+				"collection", s.cfg.Collection,
+				"error", err,
+			)
+		} else {
+			s.logger().Info("enabled pre-images on existing collection",
+				"collection", s.cfg.Collection,
+			)
+		}
+	}
+
+	return nil
+}
+
 // logger returns the configured logger or the default logger.
 func (s *Store) logger() *slog.Logger {
 	if s.cfg.Logger != nil {
@@ -317,10 +385,9 @@ func (s *Store) logger() *slog.Logger {
 // You can also call this manually if you disabled auto-creation.
 //
 // For regular collections, creates:
-//   - Unique composite index on (namespace, key, tags)
+//   - Unique composite index on (namespace, key)
 //   - Index on namespace
 //   - Index on key
-//   - Index on tags
 //   - Index on type
 //   - Index on updated_at (descending)
 //
@@ -344,20 +411,16 @@ func (s *Store) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys: bson.D{{Key: "type", Value: 1}},
 		},
-		{
-			Keys: bson.D{{Key: "tags", Value: 1}},
-		},
 	}
 
 	// Add unique composite index only for non-capped collections
 	// Capped collections don't support unique indexes
 	if !s.cfg.Capped {
 		indexes = append(indexes, mongo.IndexModel{
-			// Unique index on (namespace, key, tags) - this is the entry identity
+			// Unique index on (namespace, key) - this is the entry identity
 			Keys: bson.D{
 				{Key: "namespace", Value: 1},
 				{Key: "key", Value: 1},
-				{Key: "tags", Value: 1},
 			},
 			Options: options.Index().SetUnique(true),
 		})
@@ -367,7 +430,6 @@ func (s *Store) EnsureIndexes(ctx context.Context) error {
 			Keys: bson.D{
 				{Key: "namespace", Value: 1},
 				{Key: "key", Value: 1},
-				{Key: "tags", Value: 1},
 			},
 		})
 	}
@@ -410,8 +472,8 @@ func (s *Store) Close(ctx context.Context) error {
 	return nil
 }
 
-// Get retrieves a configuration value by namespace, key, and optional tags.
-func (s *Store) Get(ctx context.Context, namespace, key string, tags ...config.Tag) (config.Value, error) {
+// Get retrieves a configuration value by namespace and key.
+func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, error) {
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
 	}
@@ -419,11 +481,9 @@ func (s *Store) Get(ctx context.Context, namespace, key string, tags ...config.T
 		return nil, err
 	}
 
-	tagsStr := config.FormatTags(tags)
 	filter := bson.M{
 		"namespace": namespace,
 		"key":       key,
-		"tags":      tagsStr,
 	}
 
 	var doc mongoEntry
@@ -439,70 +499,122 @@ func (s *Store) Get(ctx context.Context, namespace, key string, tags ...config.T
 }
 
 // Set creates or updates a configuration value.
-// Tags are extracted from value.Metadata().Tags().
-func (s *Store) Set(ctx context.Context, namespace, key string, value config.Value) error {
+// Returns the stored Value with updated metadata (version, timestamps).
+func (s *Store) Set(ctx context.Context, namespace, key string, value config.Value) (config.Value, error) {
 	if s.closed.Load() {
-		return config.ErrStoreClosed
+		return nil, config.ErrStoreClosed
 	}
 	if err := config.ValidateNamespace(namespace); err != nil {
-		return err
+		return nil, err
 	}
 	if key == "" {
-		return config.ErrInvalidKey
+		return nil, config.ErrInvalidKey
 	}
 
 	// Marshal the value
 	data, err := value.Marshal()
 	if err != nil {
-		return config.WrapStoreError("marshal", "mongodb", key, err)
-	}
-
-	// Get tags from value metadata
-	var tagsStr string
-	if value.Metadata() != nil {
-		tagsStr = config.FormatTags(value.Metadata().Tags())
+		return nil, config.WrapStoreError("marshal", "mongodb", key, err)
 	}
 
 	now := time.Now().UTC()
 
-	// Use findOneAndUpdate with upsert for atomic version increment
-	// Filter by (namespace, key, tags) - the unique identity
-	filter := bson.M{
-		"namespace": namespace,
-		"key":       key,
-		"tags":      tagsStr,
-	}
-	update := bson.M{
-		"$set": bson.M{
-			"key":        key,
-			"namespace":  namespace,
-			"tags":       tagsStr,
-			"value":      data,
-			"codec":      value.Codec(),
-			"type":       value.Type(),
-			"updated_at": now,
-		},
-		"$inc": bson.M{"version": int64(1)},
-		"$setOnInsert": bson.M{
-			"created_at": now,
-		},
-	}
+	writeMode := value.WriteMode()
+	switch writeMode {
+	case config.WriteModeCreate:
+		// Insert only - will fail if document exists due to unique index
+		doc := mongoEntry{
+			Key:       key,
+			Namespace: namespace,
+			Value:     data,
+			Codec:     value.Codec(),
+			Type:      value.Type(),
+			Version:   1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
 
-	opts := options.FindOneAndUpdate().
-		SetUpsert(true).
-		SetReturnDocument(options.After)
+		result, err := s.collection.InsertOne(ctx, doc)
+		if err != nil {
+			// Check if it's a duplicate key error
+			if mongo.IsDuplicateKeyError(err) {
+				return nil, &config.KeyExistsError{Key: key, Namespace: namespace}
+			}
+			return nil, config.WrapStoreError("set", "mongodb", key, err)
+		}
 
-	var doc mongoEntry
-	err = s.collection.FindOneAndUpdate(ctx, filter, update, opts).Decode(&doc)
-	if err != nil {
-		return config.WrapStoreError("set", "mongodb", key, err)
+		// Set the ID from the insert result
+		if oid, ok := result.InsertedID.(primitive.ObjectID); ok {
+			doc.ID = oid
+		}
+		return doc.toValue()
+
+	case config.WriteModeUpdate:
+		// Update only - fail if document doesn't exist
+		filter := bson.M{
+			"namespace": namespace,
+			"key":       key,
+		}
+		update := bson.M{
+			"$set": bson.M{
+				"value":      data,
+				"codec":      value.Codec(),
+				"type":       value.Type(),
+				"updated_at": now,
+			},
+			"$inc": bson.M{"version": int64(1)},
+		}
+
+		opts := options.FindOneAndUpdate().
+			SetUpsert(false).
+			SetReturnDocument(options.After)
+
+		var doc mongoEntry
+		err = s.collection.FindOneAndUpdate(ctx, filter, update, opts).Decode(&doc)
+		if err != nil {
+			if err == mongo.ErrNoDocuments {
+				return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
+			}
+			return nil, config.WrapStoreError("set", "mongodb", key, err)
+		}
+		return doc.toValue()
+
+	default:
+		// Upsert (default) - create or update
+		filter := bson.M{
+			"namespace": namespace,
+			"key":       key,
+		}
+		update := bson.M{
+			"$set": bson.M{
+				"key":        key,
+				"namespace":  namespace,
+				"value":      data,
+				"codec":      value.Codec(),
+				"type":       value.Type(),
+				"updated_at": now,
+			},
+			"$inc": bson.M{"version": int64(1)},
+			"$setOnInsert": bson.M{
+				"created_at": now,
+			},
+		}
+
+		opts := options.FindOneAndUpdate().
+			SetUpsert(true).
+			SetReturnDocument(options.After)
+
+		var doc mongoEntry
+		err = s.collection.FindOneAndUpdate(ctx, filter, update, opts).Decode(&doc)
+		if err != nil {
+			return nil, config.WrapStoreError("set", "mongodb", key, err)
+		}
+		return doc.toValue()
 	}
-
-	return nil
 }
 
-// Delete removes a configuration value by namespace, key, and optional tags.
-func (s *Store) Delete(ctx context.Context, namespace, key string, tags ...config.Tag) error {
+// Delete removes a configuration value by namespace and key.
+func (s *Store) Delete(ctx context.Context, namespace, key string) error {
 	if s.closed.Load() {
 		return config.ErrStoreClosed
 	}
@@ -510,11 +622,9 @@ func (s *Store) Delete(ctx context.Context, namespace, key string, tags ...confi
 		return err
 	}
 
-	tagsStr := config.FormatTags(tags)
 	filter := bson.M{
 		"namespace": namespace,
 		"key":       key,
-		"tags":      tagsStr,
 	}
 
 	result, err := s.collection.DeleteOne(ctx, filter)
@@ -541,14 +651,7 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 	limit := filter.Limit()
 	mongoFilter := bson.M{"namespace": namespace}
 
-	// Add tag filter if specified (AND logic - all must match)
-	if filterTags := filter.Tags(); len(filterTags) > 0 {
-		// For exact tag match, we compare the formatted tags string
-		mongoFilter["tags"] = config.FormatTags(filterTags)
-	}
-
 	// Keys mode: get specific keys (no pagination)
-	// Note: In keys mode with tags, we look for entries matching both key and tags
 	if keys := filter.Keys(); len(keys) > 0 {
 		mongoFilter["key"] = bson.M{"$in": keys}
 
@@ -729,12 +832,190 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	return stats, nil
 }
 
+// GetMany retrieves multiple values in a single operation.
+func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (map[string]config.Value, error) {
+	if s.closed.Load() {
+		return nil, config.ErrStoreClosed
+	}
+	if err := config.ValidateNamespace(namespace); err != nil {
+		return nil, err
+	}
+	if len(keys) == 0 {
+		return make(map[string]config.Value), nil
+	}
+
+	filter := bson.M{
+		"namespace": namespace,
+		"key":       bson.M{"$in": keys},
+	}
+
+	cursor, err := s.collection.Find(ctx, filter)
+	if err != nil {
+		return nil, config.WrapStoreError("get_many", "mongodb", "", err)
+	}
+	defer cursor.Close(ctx)
+
+	results := make(map[string]config.Value, len(keys))
+	for cursor.Next(ctx) {
+		var doc mongoEntry
+		if err := cursor.Decode(&doc); err != nil {
+			return nil, config.WrapStoreError("get_many", "mongodb", "", err)
+		}
+		val, err := doc.toValue()
+		if err != nil {
+			continue
+		}
+		results[doc.Key] = val
+	}
+
+	if err := cursor.Err(); err != nil {
+		return nil, config.WrapStoreError("get_many", "mongodb", "", err)
+	}
+
+	return results, nil
+}
+
+// SetMany creates or updates multiple values in a single operation.
+// Returns an error if any individual set fails. Successfully set values
+// are still persisted even if some fail.
+func (s *Store) SetMany(ctx context.Context, namespace string, values map[string]config.Value) error {
+	if s.closed.Load() {
+		return config.ErrStoreClosed
+	}
+	if err := config.ValidateNamespace(namespace); err != nil {
+		return err
+	}
+	if len(values) == 0 {
+		return nil
+	}
+
+	keyErrors := make(map[string]error)
+	succeeded := make([]string, 0, len(values))
+	now := time.Now().UTC()
+
+	// Use bulk write for efficiency
+	var models []mongo.WriteModel
+	indexToKey := make([]string, 0, len(values)) // Track which key is at which index
+
+	for key, value := range values {
+		if key == "" {
+			keyErrors[key] = &config.InvalidKeyError{Key: key, Reason: "key cannot be empty"}
+			continue
+		}
+
+		data, err := value.Marshal()
+		if err != nil {
+			keyErrors[key] = config.WrapStoreError("marshal", "mongodb", key, err)
+			continue
+		}
+
+		filter := bson.M{
+			"namespace": namespace,
+			"key":       key,
+		}
+		update := bson.M{
+			"$set": bson.M{
+				"key":        key,
+				"namespace":  namespace,
+				"value":      data,
+				"codec":      value.Codec(),
+				"type":       value.Type(),
+				"updated_at": now,
+			},
+			"$inc": bson.M{"version": int64(1)},
+			"$setOnInsert": bson.M{
+				"created_at": now,
+			},
+		}
+
+		model := mongo.NewUpdateOneModel().
+			SetFilter(filter).
+			SetUpdate(update).
+			SetUpsert(true)
+
+		models = append(models, model)
+		indexToKey = append(indexToKey, key)
+	}
+
+	// Execute bulk write if we have valid operations
+	if len(models) > 0 {
+		opts := options.BulkWrite().SetOrdered(false) // Continue on error
+		_, err := s.collection.BulkWrite(ctx, models, opts)
+		if err != nil {
+			// Check for bulk write exception with partial failures
+			var bulkErr mongo.BulkWriteException
+			if errors.As(err, &bulkErr) {
+				// Mark failed keys based on WriteError index
+				failedIndices := make(map[int]bool)
+				for _, writeErr := range bulkErr.WriteErrors {
+					if writeErr.Index < len(indexToKey) {
+						key := indexToKey[writeErr.Index]
+						keyErrors[key] = config.WrapStoreError("set_many", "mongodb", key, writeErr)
+						failedIndices[writeErr.Index] = true
+					}
+				}
+				// Mark succeeded keys (those not in failedIndices)
+				for i, key := range indexToKey {
+					if !failedIndices[i] {
+						succeeded = append(succeeded, key)
+					}
+				}
+			} else {
+				// Complete failure - all keys failed
+				return config.WrapStoreError("set_many", "mongodb", "", err)
+			}
+		} else {
+			// All operations succeeded
+			succeeded = append(succeeded, indexToKey...)
+		}
+	}
+
+	if len(keyErrors) > 0 {
+		return &config.BulkWriteError{
+			Errors:    keyErrors,
+			Succeeded: succeeded,
+		}
+	}
+	return nil
+}
+
+// DeleteMany removes multiple values in a single operation.
+// Returns the number of entries actually deleted.
+func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string) (int64, error) {
+	if s.closed.Load() {
+		return 0, config.ErrStoreClosed
+	}
+	if err := config.ValidateNamespace(namespace); err != nil {
+		return 0, err
+	}
+	if len(keys) == 0 {
+		return 0, nil
+	}
+
+	filter := bson.M{
+		"namespace": namespace,
+		"key":       bson.M{"$in": keys},
+	}
+
+	result, err := s.collection.DeleteMany(ctx, filter)
+	if err != nil {
+		return 0, config.WrapStoreError("delete_many", "mongodb", "", err)
+	}
+
+	return result.DeletedCount, nil
+}
+
 // watchChangeStream listens to MongoDB change stream and dispatches events.
 func (s *Store) watchChangeStream() {
 	defer s.watchWg.Done()
 
 	pipeline := mongo.Pipeline{}
 	opts := options.ChangeStream().SetFullDocument(options.UpdateLookup)
+
+	// Request pre-images for delete events if enabled
+	if s.cfg.EnablePreImages {
+		opts.SetFullDocumentBeforeChange(options.WhenAvailable)
+	}
 
 	for {
 		select {
@@ -815,7 +1096,6 @@ func (s *Store) processChangeStream(stream *mongo.ChangeStream, ctx context.Cont
 		if eventType != config.ChangeTypeDelete {
 			event.Namespace = change.FullDocument.Namespace
 			event.Key = change.FullDocument.Key
-			event.Tags, _ = config.ParseTags(change.FullDocument.Tags)
 			event.Value, _ = change.FullDocument.toValue()
 		} else {
 			// For deletes, we can use FullDocumentBeforeChange if available (MongoDB 6.0+)
@@ -823,7 +1103,6 @@ func (s *Store) processChangeStream(stream *mongo.ChangeStream, ctx context.Cont
 			if change.FullDocumentBefore.Key != "" {
 				event.Namespace = change.FullDocumentBefore.Namespace
 				event.Key = change.FullDocumentBefore.Key
-				event.Tags, _ = config.ParseTags(change.FullDocumentBefore.Tags)
 			} else {
 				// Skip delete events when we can't determine the key
 				// Consider enabling pre-image on collection for full delete support

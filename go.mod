@@ -4,8 +4,8 @@ go 1.25.5
 
 require (
 	github.com/BurntSushi/toml v1.3.2
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/lib/pq v1.10.9
-	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	go.mongodb.org/mongo-driver v1.17.6
 	go.opentelemetry.io/otel v1.21.0
 	go.opentelemetry.io/otel/metric v1.21.0

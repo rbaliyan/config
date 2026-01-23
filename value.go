@@ -17,9 +17,6 @@ type Value interface {
 	// Unmarshal deserializes the value into the target.
 	Unmarshal(v any) error
 
-	// Raw returns the underlying raw value.
-	Raw() any
-
 	// Type returns the detected type of the value.
 	Type() Type
 
@@ -40,6 +37,10 @@ type Value interface {
 
 	// Metadata returns associated metadata, if any.
 	Metadata() Metadata
+
+	// WriteMode returns the write mode for this value.
+	// Used by stores to determine conditional write behavior.
+	WriteMode() WriteMode
 }
 
 // Metadata provides version and timestamp information for stored values.
@@ -53,31 +54,55 @@ type Metadata interface {
 	// UpdatedAt returns when the value was last modified.
 	UpdatedAt() time.Time
 
-	// Tags returns the tags associated with this value, sorted by key.
-	Tags() []Tag
+	// IsStale returns true if this value was served from cache due to a store error.
+	// When true, the value may be outdated. Applications can use this to:
+	// - Log warnings about stale data
+	// - Show degraded UI indicators
+	// - Trigger background refresh
+	IsStale() bool
+}
+
+// StoreMetadata extends Metadata with internal fields used by store implementations.
+// This interface is not intended for end-user code.
+type StoreMetadata interface {
+	Metadata
+
+	// EntryID returns the unique storage identifier for this entry.
+	// This is the database ID (e.g., PostgreSQL BIGSERIAL, MongoDB ObjectID).
+	// Used internally for pagination and store operations.
+	EntryID() string
 }
 
 // Val is the concrete Value implementation.
 type Val struct {
-	raw      any
-	data     []byte
-	dataType Type
-	codec    codec.Codec
-	metadata *valueMetadata
+	raw       any
+	data      []byte
+	dataType  Type
+	codec     codec.Codec
+	metadata  *valueMetadata
+	writeMode WriteMode
 }
 
-// valueMetadata implements Metadata interface.
+// valueMetadata implements Metadata and StoreMetadata interfaces.
 type valueMetadata struct {
 	version   int64
 	createdAt time.Time
 	updatedAt time.Time
-	tags      []Tag
+	entryID   string // Internal: database-level entry ID for store operations
+	stale     bool   // True if served from cache due to store error
 }
 
 func (m *valueMetadata) Version() int64       { return m.version }
 func (m *valueMetadata) CreatedAt() time.Time { return m.createdAt }
 func (m *valueMetadata) UpdatedAt() time.Time { return m.updatedAt }
-func (m *valueMetadata) Tags() []Tag          { return m.tags }
+func (m *valueMetadata) EntryID() string      { return m.entryID }
+func (m *valueMetadata) IsStale() bool        { return m.stale }
+
+// Compile-time interface checks for valueMetadata
+var (
+	_ Metadata      = (*valueMetadata)(nil)
+	_ StoreMetadata = (*valueMetadata)(nil)
+)
 
 // ValueOption configures a Val during construction.
 type ValueOption func(*Val)
@@ -108,18 +133,38 @@ func WithValueMetadata(version int64, createdAt, updatedAt time.Time) ValueOptio
 	}
 }
 
-// WithValueTags sets the tags for the value.
-func WithValueTags(tags []Tag) ValueOption {
+// WithValueEntryID sets the internal entry ID for the value.
+// This is used by store implementations to track the database-level ID.
+// Not intended for end-user code.
+func WithValueEntryID(id string) ValueOption {
 	return func(v *Val) {
 		if v.metadata == nil {
 			v.metadata = &valueMetadata{}
 		}
-		v.metadata.tags = SortTags(tags)
+		v.metadata.entryID = id
 	}
 }
 
-// NewValue creates a Val from any data with optional configuration.
-func NewValue(data any, opts ...ValueOption) *Val {
+// WithValueStale marks the value as stale (served from cache due to store error).
+// This is used internally by the Manager when falling back to cached values.
+func WithValueStale(stale bool) ValueOption {
+	return func(v *Val) {
+		if v.metadata == nil {
+			v.metadata = &valueMetadata{}
+		}
+		v.metadata.stale = stale
+	}
+}
+
+// WithValueWriteMode sets the write mode for the value.
+func WithValueWriteMode(mode WriteMode) ValueOption {
+	return func(v *Val) {
+		v.writeMode = mode
+	}
+}
+
+// NewValue creates a Value from any data with optional configuration.
+func NewValue(data any, opts ...ValueOption) Value {
 	v := &Val{
 		raw:      data,
 		dataType: detectType(data),
@@ -133,8 +178,8 @@ func NewValue(data any, opts ...ValueOption) *Val {
 	return v
 }
 
-// NewValueFromBytes creates a Val from encoded bytes.
-func NewValueFromBytes(data []byte, codecName string, opts ...ValueOption) (*Val, error) {
+// NewValueFromBytes creates a Value from encoded bytes.
+func NewValueFromBytes(data []byte, codecName string, opts ...ValueOption) (Value, error) {
 	c := codec.Get(codecName)
 	if c == nil {
 		c = codec.Default()
@@ -157,6 +202,61 @@ func NewValueFromBytes(data []byte, codecName string, opts ...ValueOption) (*Val
 	}
 
 	return v, nil
+}
+
+// MarkStale returns a copy of the value with the stale flag set.
+// This is used when serving cached values due to store errors.
+// The returned value's Metadata().IsStale() will return true.
+func MarkStale(v Value) Value {
+	if v == nil {
+		return nil
+	}
+
+	// If it's our Val type, we can copy it efficiently
+	if val, ok := v.(*Val); ok {
+		newVal := &Val{
+			raw:       val.raw,
+			data:      val.data,
+			dataType:  val.dataType,
+			codec:     val.codec,
+			writeMode: val.writeMode,
+		}
+		// Copy metadata and set stale flag
+		if val.metadata != nil {
+			newVal.metadata = &valueMetadata{
+				version:   val.metadata.version,
+				createdAt: val.metadata.createdAt,
+				updatedAt: val.metadata.updatedAt,
+				entryID:   val.metadata.entryID,
+				stale:     true,
+			}
+		} else {
+			newVal.metadata = &valueMetadata{stale: true}
+		}
+		return newVal
+	}
+
+	// For other Value implementations, wrap with stale metadata
+	// This shouldn't happen in practice since we control all Value creation
+	return &staleValueWrapper{Value: v}
+}
+
+// staleValueWrapper wraps a Value to indicate it's stale.
+type staleValueWrapper struct {
+	Value
+}
+
+func (w *staleValueWrapper) Metadata() Metadata {
+	return &staleMetadataWrapper{Metadata: w.Value.Metadata()}
+}
+
+// staleMetadataWrapper wraps Metadata to return stale=true.
+type staleMetadataWrapper struct {
+	Metadata
+}
+
+func (w *staleMetadataWrapper) IsStale() bool {
+	return true
 }
 
 // Compile-time interface check
@@ -198,11 +298,6 @@ func (v *Val) Unmarshal(target any) error {
 	return nil
 }
 
-// Raw returns the underlying raw value.
-func (v *Val) Raw() any {
-	return v.raw
-}
-
 // Type returns the detected type of the value.
 func (v *Val) Type() Type {
 	return v.dataType
@@ -224,9 +319,9 @@ func (v *Val) Metadata() Metadata {
 	return v.metadata
 }
 
-// IsNil returns true if the value is nil.
-func (v *Val) IsNil() bool {
-	return v.raw == nil
+// WriteMode returns the write mode for this value.
+func (v *Val) WriteMode() WriteMode {
+	return v.writeMode
 }
 
 // Int64 returns the value as int64.
@@ -264,21 +359,6 @@ func (v *Val) Int64() (int64, error) {
 	return 0, fmt.Errorf("%w: cannot convert %T to int64", ErrTypeMismatch, v.raw)
 }
 
-// Int returns the value as an int.
-// Returns 0 if the value cannot be converted to int.
-func (v *Val) Int() int {
-	i, _ := v.Int64()
-	return int(i)
-}
-
-// IntOr returns the value as an int, or the default if conversion fails.
-func (v *Val) IntOr(defaultValue int) int {
-	if i, err := v.Int64(); err == nil {
-		return int(i)
-	}
-	return defaultValue
-}
-
 // Float64 returns the value as float64.
 // Returns an error if the value cannot be converted to float64.
 func (v *Val) Float64() (float64, error) {
@@ -314,21 +394,6 @@ func (v *Val) Float64() (float64, error) {
 	return 0, fmt.Errorf("%w: cannot convert %T to float64", ErrTypeMismatch, v.raw)
 }
 
-// Float returns the value as a float64.
-// Returns 0 if the value cannot be converted to float64.
-func (v *Val) Float() float64 {
-	f, _ := v.Float64()
-	return f
-}
-
-// FloatOr returns the value as a float64, or the default if conversion fails.
-func (v *Val) FloatOr(defaultValue float64) float64 {
-	if f, err := v.Float64(); err == nil {
-		return f
-	}
-	return defaultValue
-}
-
 // String returns the value as string.
 // Returns an error if the value is nil.
 func (v *Val) String() (string, error) {
@@ -343,21 +408,6 @@ func (v *Val) String() (string, error) {
 	default:
 		return fmt.Sprintf("%v", val), nil
 	}
-}
-
-// StringValue returns the value as a string.
-// Returns empty string if the value cannot be converted to string.
-func (v *Val) StringValue() string {
-	s, _ := v.String()
-	return s
-}
-
-// StringOr returns the value as a string, or the default if conversion fails.
-func (v *Val) StringOr(defaultValue string) string {
-	if s, err := v.String(); err == nil {
-		return s
-	}
-	return defaultValue
 }
 
 // Bool returns the value as bool.
@@ -382,173 +432,6 @@ func (v *Val) Bool() (bool, error) {
 		return false, fmt.Errorf("%w: cannot convert string %q to bool", ErrTypeMismatch, val)
 	}
 	return false, fmt.Errorf("%w: cannot convert %T to bool", ErrTypeMismatch, v.raw)
-}
-
-// BoolValue returns the value as a bool.
-// Returns false if the value cannot be converted to bool.
-func (v *Val) BoolValue() bool {
-	b, _ := v.Bool()
-	return b
-}
-
-// BoolOr returns the value as a bool, or the default if conversion fails.
-func (v *Val) BoolOr(defaultValue bool) bool {
-	if b, err := v.Bool(); err == nil {
-		return b
-	}
-	return defaultValue
-}
-
-// MapStringInt returns the value as map[string]int.
-// Returns nil if the value is not a map[string]int.
-func (v *Val) MapStringInt() map[string]int {
-	if v.raw == nil {
-		return nil
-	}
-	if m, ok := v.raw.(map[string]int); ok {
-		return m
-	}
-	// Try converting from map[string]interface{}
-	if m, ok := v.raw.(map[string]any); ok {
-		result := make(map[string]int, len(m))
-		for k, val := range m {
-			if i, ok := toInt(val); ok {
-				result[k] = i
-			}
-		}
-		return result
-	}
-	return nil
-}
-
-// MapStringFloat returns the value as map[string]float64.
-// Returns nil if the value is not a map[string]float64.
-func (v *Val) MapStringFloat() map[string]float64 {
-	if v.raw == nil {
-		return nil
-	}
-	if m, ok := v.raw.(map[string]float64); ok {
-		return m
-	}
-	if m, ok := v.raw.(map[string]any); ok {
-		result := make(map[string]float64, len(m))
-		for k, val := range m {
-			if f, ok := toFloat(val); ok {
-				result[k] = f
-			}
-		}
-		return result
-	}
-	return nil
-}
-
-// MapStringString returns the value as map[string]string.
-// Returns nil if the value is not a map[string]string.
-func (v *Val) MapStringString() map[string]string {
-	if v.raw == nil {
-		return nil
-	}
-	if m, ok := v.raw.(map[string]string); ok {
-		return m
-	}
-	if m, ok := v.raw.(map[string]any); ok {
-		result := make(map[string]string, len(m))
-		for k, val := range m {
-			result[k] = fmt.Sprintf("%v", val)
-		}
-		return result
-	}
-	return nil
-}
-
-// ListInt returns the value as []int.
-// Returns nil if the value is not a []int.
-func (v *Val) ListInt() []int {
-	if v.raw == nil {
-		return nil
-	}
-	if l, ok := v.raw.([]int); ok {
-		return l
-	}
-	if l, ok := v.raw.([]any); ok {
-		result := make([]int, 0, len(l))
-		for _, val := range l {
-			if i, ok := toInt(val); ok {
-				result = append(result, i)
-			}
-		}
-		return result
-	}
-	return nil
-}
-
-// ListFloat returns the value as []float64.
-// Returns nil if the value is not a []float64.
-func (v *Val) ListFloat() []float64 {
-	if v.raw == nil {
-		return nil
-	}
-	if l, ok := v.raw.([]float64); ok {
-		return l
-	}
-	if l, ok := v.raw.([]any); ok {
-		result := make([]float64, 0, len(l))
-		for _, val := range l {
-			if f, ok := toFloat(val); ok {
-				result = append(result, f)
-			}
-		}
-		return result
-	}
-	return nil
-}
-
-// ListString returns the value as []string.
-// Returns nil if the value is not a []string.
-func (v *Val) ListString() []string {
-	if v.raw == nil {
-		return nil
-	}
-	if l, ok := v.raw.([]string); ok {
-		return l
-	}
-	if l, ok := v.raw.([]any); ok {
-		result := make([]string, 0, len(l))
-		for _, val := range l {
-			result = append(result, fmt.Sprintf("%v", val))
-		}
-		return result
-	}
-	return nil
-}
-
-// Duration returns the value as time.Duration.
-// Supports int (nanoseconds), float (seconds), and string (parseable duration).
-// Returns 0 if the value cannot be converted to duration.
-func (v *Val) Duration() time.Duration {
-	return v.DurationOr(0)
-}
-
-// DurationOr returns the value as time.Duration, or the default if conversion fails.
-func (v *Val) DurationOr(defaultValue time.Duration) time.Duration {
-	if v.raw == nil {
-		return defaultValue
-	}
-	switch val := v.raw.(type) {
-	case time.Duration:
-		return val
-	case int:
-		return time.Duration(val)
-	case int64:
-		return time.Duration(val)
-	case float64:
-		return time.Duration(val * float64(time.Second))
-	case string:
-		if d, err := time.ParseDuration(val); err == nil {
-			return d
-		}
-	}
-	return defaultValue
 }
 
 // Helper functions
@@ -578,38 +461,4 @@ func detectType(data any) Type {
 	default:
 		return TypeCustom
 	}
-}
-
-func toInt(val any) (int, bool) {
-	switch v := val.(type) {
-	case int:
-		return v, true
-	case int64:
-		return int(v), true
-	case float64:
-		return int(v), true
-	case json.Number:
-		if i, err := v.Int64(); err == nil {
-			return int(i), true
-		}
-	}
-	return 0, false
-}
-
-func toFloat(val any) (float64, bool) {
-	switch v := val.(type) {
-	case float64:
-		return v, true
-	case float32:
-		return float64(v), true
-	case int:
-		return float64(v), true
-	case int64:
-		return float64(v), true
-	case json.Number:
-		if f, err := v.Float64(); err == nil {
-			return f, true
-		}
-	}
-	return 0, false
 }

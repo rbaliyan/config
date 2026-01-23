@@ -21,7 +21,6 @@ type entry struct {
 	id        string // Unique ID for pagination
 	key       string
 	namespace string
-	tags      string // Sorted "key1=value1,key2=value2"
 	value     []byte
 	codec     string
 	valueType config.Type
@@ -43,15 +42,12 @@ func (e *entry) clone() *entry {
 }
 
 func (e *entry) toValue() (config.Value, error) {
-	// Parse tags from string
-	tags, _ := config.ParseTags(e.tags)
-
 	return config.NewValueFromBytes(
 		e.value,
 		e.codec,
 		config.WithValueType(e.valueType),
 		config.WithValueMetadata(e.version, e.createdAt, e.updatedAt),
-		config.WithValueTags(tags),
+		config.WithValueEntryID(e.id),
 	)
 }
 
@@ -59,7 +55,7 @@ func (e *entry) toValue() (config.Value, error) {
 // Suitable for testing and single-instance deployments.
 type Store struct {
 	mu       sync.RWMutex
-	entries  map[string]*entry // key format: "namespace:key" or "namespace:key:tags"
+	entries  map[string]*entry // key format: "namespace:key"
 	nextID   int64             // Auto-increment ID for pagination
 	closed   atomic.Bool
 	stopChan chan struct{}
@@ -79,6 +75,8 @@ type watchEntry struct {
 	ch        chan config.ChangeEvent
 	ctx       context.Context
 	cancel    context.CancelFunc
+	mu        sync.Mutex  // protects send/close operations
+	closed    bool        // guarded by mu
 	closeOnce sync.Once
 }
 
@@ -138,15 +136,11 @@ var (
 )
 
 // keySeparator is used to separate key components to avoid collisions.
-// Using null byte as it's virtually never used in config keys.
-const keySeparator = "\x00"
+// Using colon to match the cache key format.
+const keySeparator = ":"
 
-func (s *Store) entryKey(namespace, key string, tags []config.Tag) string {
-	tagStr := config.FormatTags(tags)
-	if tagStr == "" {
-		return namespace + keySeparator + key
-	}
-	return namespace + keySeparator + key + keySeparator + tagStr
+func (s *Store) entryKey(namespace, key string) string {
+	return namespace + keySeparator + key
 }
 
 // Connect establishes connection (no-op for memory store).
@@ -183,8 +177,8 @@ func (s *Store) Close(ctx context.Context) error {
 	return nil
 }
 
-// Get retrieves a configuration value by namespace, key, and optional tags.
-func (s *Store) Get(ctx context.Context, namespace, key string, tags ...config.Tag) (config.Value, error) {
+// Get retrieves a configuration value by namespace and key.
+func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, error) {
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
 	}
@@ -195,7 +189,7 @@ func (s *Store) Get(ctx context.Context, namespace, key string, tags ...config.T
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	e, ok := s.entries[s.entryKey(namespace, key, tags)]
+	e, ok := s.entries[s.entryKey(namespace, key)]
 	if !ok {
 		return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
 	}
@@ -204,41 +198,47 @@ func (s *Store) Get(ctx context.Context, namespace, key string, tags ...config.T
 }
 
 // Set creates or updates a configuration value.
-func (s *Store) Set(ctx context.Context, namespace, key string, value config.Value) error {
+// Returns the stored Value with updated metadata (version, timestamps).
+func (s *Store) Set(ctx context.Context, namespace, key string, value config.Value) (config.Value, error) {
 	if s.closed.Load() {
-		return config.ErrStoreClosed
+		return nil, config.ErrStoreClosed
 	}
 	if err := config.ValidateNamespace(namespace); err != nil {
-		return err
+		return nil, err
 	}
 	if key == "" {
-		return config.ErrInvalidKey
+		return nil, config.ErrInvalidKey
 	}
 
 	// Marshal the value
 	data, err := value.Marshal()
 	if err != nil {
-		return config.WrapStoreError("marshal", namespace, key, err)
+		return nil, config.WrapStoreError("marshal", namespace, key, err)
 	}
-
-	// Extract tags from value metadata
-	var tags []config.Tag
-	if meta := value.Metadata(); meta != nil {
-		tags = meta.Tags()
-	}
-	tagStr := config.FormatTags(tags)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now().UTC()
-	ek := s.entryKey(namespace, key, tags)
+	ek := s.entryKey(namespace, key)
 	existing, exists := s.entries[ek]
+
+	// Check write mode conditions
+	writeMode := value.WriteMode()
+	switch writeMode {
+	case config.WriteModeCreate:
+		if exists {
+			return nil, &config.KeyExistsError{Key: key, Namespace: namespace}
+		}
+	case config.WriteModeUpdate:
+		if !exists {
+			return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
+		}
+	}
 
 	newEntry := &entry{
 		key:       key,
 		namespace: namespace,
-		tags:      tagStr,
 		value:     data,
 		codec:     value.Codec(),
 		valueType: value.Type(),
@@ -261,25 +261,27 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 
 	s.entries[ek] = newEntry
 
-	// Build Value for notification
-	newValue, _ := newEntry.clone().toValue()
+	// Build Value for return and notification
+	newValue, err := newEntry.clone().toValue()
+	if err != nil {
+		return nil, config.WrapStoreError("toValue", namespace, key, err)
+	}
 
 	// Notify watchers asynchronously
 	event := config.ChangeEvent{
 		Type:      config.ChangeTypeSet,
 		Namespace: namespace,
 		Key:       key,
-		Tags:      tags,
 		Value:     newValue,
 		Timestamp: now,
 	}
 	go s.notifyWatchers(event)
 
-	return nil
+	return newValue, nil
 }
 
-// Delete removes a configuration value by namespace, key, and optional tags.
-func (s *Store) Delete(ctx context.Context, namespace, key string, tags ...config.Tag) error {
+// Delete removes a configuration value by namespace and key.
+func (s *Store) Delete(ctx context.Context, namespace, key string) error {
 	if s.closed.Load() {
 		return config.ErrStoreClosed
 	}
@@ -290,7 +292,7 @@ func (s *Store) Delete(ctx context.Context, namespace, key string, tags ...confi
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ek := s.entryKey(namespace, key, tags)
+	ek := s.entryKey(namespace, key)
 	if _, ok := s.entries[ek]; !ok {
 		return &config.KeyNotFoundError{Key: key, Namespace: namespace}
 	}
@@ -302,7 +304,6 @@ func (s *Store) Delete(ctx context.Context, namespace, key string, tags ...confi
 		Type:      config.ChangeTypeDelete,
 		Namespace: namespace,
 		Key:       key,
-		Tags:      tags,
 		Value:     nil,
 		Timestamp: time.Now().UTC(),
 	}
@@ -324,23 +325,11 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 	defer s.mu.RUnlock()
 
 	results := make(map[string]config.Value)
-	filterTags := filter.Tags()
 
-	// Keys mode: get specific keys (no pagination, but respect tag filter)
+	// Keys mode: get specific keys
 	if keys := filter.Keys(); len(keys) > 0 {
 		for _, key := range keys {
-			// Find entries matching the key (may have different tags)
-			for _, e := range s.entries {
-				if e.namespace != namespace || e.key != key {
-					continue
-				}
-				// Filter by tags if specified
-				if len(filterTags) > 0 {
-					entryTags, _ := config.ParseTags(e.tags)
-					if !config.MatchTags(entryTags, filterTags) {
-						continue
-					}
-				}
+			if e, ok := s.entries[s.entryKey(namespace, key)]; ok {
 				if val, err := e.clone().toValue(); err == nil {
 					results[key] = val
 				}
@@ -349,7 +338,7 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 		return config.NewPage(results, "", 0), nil
 	}
 
-	// Prefix mode: get all entries matching prefix and tags
+	// Prefix mode: get all entries matching prefix
 	prefix := filter.Prefix()
 	cursor := filter.Cursor()
 	limit := filter.Limit()
@@ -367,13 +356,6 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 		}
 		if prefix != "" && !strings.HasPrefix(e.key, prefix) {
 			continue
-		}
-		// Filter by tags if specified
-		if len(filterTags) > 0 {
-			entryTags, _ := config.ParseTags(e.tags)
-			if !config.MatchTags(entryTags, filterTags) {
-				continue
-			}
 		}
 		// Parse ID for cursor comparison
 		id, _ := strconv.ParseInt(e.id, 10, 64)
@@ -439,9 +421,12 @@ func (s *Store) Watch(ctx context.Context, filter config.WatchFilter) (<-chan co
 		delete(s.watchers, we)
 		s.watchMu.Unlock()
 
-		// Close channel safely using sync.Once
+		// Close channel safely with mutex to prevent race with sendToWatcher
 		we.closeOnce.Do(func() {
+			we.mu.Lock()
+			we.closed = true
 			close(ch)
+			we.mu.Unlock()
 		})
 	}()
 
@@ -504,13 +489,12 @@ func (s *Store) notifyWatchers(event config.ChangeEvent) {
 
 // sendToWatcher safely sends an event to a watcher, handling closed channels.
 func (s *Store) sendToWatcher(we *watchEntry, event config.ChangeEvent) {
-	// Use defer/recover to handle the case where the channel is closed
-	// between when we copied the watchers list and when we try to send
-	defer func() {
-		if r := recover(); r != nil {
-			// Channel was closed, this is expected during shutdown
-		}
-	}()
+	// Use mutex to coordinate with channel close
+	we.mu.Lock()
+	if we.closed {
+		we.mu.Unlock()
+		return
+	}
 
 	select {
 	case we.ch <- event:
@@ -522,6 +506,7 @@ func (s *Store) sendToWatcher(we *watchEntry, event config.ChangeEvent) {
 			s.onDropped(event)
 		}
 	}
+	we.mu.Unlock()
 }
 
 // DroppedEvents returns the total number of watch events that were dropped
@@ -581,7 +566,6 @@ func matchPattern(pattern, key string) bool {
 }
 
 // GetMany retrieves multiple values in a single operation.
-// Note: This only retrieves entries without tags. For tagged entries, use Get with tags.
 func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (map[string]config.Value, error) {
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
@@ -592,7 +576,7 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 
 	results := make(map[string]config.Value, len(keys))
 	for _, key := range keys {
-		if e, ok := s.entries[s.entryKey(namespace, key, nil)]; ok {
+		if e, ok := s.entries[s.entryKey(namespace, key)]; ok {
 			if val, err := e.clone().toValue(); err == nil {
 				results[key] = val
 			}
@@ -603,6 +587,8 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 }
 
 // SetMany creates or updates multiple values in a single operation.
+// Returns a BulkWriteError if any individual set fails, indicating which keys
+// succeeded and which failed. Successfully set values are persisted even if some fail.
 func (s *Store) SetMany(ctx context.Context, namespace string, values map[string]config.Value) error {
 	if s.closed.Load() {
 		return config.ErrStoreClosed
@@ -613,31 +599,27 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 
 	now := time.Now().UTC()
 	events := make([]config.ChangeEvent, 0, len(values))
+	keyErrors := make(map[string]error)
+	succeeded := make([]string, 0, len(values))
 
 	for key, value := range values {
 		if key == "" {
+			keyErrors[key] = &config.InvalidKeyError{Key: key, Reason: "key cannot be empty"}
 			continue
 		}
 
 		data, err := value.Marshal()
 		if err != nil {
+			keyErrors[key] = config.WrapStoreError("marshal", namespace, key, err)
 			continue
 		}
 
-		// Extract tags from value metadata
-		var tags []config.Tag
-		if meta := value.Metadata(); meta != nil {
-			tags = meta.Tags()
-		}
-		tagStr := config.FormatTags(tags)
-
-		ek := s.entryKey(namespace, key, tags)
+		ek := s.entryKey(namespace, key)
 		existing, exists := s.entries[ek]
 
 		newEntry := &entry{
 			key:       key,
 			namespace: namespace,
-			tags:      tagStr,
 			value:     data,
 			codec:     value.Codec(),
 			valueType: value.Type(),
@@ -657,13 +639,13 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 		}
 
 		s.entries[ek] = newEntry
+		succeeded = append(succeeded, key)
 
 		newValue, _ := newEntry.clone().toValue()
 		event := config.ChangeEvent{
 			Type:      config.ChangeTypeSet,
 			Namespace: namespace,
 			Key:       key,
-			Tags:      tags,
 			Value:     newValue,
 			Timestamp: now,
 		}
@@ -677,11 +659,16 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 		}
 	}()
 
+	if len(keyErrors) > 0 {
+		return &config.BulkWriteError{
+			Errors:    keyErrors,
+			Succeeded: succeeded,
+		}
+	}
 	return nil
 }
 
 // DeleteMany removes multiple values in a single operation.
-// Note: This only deletes entries without tags. For tagged entries, use Delete with tags.
 func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string) (int64, error) {
 	if s.closed.Load() {
 		return 0, config.ErrStoreClosed
@@ -695,7 +682,7 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 	events := make([]config.ChangeEvent, 0, len(keys))
 
 	for _, key := range keys {
-		ek := s.entryKey(namespace, key, nil)
+		ek := s.entryKey(namespace, key)
 		if _, ok := s.entries[ek]; ok {
 			delete(s.entries, ek)
 			deleted++
@@ -704,7 +691,6 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 				Type:      config.ChangeTypeDelete,
 				Namespace: namespace,
 				Key:       key,
-				Tags:      nil, // DeleteMany only works on entries without tags
 				Value:     nil,
 				Timestamp: now,
 			})

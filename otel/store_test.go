@@ -117,7 +117,7 @@ func TestInstrumentedStore_Set(t *testing.T) {
 	defer wrapped.Close(ctx)
 
 	val := config.NewValue(42)
-	if err := wrapped.Set(ctx, "ns", "key", val); err != nil {
+	if _, err := wrapped.Set(ctx, "ns", "key", val); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
 
@@ -143,7 +143,7 @@ func TestInstrumentedStore_Delete(t *testing.T) {
 
 	// Set and then delete
 	val := config.NewValue("to-delete")
-	wrapped.Set(ctx, "ns", "key", val)
+	_, _ = wrapped.Set(ctx, "ns", "key", val)
 	if err := wrapped.Delete(ctx, "ns", "key"); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
@@ -164,8 +164,8 @@ func TestInstrumentedStore_Find(t *testing.T) {
 	defer wrapped.Close(ctx)
 
 	// Set some values
-	wrapped.Set(ctx, "ns", "app/key1", config.NewValue("value1"))
-	wrapped.Set(ctx, "ns", "app/key2", config.NewValue("value2"))
+	_, _ = wrapped.Set(ctx, "ns", "app/key1", config.NewValue("value1"))
+	_, _ = wrapped.Set(ctx, "ns", "app/key2", config.NewValue("value2"))
 
 	// Find
 	page, err := wrapped.Find(ctx, "ns", config.NewFilter().WithPrefix("app/").Build())
@@ -237,8 +237,8 @@ func TestInstrumentedStore_GetMany(t *testing.T) {
 	defer wrapped.Close(ctx)
 
 	// Set values
-	wrapped.Set(ctx, "ns", "key1", config.NewValue("value1"))
-	wrapped.Set(ctx, "ns", "key2", config.NewValue("value2"))
+	_, _ = wrapped.Set(ctx, "ns", "key1", config.NewValue("value1"))
+	_, _ = wrapped.Set(ctx, "ns", "key2", config.NewValue("value2"))
 
 	// GetMany
 	results, err := wrapped.GetMany(ctx, "ns", []string{"key1", "key2", "key3"})
@@ -285,8 +285,8 @@ func TestInstrumentedStore_DeleteMany(t *testing.T) {
 	defer wrapped.Close(ctx)
 
 	// Set values
-	wrapped.Set(ctx, "ns", "key1", config.NewValue("value1"))
-	wrapped.Set(ctx, "ns", "key2", config.NewValue("value2"))
+	_, _ = wrapped.Set(ctx, "ns", "key1", config.NewValue("value1"))
+	_, _ = wrapped.Set(ctx, "ns", "key2", config.NewValue("value2"))
 
 	// DeleteMany
 	deleted, err := wrapped.DeleteMany(ctx, "ns", []string{"key1", "key2"})
@@ -315,7 +315,7 @@ func TestInstrumentedStore_TracingDisabled(t *testing.T) {
 
 	// Operations should still work without tracing
 	val := config.NewValue("test")
-	if err := wrapped.Set(ctx, "ns", "key", val); err != nil {
+	if _, err := wrapped.Set(ctx, "ns", "key", val); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
 
@@ -340,7 +340,7 @@ func TestInstrumentedStore_MetricsDisabled(t *testing.T) {
 
 	// Operations should still work without metrics
 	val := config.NewValue("test")
-	if err := wrapped.Set(ctx, "ns", "key", val); err != nil {
+	if _, err := wrapped.Set(ctx, "ns", "key", val); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
 }

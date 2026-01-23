@@ -2,10 +2,39 @@ package config
 
 import (
 	"context"
-	"sync"
+	"fmt"
 	"sync/atomic"
-	"time"
+
+	lru "github.com/hashicorp/golang-lru/v2"
 )
+
+// CacheStats contains cache statistics.
+type CacheStats struct {
+	// Hits is the number of successful cache lookups.
+	Hits int64 `json:"hits"`
+
+	// Misses is the number of cache lookups that found no entry.
+	Misses int64 `json:"misses"`
+
+	// Size is the current number of entries in the cache.
+	Size int64 `json:"size"`
+
+	// Capacity is the maximum number of entries (0 = unbounded).
+	Capacity int64 `json:"capacity"`
+
+	// Evictions is the number of entries evicted due to capacity limits.
+	Evictions int64 `json:"evictions"`
+}
+
+// HitRate returns the cache hit rate as a percentage (0.0 to 1.0).
+// Returns 0 if there have been no lookups.
+func (s *CacheStats) HitRate() float64 {
+	total := s.Hits + s.Misses
+	if total == 0 {
+		return 0
+	}
+	return float64(s.Hits) / float64(total)
+}
 
 // cache defines the internal interface for local configuration caching.
 //
@@ -31,199 +60,95 @@ type cache interface {
 	// Delete removes an entry from the cache.
 	Delete(ctx context.Context, namespace, key string) error
 
-	// Flush removes all entries from the cache.
-	Flush(ctx context.Context) error
+	// Stats returns cache statistics.
+	Stats() CacheStats
 }
 
-// cacheStats provides cache statistics (internal use).
-type cacheStats interface {
-	// Hits returns the number of cache hits.
-	Hits() int64
+// defaultCacheCapacity is the default capacity when none is specified.
+const defaultCacheCapacity = 10000
 
-	// Misses returns the number of cache misses.
-	Misses() int64
+// cacheKeySeparator uses null byte to avoid collisions.
+// Neither namespace nor key can contain null bytes (per validation rules),
+// so "ns\x00key" is guaranteed unique for any (namespace, key) pair.
+const cacheKeySeparator = "\x00"
 
-	// Size returns the current number of cached entries.
-	Size() int64
-}
-
-// memoryCache is an in-memory cache implementation.
+// memoryCache is an in-memory LRU cache implementation using hashicorp/golang-lru.
+// It provides proper LRU semantics where both reads and writes refresh entry age.
 type memoryCache struct {
-	mu       sync.RWMutex
-	entries  map[string]*cacheEntry // key format: "namespace:key"
-	ttl      time.Duration
-	hits     atomic.Int64
-	misses   atomic.Int64
-	stopChan chan struct{}
+	lru      *lru.Cache[string, Value]
+	capacity int
+
+	// Statistics (atomic for lock-free reads)
+	hits      atomic.Int64
+	misses    atomic.Int64
+	evictions atomic.Int64
 }
 
-type cacheEntry struct {
-	value     Value
-	expiresAt time.Time
-}
 
-// MemoryCacheOption configures the memory cache.
-type MemoryCacheOption func(*memoryCacheOptions)
-
-type memoryCacheOptions struct {
-	ttl             time.Duration
-	cleanupInterval time.Duration
-}
-
-func newMemoryCacheOptions() *memoryCacheOptions {
-	return &memoryCacheOptions{
-		ttl:             5 * time.Minute,
-		cleanupInterval: time.Minute,
-	}
-}
-
-// WithMemoryCacheTTL sets the cache entry TTL for the memory cache.
-func WithMemoryCacheTTL(ttl time.Duration) MemoryCacheOption {
-	return func(o *memoryCacheOptions) {
-		if ttl > 0 {
-			o.ttl = ttl
-		}
-	}
-}
-
-// WithCacheCleanupInterval sets the interval for cleaning up expired entries.
-func WithCacheCleanupInterval(interval time.Duration) MemoryCacheOption {
-	return func(o *memoryCacheOptions) {
-		if interval > 0 {
-			o.cleanupInterval = interval
-		}
-	}
-}
-
-// NewMemoryCache creates a new in-memory cache.
-func NewMemoryCache(opts ...MemoryCacheOption) *memoryCache {
-	options := newMemoryCacheOptions()
-	for _, opt := range opts {
-		opt(options)
+// newMemoryCache creates a new in-memory cache.
+// If capacity is 0, it uses a default capacity of 10000.
+// For truly unbounded caches, use a very large capacity or consider memory implications.
+// Returns an error if cache creation fails (e.g., invalid capacity).
+func newMemoryCache(capacity int) (cache, error) {
+	if capacity <= 0 {
+		capacity = defaultCacheCapacity
 	}
 
 	c := &memoryCache{
-		entries:  make(map[string]*cacheEntry),
-		ttl:      options.ttl,
-		stopChan: make(chan struct{}),
+		capacity: capacity,
 	}
 
-	// Start cleanup goroutine
-	if options.ttl > 0 && options.cleanupInterval > 0 {
-		go c.cleanupLoop(options.cleanupInterval)
+	// Create LRU cache with eviction callback to track stats
+	var err error
+	c.lru, err = lru.NewWithEvict[string, Value](capacity, func(key string, value Value) {
+		c.evictions.Add(1)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create LRU cache: %w", err)
 	}
 
-	return c
+	return c, nil
 }
 
-// Compile-time interface checks
-var (
-	_ cache      = (*memoryCache)(nil)
-	_ cacheStats = (*memoryCache)(nil)
-)
+// Compile-time interface check
+var _ cache = (*memoryCache)(nil)
 
-func (c *memoryCache) cacheKey(namespace, key string) string {
-	return namespace + ":" + key
+func cacheKey(namespace, key string) string {
+	return namespace + cacheKeySeparator + key
 }
 
 // Get retrieves a cached value.
 func (c *memoryCache) Get(ctx context.Context, namespace, key string) (Value, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	entry, ok := c.entries[c.cacheKey(namespace, key)]
+	value, ok := c.lru.Get(cacheKey(namespace, key))
 	if !ok {
 		c.misses.Add(1)
 		return nil, ErrNotFound
 	}
 
-	// Check expiration
-	if c.ttl > 0 && time.Now().After(entry.expiresAt) {
-		c.misses.Add(1)
-		return nil, ErrNotFound
-	}
-
 	c.hits.Add(1)
-	return entry.value, nil
+	return value, nil
 }
 
 // Set stores a value in the cache.
 func (c *memoryCache) Set(ctx context.Context, namespace, key string, value Value) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.entries[c.cacheKey(namespace, key)] = &cacheEntry{
-		value:     value,
-		expiresAt: time.Now().Add(c.ttl),
-	}
+	c.lru.Add(cacheKey(namespace, key), value)
 	return nil
 }
 
 // Delete removes an entry from the cache.
 func (c *memoryCache) Delete(ctx context.Context, namespace, key string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	delete(c.entries, c.cacheKey(namespace, key))
+	c.lru.Remove(cacheKey(namespace, key))
 	return nil
 }
 
-// Flush removes all entries from the cache.
-func (c *memoryCache) Flush(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.entries = make(map[string]*cacheEntry)
-	return nil
-}
-
-// Hits returns the number of cache hits.
-func (c *memoryCache) Hits() int64 {
-	return c.hits.Load()
-}
-
-// Misses returns the number of cache misses.
-func (c *memoryCache) Misses() int64 {
-	return c.misses.Load()
-}
-
-// Size returns the current number of cached entries.
-func (c *memoryCache) Size() int64 {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return int64(len(c.entries))
-}
-
-// Close stops the cleanup goroutine.
-func (c *memoryCache) Close() error {
-	close(c.stopChan)
-	return nil
-}
-
-// cleanupLoop removes expired entries periodically.
-func (c *memoryCache) cleanupLoop(interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-c.stopChan:
-			return
-		case <-ticker.C:
-			c.cleanup()
-		}
+// Stats returns cache statistics.
+func (c *memoryCache) Stats() CacheStats {
+	return CacheStats{
+		Hits:      c.hits.Load(),
+		Misses:    c.misses.Load(),
+		Size:      int64(c.lru.Len()),
+		Capacity:  int64(c.capacity),
+		Evictions: c.evictions.Load(),
 	}
 }
 
-// cleanup removes expired entries.
-func (c *memoryCache) cleanup() {
-	now := time.Now()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for key, entry := range c.entries {
-		if c.ttl > 0 && now.After(entry.expiresAt) {
-			delete(c.entries, key)
-		}
-	}
-}

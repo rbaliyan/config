@@ -12,7 +12,6 @@ This is a Go configuration library that provides type-safe, namespace-aware conf
 
 - **`Store`** (`store.go`): Storage backend interface with CRUD + Watch operations
 - **`Value`** (`value.go`): Type-safe value wrapper with serialization
-- **`Tag`** (`tag.go`): Key-value tag for multi-dimensional entry organization
 - **`Manager`** (`manager.go`): Top-level manager with caching and namespace access
 - **`Config`** (`config.go`): Namespace-scoped Reader + Writer interface
 - **`Cache`** (`cache.go`): Caching layer interface
@@ -24,7 +23,6 @@ config/
 ├── store.go          # Store interface, ChangeEvent, filters
 ├── value.go          # Value interface, Val implementation
 ├── types.go          # Type enum (TypeInt, TypeString, etc.)
-├── tag.go            # Tag interface, NewTag, MustTag, tag utilities
 ├── config.go         # Config interface (Reader + Writer)
 ├── manager.go        # Manager implementation with caching
 ├── options.go        # Manager and Set options
@@ -92,8 +90,8 @@ config/
 
 ### Namespace Handling
 
-- Use `""` (empty string) for the default namespace
-- No `DefaultNamespace()` method - always use `Namespace("")`
+- Use `config.DefaultNamespace` (empty string) when you don't need namespace separation
+- Namespaces are user-defined (e.g., `prod`, `qa`, `prod/us/west1`, `tenant-123`)
 - Namespace is required for all store operations
 
 ### Change Events
@@ -116,31 +114,12 @@ No `PreviousVersion` - only current state is available (MongoDB change streams l
 type Store interface {
     Connect(ctx context.Context) error
     Close(ctx context.Context) error
-    Get(ctx context.Context, namespace, key string, tags ...Tag) (Value, error)
-    Set(ctx context.Context, namespace, key string, value Value) error
-    Delete(ctx context.Context, namespace, key string, tags ...Tag) error
+    Get(ctx context.Context, namespace, key string) (Value, error)
+    Set(ctx context.Context, namespace, key string, value Value) (Value, error)  // Returns stored value with metadata
+    Delete(ctx context.Context, namespace, key string) error
     Find(ctx context.Context, namespace string, filter Filter) (Page, error)
     Watch(ctx context.Context, filter WatchFilter) (<-chan ChangeEvent, error)
 }
-```
-
-### Tag System
-
-Tags are part of an entry's identity. The unique key is `(namespace, key, sorted_tags)`:
-
-```go
-// Tag interface
-type Tag interface {
-    Key() string
-    Value() string
-    Format() string  // Returns "key=value"
-}
-
-// NewTag returns error if invalid, MustTag panics
-tag, err := config.NewTag("env", "production")  // Returns error
-tag := config.MustTag("env", "production")       // Panics on error
-
-// Reserved characters (not allowed in tag key or value): , =
 ```
 
 ### Filter and Page Interfaces
@@ -173,7 +152,7 @@ filter := config.NewFilter().
 
 - `HealthChecker`: `Health(ctx) error`
 - `StatsProvider`: `Stats(ctx) (*StoreStats, error)`
-- `BulkStore`: `GetMany`, `SetMany`, `DeleteMany`
+- `BulkStore`: `GetMany`, `SetMany`, `DeleteMany` (implemented by memory, postgres, mongodb stores)
 
 ### Multi-Store
 
@@ -342,8 +321,13 @@ Optional (for specific backends):
 
 ## Recent Changes
 
+- **Store.Set returns Value**: `Set()` now returns `(Value, error)` with updated metadata, eliminating the need for extra Get calls
+- **BulkStore for all stores**: `GetMany`, `SetMany`, `DeleteMany` implemented for memory, postgres, and mongodb stores
+- **Configurable circuit breaker**: Use `WithCircuitBreaker(CircuitBreakerConfig{...})` to configure watch reconnection behavior
+- **Cache metrics**: `Manager.CacheStats()` returns hit/miss/eviction statistics via `CacheStats` struct
+- **DefaultNamespace constant**: `config.DefaultNamespace` for the empty string namespace
+- **Conditional writes**: `WithIfNotExists()` and `WithIfExists()` options for Set operations
 - **gRPC server removed**: Only the gRPC client (for connecting to remote servers) is included
 - **OpenTelemetry opt-in**: Tracing and metrics disabled by default, must use `WithTracesEnabled(true)` and/or `WithMetricsEnabled(true)`
 - **Multi-store consistency**: All strategies now write to all stores (not just primary)
-- **NewTag returns error**: Use `NewTag()` for error handling, `MustTag()` for panicking version
-- **Tag validation**: Reserved characters `,` and `=` are not allowed in tag keys or values
+- **Tags removed**: Tag support has been removed for simplicity; use key prefixes for categorization instead

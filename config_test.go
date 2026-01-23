@@ -16,7 +16,10 @@ func TestManagerBasicOperations(t *testing.T) {
 	ctx := context.Background()
 
 	// Create manager with memory store
-	mgr := config.New(config.WithStore(memory.NewStore()))
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 
 	// Connect
 	if err := mgr.Connect(ctx); err != nil {
@@ -38,14 +41,13 @@ func TestManagerBasicOperations(t *testing.T) {
 		t.Fatalf("Get failed: %v", err)
 	}
 
-	// Cast to Val for type conversion
-	v, ok := val.(*config.Val)
-	if !ok {
-		t.Fatalf("Expected *config.Val, got %T", val)
+	// Use Value interface methods
+	i, err := val.Int64()
+	if err != nil {
+		t.Fatalf("Int64 failed: %v", err)
 	}
-
-	if v.Int() != 30 {
-		t.Errorf("Expected 30, got %d", v.Int())
+	if i != 30 {
+		t.Errorf("Expected 30, got %d", i)
 	}
 }
 
@@ -54,12 +56,12 @@ func TestValueTypeConversions(t *testing.T) {
 		name     string
 		input    any
 		expected any
-		check    func(*config.Val) any
+		check    func(config.Value) any
 	}{
-		{"int", 42, 42, func(v *config.Val) any { return v.Int() }},
-		{"float", 3.14, 3.14, func(v *config.Val) any { return v.Float() }},
-		{"string", "hello", "hello", func(v *config.Val) any { return v.StringValue() }},
-		{"bool", true, true, func(v *config.Val) any { return v.BoolValue() }},
+		{"int", 42, int64(42), func(v config.Value) any { i, _ := v.Int64(); return i }},
+		{"float", 3.14, 3.14, func(v config.Value) any { f, _ := v.Float64(); return f }},
+		{"string", "hello", "hello", func(v config.Value) any { s, _ := v.String(); return s }},
+		{"bool", true, true, func(v config.Value) any { b, _ := v.Bool(); return b }},
 	}
 
 	for _, tt := range tests {
@@ -76,7 +78,10 @@ func TestValueTypeConversions(t *testing.T) {
 func TestNamespaceIsolation(t *testing.T) {
 	ctx := context.Background()
 
-	mgr := config.New(config.WithStore(memory.NewStore()))
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 	if err := mgr.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -97,18 +102,23 @@ func TestNamespaceIsolation(t *testing.T) {
 	prodVal, _ := prod.Get(ctx, "timeout")
 	devVal, _ := dev.Get(ctx, "timeout")
 
-	if prodVal.(*config.Val).Int() != 60 {
-		t.Errorf("Production timeout expected 60, got %d", prodVal.(*config.Val).Int())
+	prodInt, _ := prodVal.Int64()
+	if prodInt != 60 {
+		t.Errorf("Production timeout expected 60, got %d", prodInt)
 	}
-	if devVal.(*config.Val).Int() != 10 {
-		t.Errorf("Development timeout expected 10, got %d", devVal.(*config.Val).Int())
+	devInt, _ := devVal.Int64()
+	if devInt != 10 {
+		t.Errorf("Development timeout expected 10, got %d", devInt)
 	}
 }
 
 func TestDelete(t *testing.T) {
 	ctx := context.Background()
 
-	mgr := config.New(config.WithStore(memory.NewStore()))
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 	if err := mgr.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -127,8 +137,8 @@ func TestDelete(t *testing.T) {
 	}
 
 	// Verify it's gone
-	_, err := cfg.Get(ctx, "to-delete")
-	if !config.IsNotFound(err) {
+	_, getErr := cfg.Get(ctx, "to-delete")
+	if !config.IsNotFound(getErr) {
 		t.Errorf("Expected ErrNotFound, got %v", err)
 	}
 }
@@ -136,7 +146,10 @@ func TestDelete(t *testing.T) {
 func TestFind(t *testing.T) {
 	ctx := context.Background()
 
-	mgr := config.New(config.WithStore(memory.NewStore()))
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 	if err := mgr.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -164,7 +177,10 @@ func TestFind(t *testing.T) {
 func TestContextHelpers(t *testing.T) {
 	ctx := context.Background()
 
-	mgr := config.New(config.WithStore(memory.NewStore()))
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 	if err := mgr.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -199,11 +215,11 @@ type failingStore struct {
 	failGet atomic.Bool
 }
 
-func (s *failingStore) Get(ctx context.Context, namespace, key string, tags ...config.Tag) (config.Value, error) {
+func (s *failingStore) Get(ctx context.Context, namespace, key string) (config.Value, error) {
 	if s.failGet.Load() {
 		return nil, errors.New("simulated store failure")
 	}
-	return s.Store.Get(ctx, namespace, key, tags...)
+	return s.Store.Get(ctx, namespace, key)
 }
 
 // TestCacheResilienceFallback verifies that when the store fails,
@@ -215,7 +231,10 @@ func TestCacheResilienceFallback(t *testing.T) {
 	underlying := memory.NewStore()
 	store := &failingStore{Store: underlying}
 
-	mgr := config.New(config.WithStore(store))
+	mgr, err := config.New(config.WithStore(store))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 	if err := mgr.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -233,9 +252,9 @@ func TestCacheResilienceFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("First Get failed: %v", err)
 	}
-	v := val.(*config.Val)
-	if v.Int() != 30 {
-		t.Errorf("Expected 30, got %d", v.Int())
+	i, _ := val.Int64()
+	if i != 30 {
+		t.Errorf("Expected 30, got %d", i)
 	}
 
 	// Simulate store failure
@@ -246,9 +265,9 @@ func TestCacheResilienceFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get during store failure should return cached value, got error: %v", err)
 	}
-	v = val.(*config.Val)
-	if v.Int() != 30 {
-		t.Errorf("Expected cached value 30, got %d", v.Int())
+	i, _ = val.Int64()
+	if i != 30 {
+		t.Errorf("Expected cached value 30, got %d", i)
 	}
 
 	// Restore store
@@ -259,9 +278,9 @@ func TestCacheResilienceFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get after store recovery failed: %v", err)
 	}
-	v = val.(*config.Val)
-	if v.Int() != 30 {
-		t.Errorf("Expected 30, got %d", v.Int())
+	i, _ = val.Int64()
+	if i != 30 {
+		t.Errorf("Expected 30, got %d", i)
 	}
 }
 
@@ -270,7 +289,10 @@ func TestCacheResilienceFallback(t *testing.T) {
 func TestCacheDoesNotHideNotFound(t *testing.T) {
 	ctx := context.Background()
 
-	mgr := config.New(config.WithStore(memory.NewStore()))
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 	if err := mgr.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -279,9 +301,9 @@ func TestCacheDoesNotHideNotFound(t *testing.T) {
 	cfg := mgr.Namespace("test")
 
 	// Get a key that doesn't exist - should return NotFound, not a cached value
-	_, err := cfg.Get(ctx, "nonexistent/key")
-	if !config.IsNotFound(err) {
-		t.Errorf("Expected NotFound error for nonexistent key, got: %v", err)
+	_, getErr := cfg.Get(ctx, "nonexistent/key")
+	if !config.IsNotFound(getErr) {
+		t.Errorf("Expected NotFound error for nonexistent key, got: %v", getErr)
 	}
 }
 
@@ -289,7 +311,10 @@ func TestCacheDoesNotHideNotFound(t *testing.T) {
 func TestManagerHealth(t *testing.T) {
 	ctx := context.Background()
 
-	mgr := config.New(config.WithStore(memory.NewStore()))
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 
 	// Health should fail before connect
 	if err := mgr.Health(ctx); err != config.ErrManagerClosed {
@@ -313,37 +338,14 @@ func TestManagerHealth(t *testing.T) {
 	}
 }
 
-// TestManagerCacheStats verifies the CacheStats() method
-func TestManagerCacheStats(t *testing.T) {
-	ctx := context.Background()
-
-	mgr := config.New(config.WithStore(memory.NewStore()))
-	if err := mgr.Connect(ctx); err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
-	defer mgr.Close(ctx)
-
-	cfg := mgr.Namespace("test")
-
-	// Set some values
-	cfg.Set(ctx, "key1", "value1")
-	cfg.Set(ctx, "key2", "value2")
-
-	// Get values to populate cache hits
-	cfg.Get(ctx, "key1")
-	cfg.Get(ctx, "key1") // Second access should be from store (no external cache)
-
-	stats := mgr.CacheStats()
-	if stats.Size < 0 {
-		t.Errorf("Cache size should be non-negative, got: %d", stats.Size)
-	}
-}
-
 // TestManagerRefresh verifies the Refresh() method
 func TestManagerRefresh(t *testing.T) {
 	ctx := context.Background()
 
-	mgr := config.New(config.WithStore(memory.NewStore()))
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 	if err := mgr.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -360,31 +362,9 @@ func TestManagerRefresh(t *testing.T) {
 	}
 
 	// Refresh should fail for non-existing key
-	err := mgr.Refresh(ctx, "test", "nonexistent")
+	err = mgr.Refresh(ctx, "test", "nonexistent")
 	if !config.IsNotFound(err) {
 		t.Errorf("Refresh should return NotFound for nonexistent key, got: %v", err)
-	}
-}
-
-// TestManagerRefreshAll verifies the RefreshAll() method
-func TestManagerRefreshAll(t *testing.T) {
-	ctx := context.Background()
-
-	mgr := config.New(config.WithStore(memory.NewStore()))
-	if err := mgr.Connect(ctx); err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
-	defer mgr.Close(ctx)
-
-	cfg := mgr.Namespace("test")
-
-	// Set values
-	cfg.Set(ctx, "key1", "value1")
-	cfg.Set(ctx, "key2", "value2")
-
-	// RefreshAll should succeed
-	if err := mgr.RefreshAll(ctx); err != nil {
-		t.Errorf("RefreshAll failed: %v", err)
 	}
 }
 
@@ -455,7 +435,10 @@ func TestValidateNamespace(t *testing.T) {
 func TestKeyValidationInOperations(t *testing.T) {
 	ctx := context.Background()
 
-	mgr := config.New(config.WithStore(memory.NewStore()))
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 	if err := mgr.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -464,7 +447,7 @@ func TestKeyValidationInOperations(t *testing.T) {
 	cfg := mgr.Namespace("test")
 
 	// Test Set with invalid key
-	err := cfg.Set(ctx, "", "value")
+	err = cfg.Set(ctx, "", "value")
 	if !config.IsInvalidKey(err) {
 		t.Errorf("Set with empty key should return InvalidKey error, got: %v", err)
 	}
@@ -567,12 +550,6 @@ func TestFilterBuilder(t *testing.T) {
 		t.Errorf("Expected cursor '123', got %q", f.Cursor())
 	}
 
-	// Test tags
-	f = config.NewFilter().WithTags(config.MustTag("env", "prod")).Build()
-	if len(f.Tags()) != 1 {
-		t.Errorf("Expected 1 tag, got %d", len(f.Tags()))
-	}
-
 	// Test mutually exclusive - WithKeys clears prefix
 	f = config.NewFilter().WithPrefix("app/").WithKeys("key1").Build()
 	if f.Prefix() != "" {
@@ -590,7 +567,10 @@ func TestFilterBuilder(t *testing.T) {
 func TestClosedManagerOperations(t *testing.T) {
 	ctx := context.Background()
 
-	mgr := config.New(config.WithStore(memory.NewStore()))
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 	if err := mgr.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -602,7 +582,7 @@ func TestClosedManagerOperations(t *testing.T) {
 	mgr.Close(ctx)
 
 	// All operations should fail
-	_, err := cfg.Get(ctx, "key")
+	_, err = cfg.Get(ctx, "key")
 	if err != config.ErrManagerClosed {
 		t.Errorf("Get on closed manager should return ErrManagerClosed, got: %v", err)
 	}
@@ -626,97 +606,19 @@ func TestClosedManagerOperations(t *testing.T) {
 	if err != config.ErrManagerClosed {
 		t.Errorf("Refresh on closed manager should return ErrManagerClosed, got: %v", err)
 	}
-
-	err = mgr.RefreshAll(ctx)
-	if err != config.ErrManagerClosed {
-		t.Errorf("RefreshAll on closed manager should return ErrManagerClosed, got: %v", err)
-	}
 }
 
 // TestManagerConnectWithoutStore verifies connect fails without store
 func TestManagerConnectWithoutStore(t *testing.T) {
 	ctx := context.Background()
 
-	mgr := config.New() // No store
-	err := mgr.Connect(ctx)
+	mgr, err := config.New() // No store
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	err = mgr.Connect(ctx)
 	if err != config.ErrStoreNotConnected {
 		t.Errorf("Connect without store should return ErrStoreNotConnected, got: %v", err)
-	}
-}
-
-// TestTagOperations tests set/get/delete with tags
-func TestTagOperations(t *testing.T) {
-	ctx := context.Background()
-
-	mgr := config.New(config.WithStore(memory.NewStore()))
-	if err := mgr.Connect(ctx); err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
-	defer mgr.Close(ctx)
-
-	cfg := mgr.Namespace("test")
-
-	// Set with tags
-	err := cfg.Set(ctx, "db/host", "prod-db.example.com",
-		config.WithTags(
-			config.MustTag("env", "production"),
-			config.MustTag("region", "us-west"),
-		),
-	)
-	if err != nil {
-		t.Fatalf("Set with tags failed: %v", err)
-	}
-
-	// Set same key with different tags (creates separate entry)
-	err = cfg.Set(ctx, "db/host", "dev-db.example.com",
-		config.WithTags(config.MustTag("env", "development")),
-	)
-	if err != nil {
-		t.Fatalf("Set with different tags failed: %v", err)
-	}
-
-	// Get with tags (must match exactly)
-	val, err := cfg.Get(ctx, "db/host",
-		config.MustTag("env", "production"),
-		config.MustTag("region", "us-west"),
-	)
-	if err != nil {
-		t.Fatalf("Get with tags failed: %v", err)
-	}
-	strVal, _ := val.String()
-	if strVal != "prod-db.example.com" {
-		t.Errorf("Expected 'prod-db.example.com', got %q", strVal)
-	}
-
-	// Get with different tags
-	val, err = cfg.Get(ctx, "db/host", config.MustTag("env", "development"))
-	if err != nil {
-		t.Fatalf("Get with different tags failed: %v", err)
-	}
-	strVal, _ = val.String()
-	if strVal != "dev-db.example.com" {
-		t.Errorf("Expected 'dev-db.example.com', got %q", strVal)
-	}
-
-	// Delete with specific tags
-	err = cfg.Delete(ctx, "db/host", config.MustTag("env", "development"))
-	if err != nil {
-		t.Fatalf("Delete with tags failed: %v", err)
-	}
-
-	// Verify deleted
-	_, err = cfg.Get(ctx, "db/host", config.MustTag("env", "development"))
-	if !config.IsNotFound(err) {
-		t.Errorf("Expected NotFound after delete, got: %v", err)
-	}
-
-	// Production entry should still exist
-	_, err = cfg.Get(ctx, "db/host",
-		config.MustTag("env", "production"),
-		config.MustTag("region", "us-west"),
-	)
-	if err != nil {
-		t.Errorf("Production entry should still exist, got: %v", err)
 	}
 }
 
@@ -724,7 +626,10 @@ func TestTagOperations(t *testing.T) {
 func TestConcurrentAccess(t *testing.T) {
 	ctx := context.Background()
 
-	mgr := config.New(config.WithStore(memory.NewStore()))
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 	if err := mgr.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -772,8 +677,8 @@ func TestConcurrentAccess(t *testing.T) {
 		t.Fatalf("Final Get failed: %v", err)
 	}
 
-	v := val.(*config.Val)
-	if v.Int() == 0 {
+	i, _ := val.Int64()
+	if i == 0 {
 		t.Error("Counter should have been incremented")
 	}
 }
@@ -782,7 +687,10 @@ func TestConcurrentAccess(t *testing.T) {
 func TestNamespaceReuse(t *testing.T) {
 	ctx := context.Background()
 
-	mgr := config.New(config.WithStore(memory.NewStore()))
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 	if err := mgr.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -808,7 +716,10 @@ func TestNamespaceReuse(t *testing.T) {
 func TestFindWithPagination(t *testing.T) {
 	ctx := context.Background()
 
-	mgr := config.New(config.WithStore(memory.NewStore()))
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 	if err := mgr.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -845,45 +756,14 @@ func TestFindWithPagination(t *testing.T) {
 	}
 }
 
-// TestFindWithTags tests Find with tag filtering
-func TestFindWithTags(t *testing.T) {
-	ctx := context.Background()
-
-	mgr := config.New(config.WithStore(memory.NewStore()))
-	if err := mgr.Connect(ctx); err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
-	defer mgr.Close(ctx)
-
-	cfg := mgr.Namespace("test")
-
-	// Create entries with different tags
-	cfg.Set(ctx, "db/host", "prod-db",
-		config.WithTags(config.MustTag("env", "prod")))
-	cfg.Set(ctx, "db/port", "5432",
-		config.WithTags(config.MustTag("env", "prod")))
-	cfg.Set(ctx, "db/host", "dev-db",
-		config.WithTags(config.MustTag("env", "dev")))
-
-	// Find all prod entries
-	page, err := cfg.Find(ctx, config.NewFilter().
-		WithPrefix("db/").
-		WithTags(config.MustTag("env", "prod")).
-		Build())
-	if err != nil {
-		t.Fatalf("Find with tags failed: %v", err)
-	}
-
-	if len(page.Results()) != 2 {
-		t.Errorf("Expected 2 prod entries, got %d", len(page.Results()))
-	}
-}
-
 // TestValueMetadata tests value metadata
 func TestValueMetadata(t *testing.T) {
 	ctx := context.Background()
 
-	mgr := config.New(config.WithStore(memory.NewStore()))
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 	if err := mgr.Connect(ctx); err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -925,5 +805,106 @@ func TestValueMetadata(t *testing.T) {
 
 	if !meta.UpdatedAt().After(meta.CreatedAt()) {
 		t.Error("UpdatedAt should be after CreatedAt")
+	}
+}
+
+// TestSetWithIfNotExists tests the WithIfNotExists option
+func TestSetWithIfNotExists(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	cfg := mgr.Namespace("test")
+
+	// First set with IfNotExists should succeed
+	err = cfg.Set(ctx, "lock/owner", "instance-1", config.WithIfNotExists())
+	if err != nil {
+		t.Fatalf("First Set with IfNotExists failed: %v", err)
+	}
+
+	// Second set with IfNotExists should fail
+	err = cfg.Set(ctx, "lock/owner", "instance-2", config.WithIfNotExists())
+	if !config.IsKeyExists(err) {
+		t.Errorf("Expected KeyExists error, got: %v", err)
+	}
+
+	// Verify original value is unchanged
+	val, _ := cfg.Get(ctx, "lock/owner")
+	str, _ := val.String()
+	if str != "instance-1" {
+		t.Errorf("Value = %q, expected %q", str, "instance-1")
+	}
+}
+
+// TestSetWithIfExists tests the WithIfExists option
+func TestSetWithIfExists(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	cfg := mgr.Namespace("test")
+
+	// Set with IfExists should fail for non-existing key
+	err = cfg.Set(ctx, "app/timeout", 60, config.WithIfExists())
+	if !config.IsNotFound(err) {
+		t.Errorf("Expected NotFound error, got: %v", err)
+	}
+
+	// Create the key normally
+	cfg.Set(ctx, "app/timeout", 30)
+
+	// Now set with IfExists should succeed
+	err = cfg.Set(ctx, "app/timeout", 60, config.WithIfExists())
+	if err != nil {
+		t.Fatalf("Set with IfExists failed: %v", err)
+	}
+
+	// Verify value was updated
+	val, _ := cfg.Get(ctx, "app/timeout")
+	i, _ := val.Int64()
+	if i != 60 {
+		t.Errorf("Value = %d, expected %d", i, 60)
+	}
+}
+
+// TestKeyExistsError tests the KeyExistsError type
+func TestKeyExistsError(t *testing.T) {
+	err := &config.KeyExistsError{Key: "test", Namespace: "ns"}
+
+	// Should be detected by IsKeyExists
+	if !config.IsKeyExists(err) {
+		t.Error("IsKeyExists should return true for KeyExistsError")
+	}
+
+	// Should unwrap to ErrKeyExists
+	if !errors.Is(err, config.ErrKeyExists) {
+		t.Error("KeyExistsError should unwrap to ErrKeyExists")
+	}
+
+	// Should have correct error message with namespace
+	expected := `config: key "test" already exists in namespace "ns"`
+	if err.Error() != expected {
+		t.Errorf("Error message = %q, expected %q", err.Error(), expected)
+	}
+
+	// Without namespace
+	err2 := &config.KeyExistsError{Key: "test"}
+	expected2 := `config: key "test" already exists`
+	if err2.Error() != expected2 {
+		t.Errorf("Error message = %q, expected %q", err2.Error(), expected2)
 	}
 }

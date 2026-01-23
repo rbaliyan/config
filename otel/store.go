@@ -127,11 +127,11 @@ func (s *InstrumentedStore) Close(ctx context.Context) error {
 	return err
 }
 
-// Get retrieves a configuration value by namespace, key, and optional tags.
-func (s *InstrumentedStore) Get(ctx context.Context, namespace, key string, tags ...config.Tag) (config.Value, error) {
+// Get retrieves a configuration value by namespace and key.
+func (s *InstrumentedStore) Get(ctx context.Context, namespace, key string) (config.Value, error) {
 	if !s.opts.enableTraces {
 		start := time.Now()
-		value, err := s.store.Get(ctx, namespace, key, tags...)
+		value, err := s.store.Get(ctx, namespace, key)
 		s.recordOperation(ctx, "get", namespace, key, start, err)
 		return value, err
 	}
@@ -140,16 +140,13 @@ func (s *InstrumentedStore) Get(ctx context.Context, namespace, key string, tags
 		attribute.String("config.namespace", namespace),
 		attribute.String("config.key", key),
 	)
-	if len(tags) > 0 {
-		attrs = append(attrs, attribute.String("config.tags", config.FormatTags(tags)))
-	}
 
 	ctx, span := s.tracer.Start(ctx, "config.Get",
 		trace.WithAttributes(attrs...))
 	defer span.End()
 
 	start := time.Now()
-	value, err := s.store.Get(ctx, namespace, key, tags...)
+	value, err := s.store.Get(ctx, namespace, key)
 	s.recordOperation(ctx, "get", namespace, key, start, err)
 
 	if err != nil {
@@ -169,12 +166,13 @@ func (s *InstrumentedStore) Get(ctx context.Context, namespace, key string, tags
 }
 
 // Set creates or updates a configuration value.
-func (s *InstrumentedStore) Set(ctx context.Context, namespace, key string, value config.Value) error {
+// Returns the stored Value with updated metadata (version, timestamps).
+func (s *InstrumentedStore) Set(ctx context.Context, namespace, key string, value config.Value) (config.Value, error) {
 	if !s.opts.enableTraces {
 		start := time.Now()
-		err := s.store.Set(ctx, namespace, key, value)
+		result, err := s.store.Set(ctx, namespace, key, value)
 		s.recordOperation(ctx, "set", namespace, key, start, err)
-		return err
+		return result, err
 	}
 
 	ctx, span := s.tracer.Start(ctx, "config.Set",
@@ -187,7 +185,7 @@ func (s *InstrumentedStore) Set(ctx context.Context, namespace, key string, valu
 	defer span.End()
 
 	start := time.Now()
-	err := s.store.Set(ctx, namespace, key, value)
+	result, err := s.store.Set(ctx, namespace, key, value)
 	s.recordOperation(ctx, "set", namespace, key, start, err)
 
 	if err != nil {
@@ -195,16 +193,21 @@ func (s *InstrumentedStore) Set(ctx context.Context, namespace, key string, valu
 		span.SetStatus(codes.Error, err.Error())
 	} else {
 		span.SetStatus(codes.Ok, "")
+		if result != nil {
+			span.SetAttributes(
+				attribute.Int64("config.version", result.Metadata().Version()),
+			)
+		}
 	}
 
-	return err
+	return result, err
 }
 
-// Delete removes a configuration value by namespace, key, and optional tags.
-func (s *InstrumentedStore) Delete(ctx context.Context, namespace, key string, tags ...config.Tag) error {
+// Delete removes a configuration value by namespace and key.
+func (s *InstrumentedStore) Delete(ctx context.Context, namespace, key string) error {
 	if !s.opts.enableTraces {
 		start := time.Now()
-		err := s.store.Delete(ctx, namespace, key, tags...)
+		err := s.store.Delete(ctx, namespace, key)
 		s.recordOperation(ctx, "delete", namespace, key, start, err)
 		return err
 	}
@@ -213,16 +216,13 @@ func (s *InstrumentedStore) Delete(ctx context.Context, namespace, key string, t
 		attribute.String("config.namespace", namespace),
 		attribute.String("config.key", key),
 	)
-	if len(tags) > 0 {
-		attrs = append(attrs, attribute.String("config.tags", config.FormatTags(tags)))
-	}
 
 	ctx, span := s.tracer.Start(ctx, "config.Delete",
 		trace.WithAttributes(attrs...))
 	defer span.End()
 
 	start := time.Now()
-	err := s.store.Delete(ctx, namespace, key, tags...)
+	err := s.store.Delete(ctx, namespace, key)
 	s.recordOperation(ctx, "delete", namespace, key, start, err)
 
 	if err != nil {
@@ -390,7 +390,7 @@ func (s *InstrumentedStore) SetMany(ctx context.Context, namespace string, value
 	if !ok {
 		// Fallback to individual sets
 		for key, value := range values {
-			if err := s.Set(ctx, namespace, key, value); err != nil {
+			if _, err := s.Set(ctx, namespace, key, value); err != nil {
 				return err
 			}
 		}

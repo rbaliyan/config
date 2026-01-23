@@ -37,7 +37,7 @@ func TestStore_SetGet(t *testing.T) {
 
 	// Set a value
 	val := config.NewValue("test-value")
-	if err := store.Set(ctx, "ns", "key", val); err != nil {
+	if _, err := store.Set(ctx, "ns", "key", val); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
 
@@ -76,7 +76,7 @@ func TestStore_Delete(t *testing.T) {
 
 	// Set a value
 	val := config.NewValue("to-delete")
-	store.Set(ctx, "ns", "key", val)
+	_, _ = store.Set(ctx, "ns", "key", val)
 
 	// Delete it
 	if err := store.Delete(ctx, "ns", "key"); err != nil {
@@ -102,73 +102,6 @@ func TestStore_DeleteNotFound(t *testing.T) {
 	}
 }
 
-func TestStore_SetWithTags(t *testing.T) {
-	store := NewStore()
-	ctx := context.Background()
-	store.Connect(ctx)
-	defer store.Close(ctx)
-
-	tag1 := config.MustTag("env", "prod")
-	tag2 := config.MustTag("region", "us")
-
-	// Set with tags
-	val := config.NewValue("tagged-value", config.WithValueTags([]config.Tag{tag1, tag2}))
-	if err := store.Set(ctx, "ns", "key", val); err != nil {
-		t.Fatalf("Set failed: %v", err)
-	}
-
-	// Get with same tags
-	got, err := store.Get(ctx, "ns", "key", tag1, tag2)
-	if err != nil {
-		t.Fatalf("Get with tags failed: %v", err)
-	}
-
-	str, _ := got.String()
-	if str != "tagged-value" {
-		t.Errorf("Got %q, want %q", str, "tagged-value")
-	}
-
-	// Get without tags should fail
-	_, err = store.Get(ctx, "ns", "key")
-	if !config.IsNotFound(err) {
-		t.Error("Expected NotFound when getting without tags")
-	}
-}
-
-func TestStore_SameKeyDifferentTags(t *testing.T) {
-	store := NewStore()
-	ctx := context.Background()
-	store.Connect(ctx)
-	defer store.Close(ctx)
-
-	prodTag := config.MustTag("env", "prod")
-	devTag := config.MustTag("env", "dev")
-
-	// Set same key with different tags
-	store.Set(ctx, "ns", "db/host", config.NewValue("prod-db.example.com", config.WithValueTags([]config.Tag{prodTag})))
-	store.Set(ctx, "ns", "db/host", config.NewValue("dev-db.example.com", config.WithValueTags([]config.Tag{devTag})))
-
-	// Get prod value
-	prodVal, err := store.Get(ctx, "ns", "db/host", prodTag)
-	if err != nil {
-		t.Fatalf("Get prod failed: %v", err)
-	}
-	prodStr, _ := prodVal.String()
-	if prodStr != "prod-db.example.com" {
-		t.Errorf("Prod value = %q, want %q", prodStr, "prod-db.example.com")
-	}
-
-	// Get dev value
-	devVal, err := store.Get(ctx, "ns", "db/host", devTag)
-	if err != nil {
-		t.Fatalf("Get dev failed: %v", err)
-	}
-	devStr, _ := devVal.String()
-	if devStr != "dev-db.example.com" {
-		t.Errorf("Dev value = %q, want %q", devStr, "dev-db.example.com")
-	}
-}
-
 func TestStore_Find(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
@@ -176,10 +109,10 @@ func TestStore_Find(t *testing.T) {
 	defer store.Close(ctx)
 
 	// Set multiple values
-	store.Set(ctx, "ns", "app/db/host", config.NewValue("localhost"))
-	store.Set(ctx, "ns", "app/db/port", config.NewValue(5432))
-	store.Set(ctx, "ns", "app/cache/ttl", config.NewValue(300))
-	store.Set(ctx, "ns", "other/key", config.NewValue("other"))
+	_, _ = store.Set(ctx, "ns", "app/db/host", config.NewValue("localhost"))
+	_, _ = store.Set(ctx, "ns", "app/db/port", config.NewValue(5432))
+	_, _ = store.Set(ctx, "ns", "app/cache/ttl", config.NewValue(300))
+	_, _ = store.Set(ctx, "ns", "other/key", config.NewValue("other"))
 
 	// Find with prefix
 	page, err := store.Find(ctx, "ns", config.NewFilter().WithPrefix("app/db").Build())
@@ -201,7 +134,7 @@ func TestStore_FindWithLimit(t *testing.T) {
 
 	// Set 5 values
 	for i := range 5 {
-		store.Set(ctx, "ns", "key"+string(rune('a'+i)), config.NewValue(i))
+		_, _ = store.Set(ctx, "ns", "key"+string(rune('a'+i)), config.NewValue(i))
 	}
 
 	// Find with limit
@@ -215,31 +148,6 @@ func TestStore_FindWithLimit(t *testing.T) {
 	}
 	if page.NextCursor() == "" {
 		t.Error("Expected non-empty cursor for pagination")
-	}
-}
-
-func TestStore_FindWithTags(t *testing.T) {
-	store := NewStore()
-	ctx := context.Background()
-	store.Connect(ctx)
-	defer store.Close(ctx)
-
-	prodTag := config.MustTag("env", "prod")
-	devTag := config.MustTag("env", "dev")
-
-	// Set values with different tags
-	store.Set(ctx, "ns", "key1", config.NewValue("prod1", config.WithValueTags([]config.Tag{prodTag})))
-	store.Set(ctx, "ns", "key2", config.NewValue("prod2", config.WithValueTags([]config.Tag{prodTag})))
-	store.Set(ctx, "ns", "key3", config.NewValue("dev1", config.WithValueTags([]config.Tag{devTag})))
-
-	// Find with prod tag
-	page, err := store.Find(ctx, "ns", config.NewFilter().WithTags(prodTag).Build())
-	if err != nil {
-		t.Fatalf("Find failed: %v", err)
-	}
-
-	if len(page.Results()) != 2 {
-		t.Errorf("Expected 2 prod results, got %d", len(page.Results()))
 	}
 }
 
@@ -259,7 +167,7 @@ func TestStore_Watch(t *testing.T) {
 	// Set a value (triggers event)
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		store.Set(ctx, "ns", "watch-key", config.NewValue("watch-value"))
+		_, _ = store.Set(ctx, "ns", "watch-key", config.NewValue("watch-value"))
 	}()
 
 	// Wait for event
@@ -284,7 +192,7 @@ func TestStore_WatchDelete(t *testing.T) {
 	defer store.Close(ctx)
 
 	// Set a value first
-	store.Set(ctx, "ns", "delete-key", config.NewValue("to-delete"))
+	_, _ = store.Set(ctx, "ns", "delete-key", config.NewValue("to-delete"))
 
 	// Wait for the Set notification to complete (it's async via goroutine)
 	time.Sleep(10 * time.Millisecond)
@@ -319,8 +227,8 @@ func TestStore_NamespaceIsolation(t *testing.T) {
 	defer store.Close(ctx)
 
 	// Set same key in different namespaces
-	store.Set(ctx, "ns1", "key", config.NewValue("value1"))
-	store.Set(ctx, "ns2", "key", config.NewValue("value2"))
+	_, _ = store.Set(ctx, "ns1", "key", config.NewValue("value1"))
+	_, _ = store.Set(ctx, "ns2", "key", config.NewValue("value2"))
 
 	// Get from ns1
 	val1, err := store.Get(ctx, "ns1", "key")
@@ -361,9 +269,9 @@ func TestStore_Stats(t *testing.T) {
 	defer store.Close(ctx)
 
 	// Set some values
-	store.Set(ctx, "ns1", "key1", config.NewValue("value1"))
-	store.Set(ctx, "ns1", "key2", config.NewValue(42))
-	store.Set(ctx, "ns2", "key1", config.NewValue(true))
+	_, _ = store.Set(ctx, "ns1", "key1", config.NewValue("value1"))
+	_, _ = store.Set(ctx, "ns1", "key2", config.NewValue(42))
+	_, _ = store.Set(ctx, "ns2", "key1", config.NewValue(true))
 
 	stats, err := store.Stats(ctx)
 	if err != nil {
@@ -382,8 +290,8 @@ func TestStore_GetMany(t *testing.T) {
 	defer store.Close(ctx)
 
 	// Set values
-	store.Set(ctx, "ns", "key1", config.NewValue("value1"))
-	store.Set(ctx, "ns", "key2", config.NewValue("value2"))
+	_, _ = store.Set(ctx, "ns", "key1", config.NewValue("value1"))
+	_, _ = store.Set(ctx, "ns", "key2", config.NewValue("value2"))
 
 	// GetMany
 	results, err := store.GetMany(ctx, "ns", []string{"key1", "key2", "nonexistent"})
@@ -426,8 +334,8 @@ func TestStore_DeleteMany(t *testing.T) {
 	defer store.Close(ctx)
 
 	// Set values
-	store.Set(ctx, "ns", "key1", config.NewValue("value1"))
-	store.Set(ctx, "ns", "key2", config.NewValue("value2"))
+	_, _ = store.Set(ctx, "ns", "key1", config.NewValue("value1"))
+	_, _ = store.Set(ctx, "ns", "key2", config.NewValue("value2"))
 
 	// DeleteMany
 	deleted, err := store.DeleteMany(ctx, "ns", []string{"key1", "key2", "nonexistent"})
@@ -461,7 +369,7 @@ func TestStore_ConcurrentAccess(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			key := "key" + string(rune('0'+i%10))
-			if err := store.Set(ctx, "ns", key, config.NewValue(i)); err != nil {
+			if _, err := store.Set(ctx, "ns", key, config.NewValue(i)); err != nil {
 				errors <- err
 			}
 		}(i)
@@ -492,7 +400,7 @@ func TestStore_ValueMetadata(t *testing.T) {
 	defer store.Close(ctx)
 
 	// Set a value
-	store.Set(ctx, "ns", "key", config.NewValue("original"))
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("original"))
 
 	// Get and check initial version
 	val1, _ := store.Get(ctx, "ns", "key")
@@ -501,7 +409,7 @@ func TestStore_ValueMetadata(t *testing.T) {
 	}
 
 	// Update
-	store.Set(ctx, "ns", "key", config.NewValue("updated"))
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("updated"))
 
 	// Check incremented version
 	val2, _ := store.Get(ctx, "ns", "key")
@@ -512,6 +420,89 @@ func TestStore_ValueMetadata(t *testing.T) {
 	// Check timestamps
 	if val2.Metadata().UpdatedAt().Before(val2.Metadata().CreatedAt()) {
 		t.Error("UpdatedAt should not be before CreatedAt")
+	}
+}
+
+func TestStore_SetWithIfNotExists(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	store.Connect(ctx)
+	defer store.Close(ctx)
+
+	// First set should succeed (key doesn't exist)
+	val := config.NewValue("first", config.WithValueWriteMode(config.WriteModeCreate))
+	if _, err := store.Set(ctx, "ns", "key", val); err != nil {
+		t.Fatalf("First Set with IfNotExists failed: %v", err)
+	}
+
+	// Second set should fail (key already exists)
+	val2 := config.NewValue("second", config.WithValueWriteMode(config.WriteModeCreate))
+	_, err := store.Set(ctx, "ns", "key", val2)
+	if !config.IsKeyExists(err) {
+		t.Errorf("Expected KeyExists error, got: %v", err)
+	}
+
+	// Verify original value is unchanged
+	got, _ := store.Get(ctx, "ns", "key")
+	str, _ := got.String()
+	if str != "first" {
+		t.Errorf("Value changed to %q, expected %q", str, "first")
+	}
+}
+
+func TestStore_SetWithIfExists(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	store.Connect(ctx)
+	defer store.Close(ctx)
+
+	// First set should fail (key doesn't exist)
+	val := config.NewValue("first", config.WithValueWriteMode(config.WriteModeUpdate))
+	_, err := store.Set(ctx, "ns", "key", val)
+	if !config.IsNotFound(err) {
+		t.Errorf("Expected NotFound error, got: %v", err)
+	}
+
+	// Create the key normally
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("original"))
+
+	// Now update should succeed
+	val2 := config.NewValue("updated", config.WithValueWriteMode(config.WriteModeUpdate))
+	if _, err := store.Set(ctx, "ns", "key", val2); err != nil {
+		t.Fatalf("Set with IfExists failed: %v", err)
+	}
+
+	// Verify value was updated
+	got, _ := store.Get(ctx, "ns", "key")
+	str, _ := got.String()
+	if str != "updated" {
+		t.Errorf("Value = %q, expected %q", str, "updated")
+	}
+}
+
+func TestStore_SetUpsertIsDefault(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	store.Connect(ctx)
+	defer store.Close(ctx)
+
+	// Set without write mode should create
+	val := config.NewValue("created")
+	if _, err := store.Set(ctx, "ns", "key", val); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Set without write mode should update
+	val2 := config.NewValue("updated")
+	if _, err := store.Set(ctx, "ns", "key", val2); err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	// Verify updated
+	got, _ := store.Get(ctx, "ns", "key")
+	str, _ := got.String()
+	if str != "updated" {
+		t.Errorf("Value = %q, expected %q", str, "updated")
 	}
 }
 

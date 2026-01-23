@@ -5,26 +5,10 @@ import (
 	"fmt"
 )
 
-// Validator validates configuration values.
-type Validator interface {
-	// Validate checks if the value is valid.
-	// Returns nil if valid, or an error describing the validation failure.
-	Validate(v any) error
-}
-
-// ValidatorFunc is a function adapter for Validator.
-type ValidatorFunc func(v any) error
-
-// Validate implements the Validator interface.
-func (f ValidatorFunc) Validate(v any) error {
-	return f(v)
-}
-
 // Sentinel errors for validation
 var (
 	ErrValidationFailed = errors.New("config: validation failed")
 	ErrBindingFailed    = errors.New("config: binding failed")
-	ErrInvalidSchema    = errors.New("config: invalid schema")
 )
 
 // ValidationError represents a validation failure.
@@ -91,17 +75,4 @@ func IsValidationError(err error) bool {
 func IsBindError(err error) bool {
 	var be *BindError
 	return errors.As(err, &be)
-}
-
-// ChainValidators creates a validator that runs multiple validators in sequence.
-// Validation stops at the first error.
-func ChainValidators(validators ...Validator) Validator {
-	return ValidatorFunc(func(v any) error {
-		for _, validator := range validators {
-			if err := validator.Validate(v); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
 }

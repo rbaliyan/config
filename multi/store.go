@@ -139,19 +139,19 @@ func (ms *Store) Close(ctx context.Context) error {
 }
 
 // Get retrieves a value, trying stores in order until one succeeds.
-func (ms *Store) Get(ctx context.Context, namespace, key string, tags ...config.Tag) (config.Value, error) {
+func (ms *Store) Get(ctx context.Context, namespace, key string) (config.Value, error) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
 
 	var lastErr error
 	for i, s := range ms.stores {
-		val, err := s.Get(ctx, namespace, key, tags...)
+		val, err := s.Get(ctx, namespace, key)
 		if err == nil {
 			// For read-through strategy, populate earlier stores with the found value
 			if ms.strategy == StrategyReadThrough && i > 0 {
 				// Write back to earlier stores (cache population)
 				for j := range i {
-					ms.stores[j].Set(ctx, namespace, key, val)
+					_, _ = ms.stores[j].Set(ctx, namespace, key, val)
 				}
 			}
 			return val, nil
@@ -168,36 +168,38 @@ func (ms *Store) Get(ctx context.Context, namespace, key string, tags ...config.
 }
 
 // Set creates or updates a value based on the strategy.
-func (ms *Store) Set(ctx context.Context, namespace, key string, value config.Value) error {
+// Returns the stored Value with updated metadata from the first successful store.
+func (ms *Store) Set(ctx context.Context, namespace, key string, value config.Value) (config.Value, error) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 
 	if len(ms.stores) == 0 {
-		return config.ErrStoreNotConnected
+		return nil, config.ErrStoreNotConnected
 	}
 
 	// All strategies write to all stores to maintain consistency.
 	// For ReadThrough: ensures both cache and backend are updated.
 	// For Fallback/WriteThrough: ensures all replicas are in sync.
 	var errs []error
-	var succeeded bool
+	var result config.Value
 	for _, s := range ms.stores {
-		if err := s.Set(ctx, namespace, key, value); err != nil {
+		if val, err := s.Set(ctx, namespace, key, value); err != nil {
 			errs = append(errs, err)
-		} else {
-			succeeded = true
+		} else if result == nil {
+			// Return value from first successful store
+			result = val
 		}
 	}
 
 	// At least one store must succeed
-	if !succeeded && len(errs) > 0 {
-		return errors.Join(errs...)
+	if result == nil && len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
-	return nil
+	return result, nil
 }
 
 // Delete removes a value from all stores.
-func (ms *Store) Delete(ctx context.Context, namespace, key string, tags ...config.Tag) error {
+func (ms *Store) Delete(ctx context.Context, namespace, key string) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 
@@ -210,7 +212,7 @@ func (ms *Store) Delete(ctx context.Context, namespace, key string, tags ...conf
 	var errs []error
 	var succeeded bool
 	for _, s := range ms.stores {
-		if err := s.Delete(ctx, namespace, key, tags...); err != nil {
+		if err := s.Delete(ctx, namespace, key); err != nil {
 			if !config.IsNotFound(err) {
 				errs = append(errs, err)
 			}

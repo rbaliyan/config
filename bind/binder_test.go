@@ -11,7 +11,10 @@ import (
 func setupTestConfig(t *testing.T) config.Config {
 	ctx := context.Background()
 	store := memory.NewStore()
-	mgr := config.New(config.WithStore(store))
+	mgr, err := config.New(config.WithStore(store))
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
 	if err := mgr.Connect(ctx); err != nil {
 		t.Fatalf("Connect error: %v", err)
 	}
@@ -31,6 +34,9 @@ func TestNew(t *testing.T) {
 	}
 	if b.fieldTag != "json" {
 		t.Errorf("expected default fieldTag 'json', got %q", b.fieldTag)
+	}
+	if b.mapper == nil {
+		t.Error("expected mapper to be initialized")
 	}
 }
 
@@ -73,13 +79,16 @@ func TestGetStruct(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
-	// Set up test data
 	type DBConfig struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`
 	}
-	testValue := DBConfig{Host: "localhost", Port: 5432}
-	if err := cfg.Set(ctx, "database", testValue); err != nil {
+
+	// Set up hierarchical config keys
+	if err := cfg.Set(ctx, "database/host", "localhost"); err != nil {
+		t.Fatalf("Set error: %v", err)
+	}
+	if err := cfg.Set(ctx, "database/port", 5432); err != nil {
 		t.Fatalf("Set error: %v", err)
 	}
 
@@ -91,11 +100,61 @@ func TestGetStruct(t *testing.T) {
 		t.Fatalf("GetStruct error: %v", err)
 	}
 
-	if result.Host != testValue.Host {
-		t.Errorf("expected host %q, got %q", testValue.Host, result.Host)
+	if result.Host != "localhost" {
+		t.Errorf("expected host 'localhost', got %q", result.Host)
 	}
-	if result.Port != testValue.Port {
-		t.Errorf("expected port %d, got %d", testValue.Port, result.Port)
+	if result.Port != 5432 {
+		t.Errorf("expected port 5432, got %d", result.Port)
+	}
+}
+
+func TestGetStructNested(t *testing.T) {
+	ctx := context.Background()
+	cfg := setupTestConfig(t)
+
+	type PoolConfig struct {
+		MaxSize int `json:"max_size"`
+		MinSize int `json:"min_size"`
+	}
+	type DBConfig struct {
+		Host string     `json:"host"`
+		Port int        `json:"port"`
+		Pool PoolConfig `json:"pool"`
+	}
+
+	// Set up nested hierarchical config keys
+	if err := cfg.Set(ctx, "database/host", "localhost"); err != nil {
+		t.Fatalf("Set error: %v", err)
+	}
+	if err := cfg.Set(ctx, "database/port", 5432); err != nil {
+		t.Fatalf("Set error: %v", err)
+	}
+	if err := cfg.Set(ctx, "database/pool/max_size", 100); err != nil {
+		t.Fatalf("Set error: %v", err)
+	}
+	if err := cfg.Set(ctx, "database/pool/min_size", 10); err != nil {
+		t.Fatalf("Set error: %v", err)
+	}
+
+	b := New(cfg)
+	bound := b.Bind()
+
+	var result DBConfig
+	if err := bound.GetStruct(ctx, "database", &result); err != nil {
+		t.Fatalf("GetStruct error: %v", err)
+	}
+
+	if result.Host != "localhost" {
+		t.Errorf("expected host 'localhost', got %q", result.Host)
+	}
+	if result.Port != 5432 {
+		t.Errorf("expected port 5432, got %d", result.Port)
+	}
+	if result.Pool.MaxSize != 100 {
+		t.Errorf("expected pool.max_size 100, got %d", result.Pool.MaxSize)
+	}
+	if result.Pool.MinSize != 10 {
+		t.Errorf("expected pool.min_size 10, got %d", result.Pool.MinSize)
 	}
 }
 
@@ -131,494 +190,221 @@ func TestSetStruct(t *testing.T) {
 		t.Fatalf("SetStruct error: %v", err)
 	}
 
-	// Verify it was stored correctly
-	var result AppConfig
-	if err := bound.GetStruct(ctx, "app", &result); err != nil {
-		t.Fatalf("GetStruct error: %v", err)
+	// Verify individual keys were set
+	nameVal, err := cfg.Get(ctx, "app/name")
+	if err != nil {
+		t.Fatalf("Get error for app/name: %v", err)
+	}
+	var name string
+	if err := nameVal.Unmarshal(&name); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if name != "myapp" {
+		t.Errorf("expected name 'myapp', got %q", name)
 	}
 
-	if result.Name != testValue.Name {
-		t.Errorf("expected name %q, got %q", testValue.Name, result.Name)
+	versionVal, err := cfg.Get(ctx, "app/version")
+	if err != nil {
+		t.Fatalf("Get error for app/version: %v", err)
 	}
-	if result.Version != testValue.Version {
-		t.Errorf("expected version %q, got %q", testValue.Version, result.Version)
+	var version string
+	if err := versionVal.Unmarshal(&version); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
 	}
-}
-
-func TestMustGetStruct(t *testing.T) {
-	ctx := context.Background()
-	cfg := setupTestConfig(t)
-
-	// Set up test data
-	if err := cfg.Set(ctx, "key", "value"); err != nil {
-		t.Fatalf("Set error: %v", err)
-	}
-
-	b := New(cfg)
-	bound := b.Bind()
-
-	var result string
-	// Should not panic
-	bound.MustGetStruct(ctx, "key", &result)
-
-	if result != "value" {
-		t.Errorf("expected 'value', got %q", result)
+	if version != "1.0.0" {
+		t.Errorf("expected version '1.0.0', got %q", version)
 	}
 }
 
-func TestMustGetStructPanics(t *testing.T) {
+func TestSetStructNested(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 	b := New(cfg)
 	bound := b.Bind()
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for nonexistent key")
-		}
-	}()
+	type CacheConfig struct {
+		TTL     int  `json:"ttl"`
+		Enabled bool `json:"enabled"`
+	}
+	type AppConfig struct {
+		Name  string      `json:"name"`
+		Cache CacheConfig `json:"cache"`
+	}
+	testValue := AppConfig{
+		Name: "myapp",
+		Cache: CacheConfig{
+			TTL:     300,
+			Enabled: true,
+		},
+	}
 
-	var result struct{}
-	bound.MustGetStruct(ctx, "nonexistent", &result)
+	if err := bound.SetStruct(ctx, "app", testValue); err != nil {
+		t.Fatalf("SetStruct error: %v", err)
+	}
+
+	// Verify nested keys were set
+	ttlVal, err := cfg.Get(ctx, "app/cache/ttl")
+	if err != nil {
+		t.Fatalf("Get error for app/cache/ttl: %v", err)
+	}
+	var ttl int
+	if err := ttlVal.Unmarshal(&ttl); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if ttl != 300 {
+		t.Errorf("expected ttl 300, got %d", ttl)
+	}
+
+	enabledVal, err := cfg.Get(ctx, "app/cache/enabled")
+	if err != nil {
+		t.Fatalf("Get error for app/cache/enabled: %v", err)
+	}
+	var enabled bool
+	if err := enabledVal.Unmarshal(&enabled); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if !enabled {
+		t.Error("expected enabled true")
+	}
 }
 
-func TestBindPrefix(t *testing.T) {
+func TestSetGetRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
-
-	// Set up hierarchical config
-	if err := cfg.Set(ctx, "database/host", "localhost"); err != nil {
-		t.Fatalf("Set error: %v", err)
-	}
-	if err := cfg.Set(ctx, "database/port", 5432); err != nil {
-		t.Fatalf("Set error: %v", err)
-	}
-	if err := cfg.Set(ctx, "database/name", "testdb"); err != nil {
-		t.Fatalf("Set error: %v", err)
-	}
-
 	b := New(cfg)
 	bound := b.Bind()
 
 	type DBConfig struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`
-		Name string `json:"name"`
 	}
 
+	original := DBConfig{Host: "localhost", Port: 5432}
+
+	// Set struct
+	if err := bound.SetStruct(ctx, "database", original); err != nil {
+		t.Fatalf("SetStruct error: %v", err)
+	}
+
+	// Get struct back
 	var result DBConfig
-	if err := bound.BindPrefix(ctx, "database", &result); err != nil {
-		t.Fatalf("BindPrefix error: %v", err)
+	if err := bound.GetStruct(ctx, "database", &result); err != nil {
+		t.Fatalf("GetStruct error: %v", err)
 	}
 
-	if result.Host != "localhost" {
-		t.Errorf("expected host 'localhost', got %q", result.Host)
+	if result.Host != original.Host {
+		t.Errorf("expected host %q, got %q", original.Host, result.Host)
 	}
-	if result.Port != 5432 {
-		t.Errorf("expected port 5432, got %d", result.Port)
-	}
-	if result.Name != "testdb" {
-		t.Errorf("expected name 'testdb', got %q", result.Name)
+	if result.Port != original.Port {
+		t.Errorf("expected port %d, got %d", original.Port, result.Port)
 	}
 }
 
-func TestBindPrefixNested(t *testing.T) {
+func TestNonrecursiveTag(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
-
-	// Set up nested hierarchical config
-	if err := cfg.Set(ctx, "app/database/host", "localhost"); err != nil {
-		t.Fatalf("Set error: %v", err)
-	}
-	if err := cfg.Set(ctx, "app/database/port", 5432); err != nil {
-		t.Fatalf("Set error: %v", err)
-	}
-	if err := cfg.Set(ctx, "app/cache/enabled", true); err != nil {
-		t.Fatalf("Set error: %v", err)
-	}
-
 	b := New(cfg)
 	bound := b.Bind()
+
+	// Credentials should be stored as a single value, not flattened
+	type Credentials struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
 
 	type AppConfig struct {
-		Database struct {
-			Host string `json:"host"`
-			Port int    `json:"port"`
-		} `json:"database"`
-		Cache struct {
-			Enabled bool `json:"enabled"`
-		} `json:"cache"`
+		Name  string      `json:"name"`
+		Creds Credentials `json:"creds,nonrecursive"` // Store as single JSON value
 	}
 
+	original := AppConfig{
+		Name: "myapp",
+		Creds: Credentials{
+			Username: "admin",
+			Password: "secret",
+		},
+	}
+
+	// Set struct
+	if err := bound.SetStruct(ctx, "app", original); err != nil {
+		t.Fatalf("SetStruct error: %v", err)
+	}
+
+	// Verify that "app/name" exists (normal field)
+	nameVal, err := cfg.Get(ctx, "app/name")
+	if err != nil {
+		t.Fatalf("Get error for app/name: %v", err)
+	}
+	var name string
+	if err := nameVal.Unmarshal(&name); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if name != "myapp" {
+		t.Errorf("expected name 'myapp', got %q", name)
+	}
+
+	// Verify that "app/creds" exists as a single value (not flattened)
+	credsVal, err := cfg.Get(ctx, "app/creds")
+	if err != nil {
+		t.Fatalf("Get error for app/creds: %v", err)
+	}
+	var creds Credentials
+	if err := credsVal.Unmarshal(&creds); err != nil {
+		t.Fatalf("Unmarshal error for creds: %v", err)
+	}
+	if creds.Username != "admin" || creds.Password != "secret" {
+		t.Errorf("expected creds {admin, secret}, got %+v", creds)
+	}
+
+	// Verify that "app/creds/username" does NOT exist (should not be flattened)
+	_, err = cfg.Get(ctx, "app/creds/username")
+	if err == nil {
+		t.Error("expected app/creds/username to NOT exist (nonrecursive)")
+	}
+
+	// Get struct back - should work correctly
 	var result AppConfig
-	if err := bound.BindPrefix(ctx, "app", &result); err != nil {
-		t.Fatalf("BindPrefix error: %v", err)
+	if err := bound.GetStruct(ctx, "app", &result); err != nil {
+		t.Fatalf("GetStruct error: %v", err)
 	}
 
-	if result.Database.Host != "localhost" {
-		t.Errorf("expected database.host 'localhost', got %q", result.Database.Host)
+	if result.Name != original.Name {
+		t.Errorf("expected name %q, got %q", original.Name, result.Name)
 	}
-	if result.Database.Port != 5432 {
-		t.Errorf("expected database.port 5432, got %d", result.Database.Port)
+	if result.Creds.Username != original.Creds.Username {
+		t.Errorf("expected username %q, got %q", original.Creds.Username, result.Creds.Username)
 	}
-	if !result.Cache.Enabled {
-		t.Error("expected cache.enabled to be true")
-	}
-}
-
-func TestBindPrefixEmpty(t *testing.T) {
-	ctx := context.Background()
-	cfg := setupTestConfig(t)
-	b := New(cfg)
-	bound := b.Bind()
-
-	type EmptyConfig struct {
-		Value string `json:"value"`
-	}
-
-	var result EmptyConfig
-	// Should not error for empty prefix results
-	if err := bound.BindPrefix(ctx, "nonexistent", &result); err != nil {
-		t.Fatalf("BindPrefix error for nonexistent prefix: %v", err)
-	}
-
-	// Result should be zero value
-	if result.Value != "" {
-		t.Errorf("expected empty value, got %q", result.Value)
+	if result.Creds.Password != original.Creds.Password {
+		t.Errorf("expected password %q, got %q", original.Creds.Password, result.Creds.Password)
 	}
 }
 
-func TestValidate(t *testing.T) {
-	cfg := setupTestConfig(t)
-	b := New(cfg)
-	bound := b.Bind()
-
-	// Without validators, Validate should always succeed
-	if err := bound.Validate("any value"); err != nil {
-		t.Errorf("Validate error without validators: %v", err)
-	}
-}
-
-func TestWithValidator(t *testing.T) {
-	cfg := setupTestConfig(t)
-
-	// Create a custom validator
-	customValidator := ValidatorFunc(func(v any) error {
-		if s, ok := v.(string); ok && s == "" {
-			return &ValidationError{Err: ErrValidationFailed}
-		}
-		return nil
-	})
-
-	b := New(cfg, WithValidator(customValidator))
-	bound := b.Bind()
-
-	// Should fail validation for empty string
-	if err := bound.Validate(""); err == nil {
-		t.Error("expected validation error for empty string")
-	}
-
-	// Should pass validation for non-empty string
-	if err := bound.Validate("hello"); err != nil {
-		t.Errorf("unexpected validation error: %v", err)
-	}
-}
-
-func TestWithValidatorOnSet(t *testing.T) {
+func TestWithTagValidation(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
 	type Config struct {
-		Name string `json:"name"`
+		Host string `json:"host" validate:"required"`
+		Port int    `json:"port" validate:"required,min=1,max=65535"`
 	}
 
-	validateCalled := false
-	customValidator := ValidatorFunc(func(v any) error {
-		validateCalled = true
-		return nil
-	})
-
-	b := New(cfg, WithValidator(customValidator))
+	b := New(cfg, WithTagValidation())
 	bound := b.Bind()
 
-	testValue := Config{Name: "test"}
-	if err := bound.SetStruct(ctx, "config", testValue); err != nil {
-		t.Fatalf("SetStruct error: %v", err)
+	// Valid config should pass
+	validConfig := Config{Host: "localhost", Port: 8080}
+	if err := bound.SetStruct(ctx, "app", validConfig); err != nil {
+		t.Fatalf("SetStruct error for valid config: %v", err)
 	}
 
-	if !validateCalled {
-		t.Error("expected validator to be called on SetStruct")
-	}
-}
-
-func TestHooks(t *testing.T) {
-	ctx := context.Background()
-	cfg := setupTestConfig(t)
-
-	// Set up test data
-	if err := cfg.Set(ctx, "key", "value"); err != nil {
-		t.Fatalf("Set error: %v", err)
-	}
-
-	beforeGetCalled := false
-	afterUnmarshalCalled := false
-	beforeSetCalled := false
-
-	hooks := Hooks{
-		BeforeGet: func(ctx context.Context, key string) error {
-			beforeGetCalled = true
-			return nil
-		},
-		AfterUnmarshal: func(ctx context.Context, key string, target any) error {
-			afterUnmarshalCalled = true
-			return nil
-		},
-		BeforeSet: func(ctx context.Context, key string, value any) error {
-			beforeSetCalled = true
-			return nil
-		},
-	}
-
-	b := New(cfg, WithHooks(hooks))
-	bound := b.Bind()
-
-	// Test GetStruct hooks
-	var result string
-	if err := bound.GetStruct(ctx, "key", &result); err != nil {
+	// Get it back and validate
+	var result Config
+	if err := bound.GetStruct(ctx, "app", &result); err != nil {
 		t.Fatalf("GetStruct error: %v", err)
 	}
 
-	if !beforeGetCalled {
-		t.Error("expected BeforeGet hook to be called")
-	}
-	if !afterUnmarshalCalled {
-		t.Error("expected AfterUnmarshal hook to be called")
-	}
-
-	// Test SetStruct hooks
-	if err := bound.SetStruct(ctx, "newkey", "newvalue"); err != nil {
-		t.Fatalf("SetStruct error: %v", err)
-	}
-
-	if !beforeSetCalled {
-		t.Error("expected BeforeSet hook to be called")
-	}
-}
-
-func TestBuildMapFromEntries(t *testing.T) {
-	entries := map[string]config.Value{
-		"database/host": config.NewValue("localhost"),
-		"database/port": config.NewValue(5432),
-		"app/name":      config.NewValue("myapp"),
-	}
-
-	result := buildMapFromEntries(entries, "")
-
-	// Check database entry
-	db, ok := result["database"].(map[string]any)
-	if !ok {
-		t.Fatal("expected database to be a map")
-	}
-	if db["host"] != "localhost" {
-		t.Errorf("expected database.host 'localhost', got %v", db["host"])
-	}
-
-	// Check app entry
-	app, ok := result["app"].(map[string]any)
-	if !ok {
-		t.Fatal("expected app to be a map")
-	}
-	if app["name"] != "myapp" {
-		t.Errorf("expected app.name 'myapp', got %v", app["name"])
-	}
-}
-
-func TestBuildMapFromEntriesWithPrefix(t *testing.T) {
-	entries := map[string]config.Value{
-		"prefix/host": config.NewValue("localhost"),
-		"prefix/port": config.NewValue(5432),
-	}
-
-	result := buildMapFromEntries(entries, "prefix")
-
-	if result["host"] != "localhost" {
-		t.Errorf("expected host 'localhost', got %v", result["host"])
-	}
-	if result["port"] != float64(5432) { // JSON numbers are float64
-		t.Errorf("expected port 5432, got %v", result["port"])
-	}
-}
-
-func TestFieldMapperStructToMap(t *testing.T) {
-	type Inner struct {
-		Value string `json:"value"`
-	}
-	type TestStruct struct {
-		Name    string  `json:"name"`
-		Count   int     `json:"count"`
-		Enabled bool    `json:"enabled"`
-		Ignored string  `json:"-"`
-		Inner   Inner   `json:"inner"`
-		Tags    []string `json:"tags"`
-	}
-
-	s := TestStruct{
-		Name:    "test",
-		Count:   42,
-		Enabled: true,
-		Ignored: "should not appear",
-		Inner:   Inner{Value: "nested"},
-		Tags:    []string{"a", "b"},
-	}
-
-	mapper := NewFieldMapper("json")
-	result, err := mapper.StructToMap(s)
-	if err != nil {
-		t.Fatalf("StructToMap error: %v", err)
-	}
-
-	if result["name"] != "test" {
-		t.Errorf("expected name 'test', got %v", result["name"])
-	}
-	if result["count"] != 42 {
-		t.Errorf("expected count 42, got %v", result["count"])
-	}
-	if result["enabled"] != true {
-		t.Errorf("expected enabled true, got %v", result["enabled"])
-	}
-	if _, exists := result["Ignored"]; exists {
-		t.Error("Ignored field should not be in result")
-	}
-	if inner, ok := result["inner"].(map[string]any); !ok || inner["value"] != "nested" {
-		t.Errorf("expected inner.value 'nested', got %v", result["inner"])
-	}
-}
-
-func TestFieldMapperStructToMapPointer(t *testing.T) {
-	type TestStruct struct {
-		Name string `json:"name"`
-	}
-
-	s := &TestStruct{Name: "test"}
-	mapper := NewFieldMapper("json")
-	result, err := mapper.StructToMap(s)
-	if err != nil {
-		t.Fatalf("StructToMap error: %v", err)
-	}
-
-	if result["name"] != "test" {
-		t.Errorf("expected name 'test', got %v", result["name"])
-	}
-}
-
-func TestFieldMapperStructToMapNonStruct(t *testing.T) {
-	mapper := NewFieldMapper("json")
-	_, err := mapper.StructToMap("not a struct")
-	if err == nil {
-		t.Error("expected error for non-struct input")
-	}
-}
-
-func TestFieldMapperMapToStruct(t *testing.T) {
-	type Inner struct {
-		Value string `json:"value"`
-	}
-	type TestStruct struct {
-		Name    string `json:"name"`
-		Count   int    `json:"count"`
-		Enabled bool   `json:"enabled"`
-		Inner   Inner  `json:"inner"`
-	}
-
-	data := map[string]any{
-		"name":    "test",
-		"count":   float64(42), // JSON numbers are float64
-		"enabled": true,
-		"inner": map[string]any{
-			"value": "nested",
-		},
-	}
-
-	mapper := NewFieldMapper("json")
-	var result TestStruct
-	if err := mapper.MapToStruct(data, &result); err != nil {
-		t.Fatalf("MapToStruct error: %v", err)
-	}
-
-	if result.Name != "test" {
-		t.Errorf("expected name 'test', got %q", result.Name)
-	}
-	if result.Count != 42 {
-		t.Errorf("expected count 42, got %d", result.Count)
-	}
-	if !result.Enabled {
-		t.Error("expected enabled true")
-	}
-	if result.Inner.Value != "nested" {
-		t.Errorf("expected inner.value 'nested', got %q", result.Inner.Value)
-	}
-}
-
-func TestFieldMapperMapToStructNonPointer(t *testing.T) {
-	type TestStruct struct{}
-	mapper := NewFieldMapper("json")
-
-	var result TestStruct
-	err := mapper.MapToStruct(map[string]any{}, result) // Not a pointer
-	if err == nil {
-		t.Error("expected error for non-pointer target")
-	}
-}
-
-func TestFieldMapperMapToStructNilPointer(t *testing.T) {
-	mapper := NewFieldMapper("json")
-	var result *struct{ Name string }
-	err := mapper.MapToStruct(map[string]any{}, result) // Nil pointer
-	if err == nil {
-		t.Error("expected error for nil pointer target")
-	}
-}
-
-func TestFieldMapperCustomTag(t *testing.T) {
-	type TestStruct struct {
-		Name string `yaml:"name"`
-	}
-
-	mapper := NewFieldMapper("yaml")
-	result, err := mapper.StructToMap(TestStruct{Name: "test"})
-	if err != nil {
-		t.Fatalf("StructToMap error: %v", err)
-	}
-
-	if result["name"] != "test" {
-		t.Errorf("expected name 'test', got %v", result["name"])
-	}
-}
-
-func TestFieldMapperEmptyTag(t *testing.T) {
-	mapper := NewFieldMapper("")
-	if mapper.tagName != "json" {
-		t.Errorf("expected default tagName 'json', got %q", mapper.tagName)
-	}
-}
-
-func TestFieldMapperOmitempty(t *testing.T) {
-	type TestStruct struct {
-		Name  string `json:"name,omitempty"`
-		Value int    `json:"value,omitempty"`
-	}
-
-	mapper := NewFieldMapper("json")
-	result, err := mapper.StructToMap(TestStruct{}) // All zero values
-	if err != nil {
-		t.Fatalf("StructToMap error: %v", err)
-	}
-
-	if _, exists := result["name"]; exists {
-		t.Error("empty name should be omitted")
-	}
-	if _, exists := result["value"]; exists {
-		t.Error("zero value should be omitted")
+	if result.Host != "localhost" || result.Port != 8080 {
+		t.Errorf("unexpected result: %+v", result)
 	}
 }
 
@@ -712,120 +498,51 @@ func TestIsBindError(t *testing.T) {
 	}
 }
 
-func TestChainValidators(t *testing.T) {
-	validator1Called := false
-	validator2Called := false
-
-	v1 := ValidatorFunc(func(v any) error {
-		validator1Called = true
-		return nil
-	})
-	v2 := ValidatorFunc(func(v any) error {
-		validator2Called = true
-		return nil
-	})
-
-	chain := ChainValidators(v1, v2)
-	if err := chain.Validate("test"); err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	if !validator1Called || !validator2Called {
-		t.Error("expected both validators to be called")
-	}
-}
-
-func TestChainValidatorsStopsOnError(t *testing.T) {
-	validator2Called := false
-
-	v1 := ValidatorFunc(func(v any) error {
-		return ErrValidationFailed
-	})
-	v2 := ValidatorFunc(func(v any) error {
-		validator2Called = true
-		return nil
-	})
-
-	chain := ChainValidators(v1, v2)
-	err := chain.Validate("test")
-	if err != ErrValidationFailed {
-		t.Errorf("expected ErrValidationFailed, got %v", err)
-	}
-
-	if validator2Called {
-		t.Error("second validator should not be called after first fails")
-	}
-}
-
-func TestHooksBeforeGetError(t *testing.T) {
+func TestTagValidationRequired(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
-	// Set up test data
-	if err := cfg.Set(ctx, "key", "value"); err != nil {
-		t.Fatalf("Set error: %v", err)
+	type Config struct {
+		Name string `json:"name" validate:"required"`
 	}
 
-	expectedErr := ErrValidationFailed
-	hooks := Hooks{
-		BeforeGet: func(ctx context.Context, key string) error {
-			return expectedErr
-		},
-	}
-
-	b := New(cfg, WithHooks(hooks))
+	b := New(cfg, WithTagValidation())
 	bound := b.Bind()
 
-	var result string
-	err := bound.GetStruct(ctx, "key", &result)
-	if err != expectedErr {
-		t.Errorf("expected %v, got %v", expectedErr, err)
+	// Empty value should fail
+	err := bound.SetStruct(ctx, "key", Config{Name: ""})
+	if err == nil {
+		t.Error("expected validation error for empty required field")
 	}
 }
 
-func TestHooksAfterUnmarshalError(t *testing.T) {
+func TestTagValidationMinMax(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
-	// Set up test data
-	if err := cfg.Set(ctx, "key", "value"); err != nil {
-		t.Fatalf("Set error: %v", err)
+	type Config struct {
+		Port int `json:"port" validate:"min=1,max=65535"`
 	}
 
-	expectedErr := ErrValidationFailed
-	hooks := Hooks{
-		AfterUnmarshal: func(ctx context.Context, key string, target any) error {
-			return expectedErr
-		},
-	}
-
-	b := New(cfg, WithHooks(hooks))
+	b := New(cfg, WithTagValidation())
 	bound := b.Bind()
 
-	var result string
-	err := bound.GetStruct(ctx, "key", &result)
-	if err != expectedErr {
-		t.Errorf("expected %v, got %v", expectedErr, err)
-	}
-}
-
-func TestHooksBeforeSetError(t *testing.T) {
-	ctx := context.Background()
-	cfg := setupTestConfig(t)
-
-	expectedErr := ErrValidationFailed
-	hooks := Hooks{
-		BeforeSet: func(ctx context.Context, key string, value any) error {
-			return expectedErr
-		},
+	// Below min should fail
+	err := bound.SetStruct(ctx, "key", Config{Port: 0})
+	if err == nil {
+		t.Error("expected validation error for port below min")
 	}
 
-	b := New(cfg, WithHooks(hooks))
-	bound := b.Bind()
+	// Above max should fail
+	err = bound.SetStruct(ctx, "key2", Config{Port: 70000})
+	if err == nil {
+		t.Error("expected validation error for port above max")
+	}
 
-	err := bound.SetStruct(ctx, "key", "value")
-	if err != expectedErr {
-		t.Errorf("expected %v, got %v", expectedErr, err)
+	// Valid value should pass
+	err = bound.SetStruct(ctx, "key3", Config{Port: 8080})
+	if err != nil {
+		t.Errorf("unexpected error for valid port: %v", err)
 	}
 }
 
@@ -833,43 +550,17 @@ func TestSetStructValidationError(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
-	validator := ValidatorFunc(func(v any) error {
-		return ErrValidationFailed
-	})
-
-	b := New(cfg, WithValidator(validator))
-	bound := b.Bind()
-
-	err := bound.SetStruct(ctx, "key", "value")
-	if !IsValidationError(err) {
-		t.Errorf("expected ValidationError, got %v", err)
-	}
-}
-
-func TestBindPrefixValidationError(t *testing.T) {
-	ctx := context.Background()
-	cfg := setupTestConfig(t)
-
-	// Set up test data
-	if err := cfg.Set(ctx, "prefix/name", "value"); err != nil {
-		t.Fatalf("Set error: %v", err)
-	}
-
-	validator := ValidatorFunc(func(v any) error {
-		return ErrValidationFailed
-	})
-
 	type Config struct {
-		Name string `json:"name"`
+		Value string `json:"value" validate:"required"`
 	}
 
-	b := New(cfg, WithValidator(validator))
+	b := New(cfg, WithTagValidation())
 	bound := b.Bind()
 
-	var result Config
-	err := bound.BindPrefix(ctx, "prefix", &result)
-	if !IsValidationError(err) {
-		t.Errorf("expected ValidationError, got %v", err)
+	// Empty required field should return validation error
+	err := bound.SetStruct(ctx, "key", Config{Value: ""})
+	if err == nil {
+		t.Error("expected ValidationError for empty required field")
 	}
 }
 
@@ -877,110 +568,230 @@ func TestGetStructValidationError(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
-	// Set up test data
-	if err := cfg.Set(ctx, "key", "value"); err != nil {
+	// Set up test data with empty value (which will fail validation)
+	if err := cfg.Set(ctx, "key/value", ""); err != nil {
 		t.Fatalf("Set error: %v", err)
 	}
 
-	validator := ValidatorFunc(func(v any) error {
-		return ErrValidationFailed
-	})
+	type Config struct {
+		Value string `json:"value" validate:"required"`
+	}
 
-	b := New(cfg, WithValidator(validator))
+	b := New(cfg, WithTagValidation())
 	bound := b.Bind()
 
-	var result string
+	var result Config
 	err := bound.GetStruct(ctx, "key", &result)
-	if !IsValidationError(err) {
-		t.Errorf("expected ValidationError, got %v", err)
+	if err == nil {
+		t.Error("expected validation error for empty required field")
 	}
 }
 
-func TestFieldMapperSliceOfStructs(t *testing.T) {
-	type Item struct {
-		Name string `json:"name"`
-	}
-	type TestStruct struct {
-		Items []Item `json:"items"`
+func TestBinderValidate(t *testing.T) {
+	cfg := setupTestConfig(t)
+
+	type Config struct {
+		Name string `validate:"required"`
 	}
 
-	s := TestStruct{
-		Items: []Item{{Name: "first"}, {Name: "second"}},
+	// Without tag validation, Validate should always succeed
+	b := New(cfg)
+	if err := b.Validate(Config{Name: ""}); err != nil {
+		t.Errorf("Validate error without tag validation: %v", err)
 	}
 
-	mapper := NewFieldMapper("json")
-	result, err := mapper.StructToMap(s)
-	if err != nil {
-		t.Fatalf("StructToMap error: %v", err)
+	// With tag validation enabled
+	b = New(cfg, WithTagValidation())
+
+	// Should pass for valid value
+	if err := b.Validate(Config{Name: "test"}); err != nil {
+		t.Errorf("unexpected validation error: %v", err)
 	}
 
-	items, ok := result["items"].([]any)
-	if !ok {
-		t.Fatal("expected items to be slice")
-	}
-	if len(items) != 2 {
-		t.Errorf("expected 2 items, got %d", len(items))
+	// Should fail for empty required field
+	if err := b.Validate(Config{Name: ""}); err == nil {
+		t.Error("expected validation error for empty required field")
 	}
 }
 
-func TestFieldMapperPointerField(t *testing.T) {
+func TestFieldMapperStructToFlatMap(t *testing.T) {
 	type Inner struct {
 		Value string `json:"value"`
 	}
 	type TestStruct struct {
-		Inner *Inner `json:"inner,omitempty"`
+		Name  string `json:"name"`
+		Inner Inner  `json:"inner"`
 	}
 
-	// Test with nil pointer
+	s := TestStruct{
+		Name:  "test",
+		Inner: Inner{Value: "nested"},
+	}
+
 	mapper := NewFieldMapper("json")
-	result, err := mapper.StructToMap(TestStruct{})
+	result, err := mapper.StructToFlatMap(s, "prefix")
 	if err != nil {
-		t.Fatalf("StructToMap error: %v", err)
-	}
-	if _, exists := result["inner"]; exists {
-		t.Error("nil pointer should be omitted with omitempty")
+		t.Fatalf("StructToFlatMap error: %v", err)
 	}
 
-	// Test with non-nil pointer
-	inner := &Inner{Value: "test"}
-	result, err = mapper.StructToMap(TestStruct{Inner: inner})
-	if err != nil {
-		t.Fatalf("StructToMap error: %v", err)
+	if result["prefix/name"] != "test" {
+		t.Errorf("expected prefix/name 'test', got %v", result["prefix/name"])
 	}
-	innerMap, ok := result["inner"].(map[string]any)
-	if !ok {
-		t.Fatal("expected inner to be a map")
-	}
-	if innerMap["value"] != "test" {
-		t.Errorf("expected inner.value 'test', got %v", innerMap["value"])
+	if result["prefix/inner/value"] != "nested" {
+		t.Errorf("expected prefix/inner/value 'nested', got %v", result["prefix/inner/value"])
 	}
 }
 
-func TestFieldMapperMapField(t *testing.T) {
+func TestFieldMapperFlatMapToStruct(t *testing.T) {
+	type Inner struct {
+		Value string `json:"value"`
+	}
 	type TestStruct struct {
-		Data map[string]int `json:"data"`
+		Name  string `json:"name"`
+		Inner Inner  `json:"inner"`
 	}
 
-	// Test with nil map
+	data := map[string]any{
+		"prefix/name":        "test",
+		"prefix/inner/value": "nested",
+	}
+
 	mapper := NewFieldMapper("json")
-	result, err := mapper.StructToMap(TestStruct{})
-	if err != nil {
-		t.Fatalf("StructToMap error: %v", err)
-	}
-	if result["data"] != nil {
-		t.Error("nil map should be nil in result")
+	var result TestStruct
+	if err := mapper.FlatMapToStruct(data, "prefix", &result); err != nil {
+		t.Fatalf("FlatMapToStruct error: %v", err)
 	}
 
-	// Test with non-nil map
-	result, err = mapper.StructToMap(TestStruct{Data: map[string]int{"a": 1}})
+	if result.Name != "test" {
+		t.Errorf("expected name 'test', got %q", result.Name)
+	}
+	if result.Inner.Value != "nested" {
+		t.Errorf("expected inner.value 'nested', got %q", result.Inner.Value)
+	}
+}
+
+func TestFieldMapperIgnoredField(t *testing.T) {
+	type TestStruct struct {
+		Name     string `json:"name"`
+		Password string `json:"-"`
+	}
+
+	s := TestStruct{
+		Name:     "test",
+		Password: "secret",
+	}
+
+	mapper := NewFieldMapper("json")
+	result, err := mapper.StructToFlatMap(s, "")
 	if err != nil {
-		t.Fatalf("StructToMap error: %v", err)
+		t.Fatalf("StructToFlatMap error: %v", err)
 	}
-	data, ok := result["data"].(map[string]int)
-	if !ok {
-		t.Fatal("expected data to be a map")
+
+	if result["name"] != "test" {
+		t.Errorf("expected name 'test', got %v", result["name"])
 	}
-	if data["a"] != 1 {
-		t.Errorf("expected data[a] = 1, got %v", data["a"])
+	if _, exists := result["Password"]; exists {
+		t.Error("ignored field should not be in result")
+	}
+	if _, exists := result["-"]; exists {
+		t.Error("ignored field should not be in result with '-' key")
+	}
+}
+
+func TestFieldMapperOmitempty(t *testing.T) {
+	type TestStruct struct {
+		Name  string `json:"name,omitempty"`
+		Value int    `json:"value,omitempty"`
+	}
+
+	mapper := NewFieldMapper("json")
+	result, err := mapper.StructToFlatMap(TestStruct{}, "") // All zero values
+	if err != nil {
+		t.Fatalf("StructToFlatMap error: %v", err)
+	}
+
+	if _, exists := result["name"]; exists {
+		t.Error("empty name should be omitted")
+	}
+	if _, exists := result["value"]; exists {
+		t.Error("zero value should be omitted")
+	}
+}
+
+func TestSetStructValidationFailsAtomically(t *testing.T) {
+	ctx := context.Background()
+	cfg := setupTestConfig(t)
+
+	type Config struct {
+		Name  string `json:"name" validate:"required"`
+		Value string `json:"value" validate:"required"`
+	}
+
+	b := New(cfg, WithTagValidation())
+	bound := b.Bind()
+
+	// One field is empty, should fail validation
+	err := bound.SetStruct(ctx, "test", Config{Name: "valid", Value: ""})
+	if err == nil {
+		t.Error("expected validation error for empty required field")
+	}
+
+	// Verify nothing was written - the valid field should NOT be in the store
+	_, err = cfg.Get(ctx, "test/name")
+	if !config.IsNotFound(err) {
+		t.Error("expected test/name to not exist after failed validation")
+	}
+
+	_, err = cfg.Get(ctx, "test/value")
+	if !config.IsNotFound(err) {
+		t.Error("expected test/value to not exist after failed validation")
+	}
+}
+
+func TestTagValidationEnum(t *testing.T) {
+	ctx := context.Background()
+	cfg := setupTestConfig(t)
+
+	type Config struct {
+		Level string `json:"level" validate:"enum=debug|info|warn|error"`
+	}
+
+	b := New(cfg, WithTagValidation())
+	bound := b.Bind()
+
+	// Valid enum value should pass
+	err := bound.SetStruct(ctx, "log", Config{Level: "info"})
+	if err != nil {
+		t.Errorf("unexpected error for valid enum value: %v", err)
+	}
+
+	// Invalid enum value should fail
+	err = bound.SetStruct(ctx, "log2", Config{Level: "invalid"})
+	if err == nil {
+		t.Error("expected validation error for invalid enum value")
+	}
+}
+
+func TestTagValidationPattern(t *testing.T) {
+	ctx := context.Background()
+	cfg := setupTestConfig(t)
+
+	type Config struct {
+		Email string `json:"email" validate:"pattern=^[a-z]+@[a-z]+\\.[a-z]+$"`
+	}
+
+	b := New(cfg, WithTagValidation())
+	bound := b.Bind()
+
+	// Valid pattern should pass
+	err := bound.SetStruct(ctx, "user", Config{Email: "test@example.com"})
+	if err != nil {
+		t.Errorf("unexpected error for valid pattern: %v", err)
+	}
+
+	// Invalid pattern should fail
+	err = bound.SetStruct(ctx, "user2", Config{Email: "invalid-email"})
+	if err == nil {
+		t.Error("expected validation error for invalid pattern")
 	}
 }
