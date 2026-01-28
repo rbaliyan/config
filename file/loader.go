@@ -78,6 +78,14 @@ func (l *Loader) Register(name string, config any) error {
 	return nil
 }
 
+// MustRegister is like Register but panics on error.
+// Use this during program initialization where invalid registration is a programmer error.
+func (l *Loader) MustRegister(name string, config any) {
+	if err := l.Register(name, config); err != nil {
+		panic(err)
+	}
+}
+
 // Load reads the config file and unmarshals sections into registered structs.
 // Returns an error if the file cannot be read or parsed, or if any registered
 // struct cannot be unmarshaled.
