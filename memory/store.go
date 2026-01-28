@@ -135,9 +135,10 @@ var (
 	_ config.BulkStore     = (*Store)(nil)
 )
 
-// keySeparator is used to separate key components to avoid collisions.
-// Using colon to match the cache key format.
-const keySeparator = ":"
+// keySeparator uses null byte to avoid collisions.
+// Neither namespace nor key can contain null bytes (per validation rules),
+// so "ns\x00key" is guaranteed unique for any (namespace, key) pair.
+const keySeparator = "\x00"
 
 func (s *Store) entryKey(namespace, key string) string {
 	return namespace + keySeparator + key

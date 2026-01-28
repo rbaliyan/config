@@ -45,24 +45,24 @@ type Config interface {
 	Namespace() string
 }
 
-// config is the default Config implementation.
-type config struct {
+// nsConfig is the default Config implementation for a specific namespace.
+type nsConfig struct {
 	namespace string
 	manager   *manager
 }
 
 // Compile-time interface check
-var _ Config = (*config)(nil)
+var _ Config = (*nsConfig)(nil)
 
 // Namespace returns the namespace name.
-func (c *config) Namespace() string {
+func (c *nsConfig) Namespace() string {
 	return c.namespace
 }
 
 // Get retrieves a configuration value by key.
 // It first attempts to fetch from the store. If the store is unavailable,
 // it falls back to cached values for resilience.
-func (c *config) Get(ctx context.Context, key string) (Value, error) {
+func (c *nsConfig) Get(ctx context.Context, key string) (Value, error) {
 	if !c.manager.isConnected() {
 		return nil, ErrManagerClosed
 	}
@@ -97,7 +97,7 @@ func (c *config) Get(ctx context.Context, key string) (Value, error) {
 }
 
 // Find returns a page of keys and values matching the filter.
-func (c *config) Find(ctx context.Context, filter Filter) (Page, error) {
+func (c *nsConfig) Find(ctx context.Context, filter Filter) (Page, error) {
 	if !c.manager.isConnected() {
 		return nil, ErrManagerClosed
 	}
@@ -106,7 +106,7 @@ func (c *config) Find(ctx context.Context, filter Filter) (Page, error) {
 }
 
 // Set creates or updates a configuration value.
-func (c *config) Set(ctx context.Context, key string, value any, opts ...SetOption) error {
+func (c *nsConfig) Set(ctx context.Context, key string, value any, opts ...SetOption) error {
 	if !c.manager.isConnected() {
 		return ErrManagerClosed
 	}
@@ -161,7 +161,7 @@ func (c *config) Set(ctx context.Context, key string, value any, opts ...SetOpti
 }
 
 // Delete removes a configuration value by key.
-func (c *config) Delete(ctx context.Context, key string) error {
+func (c *nsConfig) Delete(ctx context.Context, key string) error {
 	if !c.manager.isConnected() {
 		return ErrManagerClosed
 	}

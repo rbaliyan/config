@@ -65,13 +65,20 @@ type Manager interface {
 	// Returns nil if healthy, or an error describing the issue.
 	// Includes watch status - returns an error if watch has consecutive failures.
 	Health(ctx context.Context) error
+}
 
+// ManagerObserver provides observability into the Manager's internal state.
+// Use a type assertion to access these methods:
+//
+//	if obs, ok := mgr.(config.ManagerObserver); ok {
+//	    stats := obs.CacheStats()
+//	    status := obs.WatchStatus()
+//	}
+type ManagerObserver interface {
 	// CacheStats returns statistics about the internal cache.
-	// This can be used for monitoring cache effectiveness.
 	CacheStats() CacheStats
 
 	// WatchStatus returns the current status of the watch connection.
-	// Use this for observability and monitoring.
 	WatchStatus() WatchStatus
 }
 
@@ -98,11 +105,12 @@ type WatchStatus struct {
 
 // manager is the default Manager implementation.
 type manager struct {
-	status int32 // 0=created, 1=connected, 2=closed
-	store  Store
-	cache  cache // internal cache for resilience
-	codec  codec.Codec
-	logger *slog.Logger
+	connectMu sync.Mutex // serializes Connect and Close
+	status    int32      // 0=created, 1=connected, 2=closed
+	store     Store
+	cache     cache // internal cache for resilience
+	codec     codec.Codec
+	logger    *slog.Logger
 
 	watchCancel context.CancelFunc
 	watchWg     sync.WaitGroup
@@ -115,11 +123,14 @@ type manager struct {
 
 	// Config cache
 	configMu sync.RWMutex
-	configs  map[string]*config
+	configs  map[string]*nsConfig
 }
 
-// Compile-time interface check
-var _ Manager = (*manager)(nil)
+// Compile-time interface checks
+var (
+	_ Manager         = (*manager)(nil)
+	_ ManagerObserver = (*manager)(nil)
+)
 
 // New creates a new configuration Manager.
 //
@@ -149,7 +160,7 @@ func New(opts ...Option) (Manager, error) {
 		codec:        o.codec,
 		logger:       o.logger.With("component", "config"),
 		watchBackoff: o.watchBackoff,
-		configs:      make(map[string]*config),
+		configs:      make(map[string]*nsConfig),
 		cache:        cache,
 	}
 
@@ -166,6 +177,9 @@ func (m *manager) Connect(ctx context.Context) error {
 	if m.store == nil {
 		return ErrStoreNotConnected
 	}
+
+	m.connectMu.Lock()
+	defer m.connectMu.Unlock()
 
 	if !atomic.CompareAndSwapInt32(&m.status, 0, 1) {
 		return ErrManagerClosed
@@ -192,9 +206,12 @@ func (m *manager) Connect(ctx context.Context) error {
 
 // Close stops watching and releases resources.
 func (m *manager) Close(ctx context.Context) error {
+	m.connectMu.Lock()
 	if !atomic.CompareAndSwapInt32(&m.status, 1, 2) {
+		m.connectMu.Unlock()
 		return nil // Already closed or not connected
 	}
+	m.connectMu.Unlock()
 
 	// Stop watching
 	if m.watchCancel != nil {
@@ -237,7 +254,7 @@ func (m *manager) Namespace(name string) Config {
 		return cfg
 	}
 
-	cfg = &config{
+	cfg = &nsConfig{
 		namespace: name,
 		manager:   m,
 	}

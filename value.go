@@ -362,8 +362,14 @@ func (v *Val) Int64() (int64, error) {
 	case int64:
 		return val, nil
 	case float32:
+		if float32(int64(val)) != val {
+			return 0, fmt.Errorf("%w: cannot convert float32 %v to int64 without truncation", ErrTypeMismatch, val)
+		}
 		return int64(val), nil
 	case float64:
+		if val != math.Trunc(val) || math.IsInf(val, 0) || math.IsNaN(val) {
+			return 0, fmt.Errorf("%w: cannot convert float64 %v to int64 without truncation", ErrTypeMismatch, val)
+		}
 		return int64(val), nil
 	case string:
 		if i, err := strconv.ParseInt(val, 10, 64); err == nil {

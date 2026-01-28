@@ -68,6 +68,8 @@ type watchEntry struct {
 	ch        chan config.ChangeEvent
 	ctx       context.Context
 	cancel    context.CancelFunc
+	mu        sync.Mutex // protects send/close operations
+	closed    bool       // guarded by mu
 	closeOnce sync.Once
 }
 
@@ -632,9 +634,12 @@ func (s *Store) Watch(ctx context.Context, filter config.WatchFilter) (<-chan co
 		delete(s.watchers, entry)
 		s.watchMu.Unlock()
 
-		// Close channel safely using sync.Once
+		// Close channel safely with mutex to prevent race with dispatchEvent
 		entry.closeOnce.Do(func() {
+			entry.mu.Lock()
+			entry.closed = true
 			close(ch)
+			entry.mu.Unlock()
 		})
 	}()
 
@@ -933,18 +938,34 @@ func (s *Store) listenNotifications() {
 
 func (s *Store) dispatchEvent(event config.ChangeEvent) {
 	s.watchMu.RLock()
-	defer s.watchMu.RUnlock()
-
+	entries := make([]*watchEntry, 0, len(s.watchers))
 	for entry := range s.watchers {
+		entries = append(entries, entry)
+	}
+	s.watchMu.RUnlock()
+
+	for _, entry := range entries {
 		if s.matchesFilter(event, entry.filter) {
-			select {
-			case entry.ch <- event:
-			case <-entry.ctx.Done():
-			default:
-				// Channel full, skip
-			}
+			s.sendToWatcher(entry, event)
 		}
 	}
+}
+
+// sendToWatcher safely sends an event to a watcher, handling closed channels.
+func (s *Store) sendToWatcher(we *watchEntry, event config.ChangeEvent) {
+	we.mu.Lock()
+	if we.closed {
+		we.mu.Unlock()
+		return
+	}
+
+	select {
+	case we.ch <- event:
+	case <-we.ctx.Done():
+	default:
+		// Channel full, skip
+	}
+	we.mu.Unlock()
 }
 
 func (s *Store) matchesFilter(event config.ChangeEvent, filter config.WatchFilter) bool {
