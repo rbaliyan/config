@@ -1,9 +1,10 @@
 module github.com/rbaliyan/config
 
-go 1.25.5
+go 1.24.0
 
 require (
 	github.com/BurntSushi/toml v1.3.2
+	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/lib/pq v1.10.9
 	go.mongodb.org/mongo-driver v1.17.6
@@ -16,7 +17,6 @@ require (
 require (
 	github.com/go-logr/logr v1.3.0 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/klauspost/compress v1.16.7 // indirect

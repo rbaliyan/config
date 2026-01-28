@@ -135,6 +135,40 @@ func (l *Loader) Get(name string) any {
 	return l.configs[name]
 }
 
+// NameOf returns the registration name for the given config pointer,
+// or "" if the pointer was not registered. The argument must be the
+// exact pointer previously passed to Register or MustRegister.
+func (l *Loader) NameOf(config any) string {
+	if config == nil {
+		return ""
+	}
+	rv := reflect.ValueOf(config)
+	if rv.Kind() != reflect.Ptr {
+		return ""
+	}
+	ptr := rv.Pointer()
+
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	for name, registered := range l.configs {
+		if reflect.ValueOf(registered).Pointer() == ptr {
+			return name
+		}
+	}
+	return ""
+}
+
+// Names returns all registered config names.
+func (l *Loader) Names() []string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	names := make([]string, 0, len(l.configs))
+	for name := range l.configs {
+		names = append(names, name)
+	}
+	return names
+}
+
 // Raw returns the raw parsed map for a given top-level key.
 // Returns nil if the key does not exist or Load has not been called.
 func (l *Loader) Raw(name string) map[string]any {

@@ -664,6 +664,61 @@ func TestLoader_Reload(t *testing.T) {
 	}
 }
 
+func TestLoader_NameOf(t *testing.T) {
+	var db dbConfig
+	var http httpConfig
+
+	loader := New("testdata/config.yaml")
+	mustRegister(t, loader, "db", &db)
+	mustRegister(t, loader, "http", &http)
+
+	// Registered pointers should resolve
+	if name := loader.NameOf(&db); name != "db" {
+		t.Errorf("NameOf(&db) = %q, want %q", name, "db")
+	}
+	if name := loader.NameOf(&http); name != "http" {
+		t.Errorf("NameOf(&http) = %q, want %q", name, "http")
+	}
+
+	// Unregistered pointer
+	var other dbConfig
+	if name := loader.NameOf(&other); name != "" {
+		t.Errorf("NameOf(&other) = %q, want empty", name)
+	}
+
+	// nil and non-pointer
+	if name := loader.NameOf(nil); name != "" {
+		t.Errorf("NameOf(nil) = %q, want empty", name)
+	}
+	if name := loader.NameOf(db); name != "" {
+		t.Errorf("NameOf(value) = %q, want empty", name)
+	}
+}
+
+func TestLoader_Names(t *testing.T) {
+	loader := New("testdata/config.yaml")
+	var db dbConfig
+	var http httpConfig
+	mustRegister(t, loader, "db", &db)
+	mustRegister(t, loader, "http", &http)
+
+	names := loader.Names()
+	if len(names) != 2 {
+		t.Fatalf("Names() len = %d, want 2", len(names))
+	}
+
+	nameSet := map[string]bool{}
+	for _, n := range names {
+		nameSet[n] = true
+	}
+	if !nameSet["db"] {
+		t.Error("Names() missing 'db'")
+	}
+	if !nameSet["http"] {
+		t.Error("Names() missing 'http'")
+	}
+}
+
 func TestLoader_AllSettings_DeepCopy(t *testing.T) {
 	loader := New("testdata/config.yaml")
 	if err := loader.Load(); err != nil {
