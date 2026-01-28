@@ -273,19 +273,11 @@ func (s *InstrumentedStore) Find(ctx context.Context, namespace string, filter c
 
 // Watch returns a channel that receives change events.
 // This is an internal method used by the Manager for cache invalidation.
-// Only available if the underlying store supports watching.
+// Delegates directly to the underlying store's Watch method.
 func (s *InstrumentedStore) Watch(ctx context.Context, filter config.WatchFilter) (<-chan config.ChangeEvent, error) {
-	// Check if underlying store supports Watch
-	ws, ok := s.store.(interface {
-		Watch(ctx context.Context, filter config.WatchFilter) (<-chan config.ChangeEvent, error)
-	})
-	if !ok {
-		return nil, config.ErrWatchNotSupported
-	}
-
 	if !s.opts.enableTraces {
 		start := time.Now()
-		ch, err := ws.Watch(ctx, filter)
+		ch, err := s.store.Watch(ctx, filter)
 		s.recordOperation(ctx, "watch", "", "", start, err)
 		return ch, err
 	}
@@ -295,7 +287,7 @@ func (s *InstrumentedStore) Watch(ctx context.Context, filter config.WatchFilter
 	defer span.End()
 
 	start := time.Now()
-	ch, err := ws.Watch(ctx, filter)
+	ch, err := s.store.Watch(ctx, filter)
 	s.recordOperation(ctx, "watch", "", "", start, err)
 
 	if err != nil {
@@ -471,15 +463,17 @@ func (s *InstrumentedStore) DeleteMany(ctx context.Context, namespace string, ke
 	return deleted, err
 }
 
-// commonAttributes returns common span attributes
+// commonAttributes returns common span attributes.
+// The returned slice has length == capacity, so callers can safely use
+// append() without aliasing the backing array.
 func (s *InstrumentedStore) commonAttributes() []attribute.KeyValue {
-	attrs := []attribute.KeyValue{
-		attribute.String("config.backend", s.opts.backendName),
-	}
+	attrs := make([]attribute.KeyValue, 0, 2)
+	attrs = append(attrs, attribute.String("config.backend", s.opts.backendName))
 	if s.opts.serviceName != "" {
 		attrs = append(attrs, attribute.String("service.name", s.opts.serviceName))
 	}
-	return attrs
+	// Return a slice with len==cap to force callers to allocate on append
+	return attrs[:len(attrs):len(attrs)]
 }
 
 // recordOperation records metrics for an operation

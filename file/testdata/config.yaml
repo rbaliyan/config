@@ -1,0 +1,42 @@
+db:
+  host: localhost
+  port: 5432
+  max_pool_size: 50
+  connect_timeout: "10s"
+  stores:
+    global: "mongodb://global:27017"
+    regional: "mongodb://regional:27017"
+
+http:
+  host: "0.0.0.0"
+  port: 8080
+  read_timeout: "600s"
+  write_timeout: "600s"
+  cors:
+    - "https://*.example.com"
+    - "http://localhost:*"
+
+auth:
+  enabled: true
+  provider: "auth0"
+  jwt_expiry: "24h"
+  auth0:
+    domain: "dev.auth0.com"
+    client_id: "test-client-id"
+    event_storage:
+      enabled: true
+      skip_event_types:
+        - "user.updated"
+        - "user.login"
+
+temporal:
+  host: "localhost"
+  port: 7233
+  namespace: "dev"
+  task_queue: "dev-queue"
+  connection_timeout: "30s"
+  retry:
+    initial_interval: "1s"
+    backoff_coefficient: 2.0
+    maximum_interval: "60s"
+    maximum_attempts: 3

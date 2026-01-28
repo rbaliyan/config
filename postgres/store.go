@@ -359,7 +359,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	var query string
 	var result sql.Result
 
-	writeMode := value.WriteMode()
+	writeMode := config.GetWriteMode(value)
 	switch writeMode {
 	case config.WriteModeCreate:
 		// Insert only if not exists - use ON CONFLICT DO NOTHING
@@ -578,6 +578,9 @@ func (s *Store) executeListQuery(ctx context.Context, query string, args []any) 
 			config.WithValueEntryID(fmt.Sprintf("%d", id)),
 		)
 		if err != nil {
+			slog.Warn("postgres: skipping corrupt entry in list query",
+				"key", k, "namespace", ns, "error", err)
+			lastID = id
 			continue
 		}
 
@@ -749,6 +752,8 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 			config.WithValueEntryID(fmt.Sprintf("%d", id)),
 		)
 		if err != nil {
+			slog.Warn("postgres: skipping corrupt entry in get_many",
+				"key", k, "namespace", ns, "error", err)
 			continue
 		}
 		results[k] = val
@@ -778,14 +783,9 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 	keyErrors := make(map[string]error)
 	succeeded := make([]string, 0, len(values))
 
-	// Use a transaction for atomicity
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return config.WrapStoreError("set_many", "postgres", "", err)
-	}
-	defer tx.Rollback()
-
-	// Prepare the upsert statement
+	// Individual upserts — partial success is acceptable, so we don't use a
+	// transaction. Each key is written independently; failures on one key
+	// do not prevent writes to other keys.
 	query := fmt.Sprintf(`
 		INSERT INTO %s (key, namespace, value, codec, type, version, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, 1, NOW(), NOW())
@@ -796,12 +796,6 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			version = %s.version + 1,
 			updated_at = NOW()
 	`, s.cfg.Table, s.cfg.Table)
-
-	stmt, err := tx.PrepareContext(ctx, query)
-	if err != nil {
-		return config.WrapStoreError("set_many", "postgres", "", err)
-	}
-	defer stmt.Close()
 
 	for key, value := range values {
 		if key == "" {
@@ -815,17 +809,12 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			continue
 		}
 
-		_, err = stmt.ExecContext(ctx, key, namespace, data, value.Codec(), value.Type())
+		_, err = s.db.ExecContext(ctx, query, key, namespace, data, value.Codec(), value.Type())
 		if err != nil {
 			keyErrors[key] = config.WrapStoreError("set_many", "postgres", key, err)
 		} else {
 			succeeded = append(succeeded, key)
 		}
-	}
-
-	// Commit even if some entries failed - partial success is acceptable
-	if err := tx.Commit(); err != nil {
-		return config.WrapStoreError("set_many", "postgres", "", err)
 	}
 
 	if len(keyErrors) > 0 {

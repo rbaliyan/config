@@ -170,7 +170,10 @@ func (s *Store) Close(ctx context.Context) error {
 	for _, entry := range toClose {
 		entry.cancel()
 		entry.closeOnce.Do(func() {
+			entry.mu.Lock()
+			entry.closed = true
 			close(entry.ch)
+			entry.mu.Unlock()
 		})
 	}
 
@@ -224,7 +227,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	existing, exists := s.entries[ek]
 
 	// Check write mode conditions
-	writeMode := value.WriteMode()
+	writeMode := config.GetWriteMode(value)
 	switch writeMode {
 	case config.WriteModeCreate:
 		if exists {

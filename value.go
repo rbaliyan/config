@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 )
 
 // Value provides type-safe access to configuration values.
+// This interface is focused on read operations. Write-related concerns
+// like WriteMode are accessed via the WriteModer interface.
 type Value interface {
 	// Marshal serializes the value to bytes using the configured codec.
 	Marshal() ([]byte, error)
@@ -37,9 +40,12 @@ type Value interface {
 
 	// Metadata returns associated metadata, if any.
 	Metadata() Metadata
+}
 
-	// WriteMode returns the write mode for this value.
-	// Used by stores to determine conditional write behavior.
+// WriteModer is an optional interface for values that carry write mode hints.
+// Store implementations check for this interface in Set operations to determine
+// conditional write behavior (create-only, update-only, or upsert).
+type WriteModer interface {
 	WriteMode() WriteMode
 }
 
@@ -167,7 +173,7 @@ func WithValueWriteMode(mode WriteMode) ValueOption {
 func NewValue(data any, opts ...ValueOption) Value {
 	v := &Val{
 		raw:      data,
-		dataType: detectType(data),
+		dataType: DetectType(data),
 		codec:    codec.Default(),
 	}
 
@@ -193,7 +199,7 @@ func NewValueFromBytes(data []byte, codecName string, opts ...ValueOption) (Valu
 	v := &Val{
 		raw:      raw,
 		data:     data,
-		dataType: detectType(raw),
+		dataType: DetectType(raw),
 		codec:    c,
 	}
 
@@ -265,7 +271,7 @@ var _ Value = (*Val)(nil)
 // Marshal serializes the value to bytes using the configured codec.
 func (v *Val) Marshal() ([]byte, error) {
 	if v.raw == nil {
-		return nil, ErrNotFound
+		return nil, ErrInvalidValue
 	}
 
 	// If we already have encoded data and it matches the raw value, return it
@@ -320,8 +326,22 @@ func (v *Val) Metadata() Metadata {
 }
 
 // WriteMode returns the write mode for this value.
+// Val implements WriteModer.
 func (v *Val) WriteMode() WriteMode {
 	return v.writeMode
+}
+
+// Compile-time interface check
+var _ WriteModer = (*Val)(nil)
+
+// GetWriteMode extracts the write mode from a Value.
+// Returns WriteModeUpsert (default) if the value does not implement WriteModer.
+// Store implementations should use this instead of calling WriteMode() directly.
+func GetWriteMode(v Value) WriteMode {
+	if wm, ok := v.(WriteModer); ok {
+		return wm.WriteMode()
+	}
+	return WriteModeUpsert
 }
 
 // Int64 returns the value as int64.
@@ -436,28 +456,30 @@ func (v *Val) Bool() (bool, error) {
 
 // Helper functions
 
-func detectType(data any) Type {
-	switch data.(type) {
-	case int, int8, int16, int32, int64:
+// DetectType maps a Go value to its config Type.
+// It handles JSON-decoded numbers (float64 that are actually integers,
+// json.Number) and unsigned integer types.
+func DetectType(data any) Type {
+	switch val := data.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		return TypeInt
-	case float32, float64:
+	case float64:
+		// JSON decodes all numbers as float64; detect integers.
+		if val == math.Trunc(val) && !math.IsInf(val, 0) && !math.IsNaN(val) {
+			return TypeInt
+		}
+		return TypeFloat
+	case float32:
+		return TypeFloat
+	case json.Number:
+		if _, err := val.Int64(); err == nil {
+			return TypeInt
+		}
 		return TypeFloat
 	case string:
 		return TypeString
 	case bool:
 		return TypeBool
-	case map[string]int:
-		return TypeMapStringInt
-	case map[string]float64:
-		return TypeMapStringFloat
-	case map[string]string:
-		return TypeMapStringString
-	case []int:
-		return TypeListInt
-	case []float64:
-		return TypeListFloat
-	case []string:
-		return TypeListString
 	default:
 		return TypeCustom
 	}

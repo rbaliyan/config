@@ -131,7 +131,7 @@ var _ Manager = (*manager)(nil)
 // This ensures your application keeps working during database outages.
 //
 // Returns an error if cache initialization fails.
-func New(opts ...Option) (*manager, error) {
+func New(opts ...Option) (Manager, error) {
 	o := newManagerOptions()
 	for _, opt := range opts {
 		opt(o)

@@ -519,7 +519,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 
 	now := time.Now().UTC()
 
-	writeMode := value.WriteMode()
+	writeMode := config.GetWriteMode(value)
 	switch writeMode {
 	case config.WriteModeCreate:
 		// Insert only - will fail if document exists due to unique index
@@ -708,6 +708,9 @@ func (s *Store) executeListQuery(ctx context.Context, filter bson.M, opts *optio
 		}
 		val, err := doc.toValue()
 		if err != nil {
+			s.logger().Warn("skipping corrupt entry in list query",
+				"key", doc.Key, "namespace", doc.Namespace, "error", err)
+			lastID = doc.ID
 			continue
 		}
 		results[doc.Key] = val
@@ -863,6 +866,8 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 		}
 		val, err := doc.toValue()
 		if err != nil {
+			s.logger().Warn("skipping corrupt entry in get_many",
+				"key", doc.Key, "namespace", doc.Namespace, "error", err)
 			continue
 		}
 		results[doc.Key] = val

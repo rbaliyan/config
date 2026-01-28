@@ -134,7 +134,7 @@ func (c *config) Set(ctx context.Context, key string, value any, opts ...SetOpti
 	// Determine type
 	typ := setOpts.typ
 	if typ == TypeUnknown {
-		typ = detectType(value)
+		typ = DetectType(value)
 	}
 
 	// Create Value with write mode

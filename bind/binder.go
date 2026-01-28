@@ -4,6 +4,11 @@ package bind
 
 import (
 	"context"
+	"fmt"
+	"hash/fnv"
+	"io"
+	"maps"
+	"slices"
 
 	"github.com/rbaliyan/config"
 	"github.com/rbaliyan/config/codec"
@@ -70,6 +75,12 @@ type StructConfig interface {
 	// Validates the result if validators are configured.
 	GetStruct(ctx context.Context, key string, target any) error
 
+	// GetStructDigest is like GetStruct but also returns an FNV-64a digest
+	// computed from the raw config values. Two calls that return the same
+	// digest populated the target with identical data. This allows callers
+	// to detect changes without comparing structs via reflection.
+	GetStructDigest(ctx context.Context, key string, target any) (uint64, error)
+
 	// SetStruct flattens the struct into individual keys and stores them.
 	// For example, SetStruct(ctx, "database", cfg) where cfg has Host and Port fields
 	// will set database/host and database/port keys.
@@ -123,6 +134,56 @@ func (bc *boundConfig) GetStruct(ctx context.Context, key string, target any) er
 	}
 
 	return nil
+}
+
+// GetStructDigest is like GetStruct but also returns an FNV-64a digest
+// computed from the raw config values before struct mapping.
+func (bc *boundConfig) GetStructDigest(ctx context.Context, key string, target any) (uint64, error) {
+	page, err := bc.Config.Find(ctx, config.NewFilter().WithPrefix(key).Build())
+	if err != nil {
+		return 0, err
+	}
+
+	entries := page.Results()
+	if len(entries) == 0 {
+		return 0, &config.KeyNotFoundError{Key: key}
+	}
+
+	// Convert entries to flat map
+	data := make(map[string]any)
+	for entryKey, val := range entries {
+		var value any
+		if err := val.Unmarshal(&value); err != nil {
+			continue
+		}
+		data[entryKey] = value
+	}
+
+	// Compute FNV-64a digest from sorted keys for deterministic ordering
+	h := fnv.New64a()
+	for _, k := range slices.Sorted(maps.Keys(data)) {
+		io.WriteString(h, k)
+		fmt.Fprint(h, data[k])
+	}
+	digest := h.Sum64()
+
+	// Use the field mapper to convert flat map to struct
+	if err := bc.binder.mapper.FlatMapToStruct(data, key, target); err != nil {
+		return 0, &BindError{
+			Key: key,
+			Op:  "unmarshal",
+			Err: err,
+		}
+	}
+
+	// Run tag validation if configured
+	if bc.binder.validator != nil {
+		if err := bc.binder.validator.Validate(target); err != nil {
+			return 0, err
+		}
+	}
+
+	return digest, nil
 }
 
 // SetStruct flattens the struct into individual keys and stores them.

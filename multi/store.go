@@ -20,7 +20,6 @@ package multi
 import (
 	"context"
 	"errors"
-	"sync"
 
 	"github.com/rbaliyan/config"
 )
@@ -53,10 +52,11 @@ const (
 )
 
 // Store wraps multiple stores with configurable fallback behavior.
+// The stores slice is immutable after construction; each underlying store
+// provides its own concurrency protection.
 type Store struct {
 	stores   []config.Store
 	strategy Strategy
-	mu       sync.RWMutex
 }
 
 // Option configures the multi-store.
@@ -69,7 +69,7 @@ func WithStrategy(s Strategy) Option {
 	}
 }
 
-// NewStore creates a multi-store from the given stores.
+// NewStore creates a multi-store from the given stores with optional configuration.
 // The first store is considered the primary.
 //
 // Example:
@@ -77,18 +77,19 @@ func WithStrategy(s Strategy) Option {
 //	// Cache + backend pattern
 //	cacheStore := memory.NewStore()
 //	backendStore := mongodb.NewStore(client, "config", "entries")
-//	store := multi.NewStore(cacheStore, backendStore, multi.WithStrategy(multi.StrategyReadThrough))
+//	store := multi.NewStore(
+//	    []config.Store{cacheStore, backendStore},
+//	    multi.WithStrategy(multi.StrategyReadThrough),
+//	)
 //
 //	// Primary + backup pattern
 //	primaryStore := postgres.NewStore(primaryDB)
 //	backupStore := postgres.NewStore(backupDB)
-//	store := multi.NewStore(primaryStore, backupStore, multi.WithStrategy(multi.StrategyFallback))
-func NewStore(stores ...config.Store) *Store {
-	return NewStoreWithOptions(stores, nil)
-}
-
-// NewStoreWithOptions creates a multi-store with options.
-func NewStoreWithOptions(stores []config.Store, opts []Option) *Store {
+//	store := multi.NewStore(
+//	    []config.Store{primaryStore, backupStore},
+//	    multi.WithStrategy(multi.StrategyFallback),
+//	)
+func NewStore(stores []config.Store, opts ...Option) *Store {
 	ms := &Store{
 		stores:   stores,
 		strategy: StrategyFallback,
@@ -104,9 +105,6 @@ var _ config.Store = (*Store)(nil)
 
 // Connect connects all underlying stores.
 func (ms *Store) Connect(ctx context.Context) error {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
 	var errs []error
 	for _, s := range ms.stores {
 		if err := s.Connect(ctx); err != nil {
@@ -122,9 +120,6 @@ func (ms *Store) Connect(ctx context.Context) error {
 
 // Close closes all underlying stores.
 func (ms *Store) Close(ctx context.Context) error {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
 	var errs []error
 	for _, s := range ms.stores {
 		if err := s.Close(ctx); err != nil {
@@ -140,9 +135,6 @@ func (ms *Store) Close(ctx context.Context) error {
 
 // Get retrieves a value, trying stores in order until one succeeds.
 func (ms *Store) Get(ctx context.Context, namespace, key string) (config.Value, error) {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
-
 	var lastErr error
 	for i, s := range ms.stores {
 		val, err := s.Get(ctx, namespace, key)
@@ -170,9 +162,6 @@ func (ms *Store) Get(ctx context.Context, namespace, key string) (config.Value, 
 // Set creates or updates a value based on the strategy.
 // Returns the stored Value with updated metadata from the first successful store.
 func (ms *Store) Set(ctx context.Context, namespace, key string, value config.Value) (config.Value, error) {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
 	if len(ms.stores) == 0 {
 		return nil, config.ErrStoreNotConnected
 	}
@@ -200,9 +189,6 @@ func (ms *Store) Set(ctx context.Context, namespace, key string, value config.Va
 
 // Delete removes a value from all stores.
 func (ms *Store) Delete(ctx context.Context, namespace, key string) error {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
 	if len(ms.stores) == 0 {
 		return config.ErrStoreNotConnected
 	}
@@ -235,9 +221,6 @@ func (ms *Store) Delete(ctx context.Context, namespace, key string) error {
 // For cache scenarios, the primary (cache) store may not have all entries;
 // use Get for individual keys if you need fallback behavior.
 func (ms *Store) Find(ctx context.Context, namespace string, filter config.Filter) (config.Page, error) {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
-
 	if len(ms.stores) == 0 {
 		return nil, config.ErrStoreNotConnected
 	}
@@ -252,19 +235,18 @@ func (ms *Store) Find(ctx context.Context, namespace string, filter config.Filte
 // This is intentional to avoid duplicate events. For cache + backend scenarios,
 // you typically want to watch the backend (source of truth).
 func (ms *Store) Watch(ctx context.Context, filter config.WatchFilter) (<-chan config.ChangeEvent, error) {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
-
 	if len(ms.stores) == 0 {
 		return nil, config.ErrStoreNotConnected
 	}
 
-	// Find first store that supports watching
+	// Try each store; skip those that don't support watching
 	for _, s := range ms.stores {
-		if ws, ok := s.(interface {
-			Watch(ctx context.Context, filter config.WatchFilter) (<-chan config.ChangeEvent, error)
-		}); ok {
-			return ws.Watch(ctx, filter)
+		ch, err := s.Watch(ctx, filter)
+		if err == nil {
+			return ch, nil
+		}
+		if !errors.Is(err, config.ErrWatchNotSupported) {
+			return nil, err
 		}
 	}
 
@@ -273,8 +255,6 @@ func (ms *Store) Watch(ctx context.Context, filter config.WatchFilter) (<-chan c
 
 // Primary returns the primary (first) store.
 func (ms *Store) Primary() config.Store {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
 	if len(ms.stores) == 0 {
 		return nil
 	}
@@ -283,8 +263,6 @@ func (ms *Store) Primary() config.Store {
 
 // Stores returns all underlying stores.
 func (ms *Store) Stores() []config.Store {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
 	stores := make([]config.Store, len(ms.stores))
 	copy(stores, ms.stores)
 	return stores
@@ -294,9 +272,6 @@ func (ms *Store) Stores() []config.Store {
 // Returns nil if at least one store is healthy (following fallback pattern).
 // Returns an error only if all stores are unhealthy.
 func (ms *Store) Health(ctx context.Context) error {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
-
 	if len(ms.stores) == 0 {
 		return config.ErrStoreNotConnected
 	}
@@ -325,9 +300,6 @@ func (ms *Store) Health(ctx context.Context) error {
 // Stats aggregates statistics from all underlying stores.
 // Returns combined stats from all stores that implement StatsProvider.
 func (ms *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
-
 	if len(ms.stores) == 0 {
 		return nil, config.ErrStoreNotConnected
 	}

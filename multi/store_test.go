@@ -12,7 +12,7 @@ func TestNewStore(t *testing.T) {
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
-	ms := NewStore(store1, store2)
+	ms := NewStore([]config.Store{store1, store2})
 	if ms == nil {
 		t.Fatal("NewStore returned nil")
 	}
@@ -25,7 +25,7 @@ func TestMultiStore_Connect(t *testing.T) {
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
-	ms := NewStore(store1, store2)
+	ms := NewStore([]config.Store{store1, store2})
 	ctx := context.Background()
 
 	if err := ms.Connect(ctx); err != nil {
@@ -37,7 +37,7 @@ func TestMultiStore_Close(t *testing.T) {
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
-	ms := NewStore(store1, store2)
+	ms := NewStore([]config.Store{store1, store2})
 	ctx := context.Background()
 
 	ms.Connect(ctx)
@@ -50,7 +50,7 @@ func TestMultiStore_SetAndGet_Fallback(t *testing.T) {
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
-	ms := NewStoreWithOptions([]config.Store{store1, store2}, []Option{WithStrategy(StrategyFallback)})
+	ms := NewStore([]config.Store{store1, store2}, WithStrategy(StrategyFallback))
 	ctx := context.Background()
 
 	ms.Connect(ctx)
@@ -91,7 +91,7 @@ func TestMultiStore_SetAndGet_ReadThrough(t *testing.T) {
 	cache := memory.NewStore()
 	backend := memory.NewStore()
 
-	ms := NewStoreWithOptions([]config.Store{cache, backend}, []Option{WithStrategy(StrategyReadThrough)})
+	ms := NewStore([]config.Store{cache, backend}, WithStrategy(StrategyReadThrough))
 	ctx := context.Background()
 
 	ms.Connect(ctx)
@@ -128,7 +128,7 @@ func TestMultiStore_SetAndGet_ReadThrough_WriteAll(t *testing.T) {
 	cache := memory.NewStore()
 	backend := memory.NewStore()
 
-	ms := NewStoreWithOptions([]config.Store{cache, backend}, []Option{WithStrategy(StrategyReadThrough)})
+	ms := NewStore([]config.Store{cache, backend}, WithStrategy(StrategyReadThrough))
 	ctx := context.Background()
 
 	ms.Connect(ctx)
@@ -165,7 +165,7 @@ func TestMultiStore_Delete_Fallback(t *testing.T) {
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
-	ms := NewStoreWithOptions([]config.Store{store1, store2}, []Option{WithStrategy(StrategyFallback)})
+	ms := NewStore([]config.Store{store1, store2}, WithStrategy(StrategyFallback))
 	ctx := context.Background()
 
 	ms.Connect(ctx)
@@ -193,7 +193,7 @@ func TestMultiStore_Fallback_PrimaryFailure(t *testing.T) {
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
-	ms := NewStoreWithOptions([]config.Store{store1, store2}, []Option{WithStrategy(StrategyFallback)})
+	ms := NewStore([]config.Store{store1, store2}, WithStrategy(StrategyFallback))
 	ctx := context.Background()
 
 	ms.Connect(ctx)
@@ -219,7 +219,7 @@ func TestMultiStore_Find(t *testing.T) {
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
-	ms := NewStore(store1, store2)
+	ms := NewStore([]config.Store{store1, store2})
 	ctx := context.Background()
 
 	ms.Connect(ctx)
@@ -247,7 +247,7 @@ func TestMultiStore_Watch(t *testing.T) {
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
-	ms := NewStore(store1, store2)
+	ms := NewStore([]config.Store{store1, store2})
 	ctx := context.Background()
 
 	ms.Connect(ctx)
@@ -268,7 +268,7 @@ func TestMultiStore_Primary(t *testing.T) {
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
-	ms := NewStore(store1, store2)
+	ms := NewStore([]config.Store{store1, store2})
 
 	primary := ms.Primary()
 	if primary != store1 {
@@ -280,7 +280,7 @@ func TestMultiStore_Stores(t *testing.T) {
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
-	ms := NewStore(store1, store2)
+	ms := NewStore([]config.Store{store1, store2})
 
 	stores := ms.Stores()
 	if len(stores) != 2 {
@@ -289,7 +289,7 @@ func TestMultiStore_Stores(t *testing.T) {
 }
 
 func TestMultiStore_EmptyStores(t *testing.T) {
-	ms := NewStore()
+	ms := NewStore(nil)
 	ctx := context.Background()
 
 	// Find should fail gracefully
@@ -314,7 +314,7 @@ func TestMultiStore_WriteThrough(t *testing.T) {
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
-	ms := NewStoreWithOptions([]config.Store{store1, store2}, []Option{WithStrategy(StrategyWriteThrough)})
+	ms := NewStore([]config.Store{store1, store2}, WithStrategy(StrategyWriteThrough))
 	ctx := context.Background()
 
 	ms.Connect(ctx)
@@ -342,7 +342,7 @@ func TestMultiStore_Health(t *testing.T) {
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
-	ms := NewStore(store1, store2)
+	ms := NewStore([]config.Store{store1, store2})
 	ctx := context.Background()
 
 	ms.Connect(ctx)
@@ -355,7 +355,7 @@ func TestMultiStore_Health(t *testing.T) {
 }
 
 func TestMultiStore_Health_EmptyStores(t *testing.T) {
-	ms := NewStore()
+	ms := NewStore(nil)
 	ctx := context.Background()
 
 	err := ms.Health(ctx)
@@ -368,7 +368,7 @@ func TestMultiStore_Stats(t *testing.T) {
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
-	ms := NewStore(store1, store2)
+	ms := NewStore([]config.Store{store1, store2})
 	ctx := context.Background()
 
 	ms.Connect(ctx)
@@ -395,7 +395,7 @@ func TestMultiStore_Stats(t *testing.T) {
 }
 
 func TestMultiStore_Stats_EmptyStores(t *testing.T) {
-	ms := NewStore()
+	ms := NewStore(nil)
 	ctx := context.Background()
 
 	_, err := ms.Stats(ctx)
