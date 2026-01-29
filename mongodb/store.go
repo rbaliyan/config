@@ -88,6 +88,11 @@ type Config struct {
 	// Default is false.
 	EnablePreImages bool
 
+	// MaxIDCacheSize is the maximum number of entries in the ID-to-key cache.
+	// This cache is used to resolve delete events when pre-images are unavailable.
+	// When the limit is reached, the cache is cleared. Default is 10000.
+	MaxIDCacheSize int
+
 	// Logger is the logger for the store. If nil, uses slog.Default().
 	Logger *slog.Logger
 }
@@ -95,14 +100,15 @@ type Config struct {
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
 	return Config{
-		Database:          "config",
-		Collection:        "entries",
-		WatchBufferSize:   100,
-		ReconnectBackoff:  5 * time.Second,
-		AutoCreateIndexes: true,
-		Capped:            false,
-		CappedSizeBytes:   100 * 1024 * 1024, // 100MB
-		CappedMaxDocuments: 0,                 // No document limit
+		Database:           "config",
+		Collection:         "entries",
+		WatchBufferSize:    100,
+		ReconnectBackoff:   5 * time.Second,
+		AutoCreateIndexes:  true,
+		Capped:             false,
+		CappedSizeBytes:    100 * 1024 * 1024, // 100MB
+		CappedMaxDocuments: 0,                  // No document limit
+		MaxIDCacheSize:     10000,              // 10K entries
 	}
 }
 
@@ -237,6 +243,16 @@ func WithPreImages(enabled bool) Option {
 func WithOnDropped(fn func(event config.ChangeEvent)) Option {
 	return func(s *Store) {
 		s.onDropped = fn
+	}
+}
+
+// WithMaxIDCacheSize sets the maximum size of the ID-to-key cache.
+// This cache maps MongoDB ObjectIDs to (namespace, key) pairs for resolving
+// delete events when pre-images are unavailable. Default is 10000.
+// Set to 0 to disable the size limit (not recommended for large collections).
+func WithMaxIDCacheSize(size int) Option {
+	return func(s *Store) {
+		s.cfg.MaxIDCacheSize = size
 	}
 }
 
@@ -493,6 +509,11 @@ func (s *Store) Close(ctx context.Context) error {
 	}
 	s.watchers = make(map[*watchEntry]struct{})
 	s.watchMu.Unlock()
+
+	// Clear ID-to-key mapping
+	s.idMapMu.Lock()
+	s.idToKey = make(map[primitive.ObjectID]docIdentity)
+	s.idMapMu.Unlock()
 
 	return nil
 }
@@ -1139,6 +1160,11 @@ func (s *Store) processChangeStream(stream *mongo.ChangeStream, ctx context.Cont
 			// Cache the ID -> (namespace, key) mapping for future delete events
 			if !docID.IsZero() && event.Key != "" {
 				s.idMapMu.Lock()
+				// Clear cache if it exceeds the size limit
+				if s.cfg.MaxIDCacheSize > 0 && len(s.idToKey) >= s.cfg.MaxIDCacheSize {
+					s.idToKey = make(map[primitive.ObjectID]docIdentity)
+					s.logger().Debug("mongodb: ID cache cleared due to size limit", "limit", s.cfg.MaxIDCacheSize)
+				}
 				s.idToKey[docID] = docIdentity{namespace: event.Namespace, key: event.Key}
 				s.idMapMu.Unlock()
 			}
