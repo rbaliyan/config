@@ -37,7 +37,17 @@ type Store struct {
 	droppedEvents atomic.Int64                    // Counter for dropped events due to full channels
 	onDropped     func(event config.ChangeEvent) // Optional callback when event is dropped
 
+	// ID-to-key mapping for delete events (populated from insert/update events)
+	idMapMu sync.RWMutex
+	idToKey map[primitive.ObjectID]docIdentity
+
 	cfg Config
+}
+
+// docIdentity holds the namespace and key for a document, used for delete event lookups.
+type docIdentity struct {
+	namespace string
+	key       string
 }
 
 // Config holds MongoDB store configuration.
@@ -240,6 +250,7 @@ func NewStore(client *mongo.Client, opts ...Option) *Store {
 		cfg:       DefaultConfig(),
 		watchers:  make(map[*watchEntry]struct{}),
 		stopWatch: make(chan struct{}),
+		idToKey:   make(map[primitive.ObjectID]docIdentity),
 	}
 
 	for _, opt := range opts {
@@ -1097,6 +1108,12 @@ func (s *Store) processChangeStream(stream *mongo.ChangeStream, ctx context.Cont
 			continue
 		}
 
+		// Extract ObjectID from documentKey
+		var docID primitive.ObjectID
+		if id, ok := change.DocumentKey["_id"].(primitive.ObjectID); ok {
+			docID = id
+		}
+
 		var eventType config.ChangeType
 		switch change.OperationType {
 		case "insert":
@@ -1118,18 +1135,46 @@ func (s *Store) processChangeStream(stream *mongo.ChangeStream, ctx context.Cont
 			event.Namespace = change.FullDocument.Namespace
 			event.Key = change.FullDocument.Key
 			event.Value, _ = change.FullDocument.toValue()
+
+			// Cache the ID -> (namespace, key) mapping for future delete events
+			if !docID.IsZero() && event.Key != "" {
+				s.idMapMu.Lock()
+				s.idToKey[docID] = docIdentity{namespace: event.Namespace, key: event.Key}
+				s.idMapMu.Unlock()
+			}
 		} else {
-			// For deletes, we can use FullDocumentBeforeChange if available (MongoDB 6.0+)
-			// Otherwise, we skip delete events as we can't determine the key from ObjectID
+			// For deletes, try multiple sources to determine the key:
+			// 1. Pre-image (MongoDB 6.0+ with changeStreamPreAndPostImages enabled)
+			// 2. Cached ID-to-key mapping (populated from previous insert/update events)
 			if change.FullDocumentBefore.Key != "" {
 				event.Namespace = change.FullDocumentBefore.Namespace
 				event.Key = change.FullDocumentBefore.Key
+			} else if !docID.IsZero() {
+				// Lookup from our cached mapping
+				s.idMapMu.RLock()
+				identity, found := s.idToKey[docID]
+				s.idMapMu.RUnlock()
+
+				if found {
+					event.Namespace = identity.namespace
+					event.Key = identity.key
+				} else {
+					// Skip delete events when we can't determine the key
+					s.logger().Debug("mongodb: skipping delete event - document ID not in cache (event occurred before watch started)")
+					continue
+				}
 			} else {
-				// Skip delete events when we can't determine the key
-				// Consider enabling pre-image on collection for full delete support
-				s.logger().Warn("mongodb: skipping delete event - unable to determine key (enable pre-images for delete support)")
+				s.logger().Warn("mongodb: skipping delete event - no document ID available")
 				continue
 			}
+
+			// Remove from cache after processing delete
+			if !docID.IsZero() {
+				s.idMapMu.Lock()
+				delete(s.idToKey, docID)
+				s.idMapMu.Unlock()
+			}
+
 			event.Value = nil
 		}
 
