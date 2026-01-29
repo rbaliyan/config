@@ -12,11 +12,6 @@ import (
 	"github.com/rbaliyan/config/bind"
 )
 
-const (
-	// DefaultPollInterval is the default interval for polling config changes.
-	DefaultPollInterval = 30 * time.Second
-)
-
 // Ref holds a live, atomically-updated reference to a typed config struct.
 // It polls for config changes in the background and swaps in new snapshots
 // using atomic.Pointer, making Load() a single atomic read with zero
@@ -233,7 +228,3 @@ func (r *Ref[T]) safeCallback(fn func()) {
 	fn()
 }
 
-// errorWrapper wraps an error for atomic.Value (which requires consistent types).
-type errorWrapper struct {
-	err error
-}
