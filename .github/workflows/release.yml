@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - '.github/**'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        run: go test -race ./...
+
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          # Get the latest v0.1.x tag
+          LATEST_TAG=$(git tag -l 'v0.1.*' --sort=-v:refname | head -n1)
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_TAG="v0.1.0"
+          fi
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: $LATEST_TAG"
+
+      - name: Calculate next version
+        id: next_version
+        run: |
+          LATEST_TAG="${{ steps.get_tag.outputs.latest_tag }}"
+          # Extract version numbers (remove 'v' prefix)
+          VERSION=${LATEST_TAG#v}
+
+          # Split into major.minor.patch
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+          # Bump patch version
+          PATCH=$((PATCH + 1))
+
+          NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          NEW_VERSION="${{ steps.next_version.outputs.new_version }}"
+          if git rev-parse "$NEW_VERSION" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag $NEW_VERSION already exists, skipping release"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate changelog
+        id: changelog
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          LATEST_TAG="${{ steps.get_tag.outputs.latest_tag }}"
+
+          # Generate changelog from commits since last tag
+          if git rev-parse "$LATEST_TAG" >/dev/null 2>&1; then
+            CHANGELOG=$(git log ${LATEST_TAG}..HEAD --pretty=format:"- %s" --no-merges)
+          else
+            CHANGELOG=$(git log --pretty=format:"- %s" --no-merges -20)
+          fi
+
+          # Handle empty changelog
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="- Bug fixes and improvements"
+          fi
+
+          # Write to file for multi-line support
+          echo "$CHANGELOG" > changelog.txt
+          echo "Generated changelog"
+
+      - name: Create Release
+        if: steps.check_tag.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEW_VERSION="${{ steps.next_version.outputs.new_version }}"
+
+          # Create tag
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$NEW_VERSION" -m "Release $NEW_VERSION"
+          git push origin "$NEW_VERSION"
+
+          # Create GitHub release
+          gh release create "$NEW_VERSION" \
+            --title "$NEW_VERSION" \
+            --notes-file changelog.txt \
+            --latest
