@@ -194,20 +194,30 @@ func (ms *Store) Delete(ctx context.Context, namespace, key string) error {
 	}
 
 	// Delete from all stores to maintain consistency.
-	// NotFound errors are ignored (key may not exist in all stores).
+	// NotFound errors from individual stores are tracked separately since the key
+	// may not exist in all stores (eventual consistency).
 	var errs []error
 	var succeeded bool
+	var allNotFound = true
 	for _, s := range ms.stores {
 		if err := s.Delete(ctx, namespace, key); err != nil {
 			if !config.IsNotFound(err) {
 				errs = append(errs, err)
+				allNotFound = false
 			}
+			// NotFound from this store is ok, key may not exist in all stores
 		} else {
 			succeeded = true
+			allNotFound = false
 		}
 	}
 
-	// At least one store must succeed (or all return NotFound which is OK)
+	// If all stores returned NotFound, the key doesn't exist anywhere
+	if allNotFound {
+		return &config.KeyNotFoundError{Key: key, Namespace: namespace}
+	}
+
+	// At least one store must succeed or we return the accumulated errors
 	if !succeeded && len(errs) > 0 {
 		return errors.Join(errs...)
 	}

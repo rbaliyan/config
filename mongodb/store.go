@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,10 +30,12 @@ type Store struct {
 	closed     atomic.Bool
 
 	// Watch management
-	watchMu   sync.RWMutex
-	watchers  map[*watchEntry]struct{}
-	stopWatch chan struct{}
-	watchWg   sync.WaitGroup
+	watchMu       sync.RWMutex
+	watchers      map[*watchEntry]struct{}
+	stopWatch     chan struct{}
+	watchWg       sync.WaitGroup
+	droppedEvents atomic.Int64                    // Counter for dropped events due to full channels
+	onDropped     func(event config.ChangeEvent) // Optional callback when event is dropped
 
 	cfg Config
 }
@@ -215,6 +218,15 @@ func WithLogger(logger *slog.Logger) Option {
 func WithPreImages(enabled bool) Option {
 	return func(s *Store) {
 		s.cfg.EnablePreImages = enabled
+	}
+}
+
+// WithOnDropped sets a callback that is invoked when a watch event is dropped
+// due to a full channel buffer. This can be used for logging or metrics.
+// The callback is invoked synchronously, so it should be fast.
+func WithOnDropped(fn func(event config.ChangeEvent)) Option {
+	return func(s *Store) {
+		s.onDropped = fn
 	}
 }
 
@@ -1115,7 +1127,7 @@ func (s *Store) processChangeStream(stream *mongo.ChangeStream, ctx context.Cont
 			} else {
 				// Skip delete events when we can't determine the key
 				// Consider enabling pre-image on collection for full delete support
-				slog.Debug("mongodb: skipping delete event - unable to determine key from ObjectID")
+				s.logger().Warn("mongodb: skipping delete event - unable to determine key (enable pre-images for delete support)")
 				continue
 			}
 			event.Value = nil
@@ -1152,24 +1164,25 @@ func (s *Store) sendToWatcher(we *watchEntry, event config.ChangeEvent) {
 	case we.ch <- event:
 	case <-we.ctx.Done():
 	default:
-		// Channel full, skip
+		// Channel full, increment dropped counter and notify callback
+		s.droppedEvents.Add(1)
+		if s.onDropped != nil {
+			s.onDropped(event)
+		}
 	}
 	we.mu.Unlock()
 }
 
+// DroppedEvents returns the total number of watch events that were dropped
+// due to full channel buffers since the store was created.
+func (s *Store) DroppedEvents() int64 {
+	return s.droppedEvents.Load()
+}
+
 func (s *Store) matchesFilter(event config.ChangeEvent, filter config.WatchFilter) bool {
 	// Check namespace filter
-	if len(filter.Namespaces) > 0 {
-		found := false
-		for _, ns := range filter.Namespaces {
-			if event.Namespace == ns {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
+	if len(filter.Namespaces) > 0 && !slices.Contains(filter.Namespaces, event.Namespace) {
+		return false
 	}
 
 	// Check prefix filter
