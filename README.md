@@ -119,11 +119,12 @@ Persistent storage with change streams for real-time updates.
 
 ```go
 import (
-    "go.mongodb.org/mongo-driver/mongo"
+    "go.mongodb.org/mongo-driver/v2/mongo"
+    "go.mongodb.org/mongo-driver/v2/mongo/options"
     "github.com/rbaliyan/config/mongodb"
 )
 
-client, _ := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
+client, _ := mongo.Connect(options.Client().ApplyURI("mongodb://localhost:27017"))
 
 store := mongodb.NewStore(client,
     mongodb.WithDatabase("config"),

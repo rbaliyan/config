@@ -11,10 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/rbaliyan/config"
 )
@@ -39,7 +38,7 @@ type Store struct {
 
 	// ID-to-key mapping for delete events (populated from insert/update events)
 	idMapMu sync.RWMutex
-	idToKey map[primitive.ObjectID]docIdentity
+	idToKey map[bson.ObjectID]docIdentity
 
 	cfg Config
 }
@@ -124,7 +123,7 @@ type watchEntry struct {
 
 // mongoEntry is the MongoDB document structure.
 type mongoEntry struct {
-	ID        primitive.ObjectID `bson:"_id,omitempty"`
+	ID        bson.ObjectID `bson:"_id,omitempty"`
 	Key       string             `bson:"key"`
 	Namespace string             `bson:"namespace"`
 	Tags      string             `bson:"tags"` // Sorted "key1=value1,key2=value2" format
@@ -266,7 +265,7 @@ func NewStore(client *mongo.Client, opts ...Option) *Store {
 		cfg:       DefaultConfig(),
 		watchers:  make(map[*watchEntry]struct{}),
 		stopWatch: make(chan struct{}),
-		idToKey:   make(map[primitive.ObjectID]docIdentity),
+		idToKey:   make(map[bson.ObjectID]docIdentity),
 	}
 
 	for _, opt := range opts {
@@ -512,7 +511,7 @@ func (s *Store) Close(ctx context.Context) error {
 
 	// Clear ID-to-key mapping
 	s.idMapMu.Lock()
-	s.idToKey = make(map[primitive.ObjectID]docIdentity)
+	s.idToKey = make(map[bson.ObjectID]docIdentity)
 	s.idMapMu.Unlock()
 
 	return nil
@@ -590,7 +589,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		}
 
 		// Set the ID from the insert result
-		if oid, ok := result.InsertedID.(primitive.ObjectID); ok {
+		if oid, ok := result.InsertedID.(bson.ObjectID); ok {
 			doc.ID = oid
 		}
 		return doc.toValue()
@@ -711,12 +710,12 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 
 	// Prefix mode
 	if prefix := filter.Prefix(); prefix != "" {
-		mongoFilter["key"] = bson.M{"$regex": primitive.Regex{Pattern: "^" + escapeRegex(prefix)}}
+		mongoFilter["key"] = bson.M{"$regex": bson.Regex{Pattern: "^" + escapeRegex(prefix)}}
 	}
 
 	// Cursor-based pagination using ObjectID
 	if cursor := filter.Cursor(); cursor != "" {
-		oid, err := primitive.ObjectIDFromHex(cursor)
+		oid, err := bson.ObjectIDFromHex(cursor)
 		if err == nil {
 			mongoFilter["_id"] = bson.M{"$gt": oid}
 		}
@@ -738,7 +737,7 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 	return config.NewPage(results, nextCursor, limit), nil
 }
 
-func (s *Store) executeListQuery(ctx context.Context, filter bson.M, opts *options.FindOptions) (map[string]config.Value, string, error) {
+func (s *Store) executeListQuery(ctx context.Context, filter bson.M, opts *options.FindOptionsBuilder) (map[string]config.Value, string, error) {
 	cursor, err := s.collection.Find(ctx, filter, opts)
 	if err != nil {
 		return nil, "", config.WrapStoreError("list", "mongodb", "", err)
@@ -746,7 +745,7 @@ func (s *Store) executeListQuery(ctx context.Context, filter bson.M, opts *optio
 	defer cursor.Close(ctx)
 
 	results := make(map[string]config.Value)
-	var lastID primitive.ObjectID
+	var lastID bson.ObjectID
 	for cursor.Next(ctx) {
 		var doc mongoEntry
 		if err := cursor.Decode(&doc); err != nil {
@@ -1130,8 +1129,8 @@ func (s *Store) processChangeStream(stream *mongo.ChangeStream, ctx context.Cont
 		}
 
 		// Extract ObjectID from documentKey
-		var docID primitive.ObjectID
-		if id, ok := change.DocumentKey["_id"].(primitive.ObjectID); ok {
+		var docID bson.ObjectID
+		if id, ok := change.DocumentKey["_id"].(bson.ObjectID); ok {
 			docID = id
 		}
 
@@ -1162,7 +1161,7 @@ func (s *Store) processChangeStream(stream *mongo.ChangeStream, ctx context.Cont
 				s.idMapMu.Lock()
 				// Clear cache if it exceeds the size limit
 				if s.cfg.MaxIDCacheSize > 0 && len(s.idToKey) >= s.cfg.MaxIDCacheSize {
-					s.idToKey = make(map[primitive.ObjectID]docIdentity)
+					s.idToKey = make(map[bson.ObjectID]docIdentity)
 					s.logger().Debug("mongodb: ID cache cleared due to size limit", "limit", s.cfg.MaxIDCacheSize)
 				}
 				s.idToKey[docID] = docIdentity{namespace: event.Namespace, key: event.Key}

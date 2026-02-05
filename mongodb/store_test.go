@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/rbaliyan/config"
 	"github.com/rbaliyan/config/mongodb"
@@ -28,7 +28,7 @@ func skipIfNoMongo(t *testing.T) (*mongodb.Store, *mongo.Client) {
 	defer cancel()
 
 	// Create MongoDB client (app's responsibility)
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(getMongoURI()))
+	client, err := mongo.Connect(options.Client().ApplyURI(getMongoURI()))
 	if err != nil {
 		t.Skipf("MongoDB not available: %v", err)
 	}
