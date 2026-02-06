@@ -274,7 +274,7 @@ func TestPostgresStore_TypesAndCodec(t *testing.T) {
 			if _, err := store.Set(ctx, "typetest", tt.key, val); err != nil {
 				t.Fatalf("Set failed: %v", err)
 			}
-			defer store.Delete(ctx, "typetest", tt.key)
+			defer func() { _ = store.Delete(ctx, "typetest", tt.key) }()
 
 			retrieved, err := store.Get(ctx, "typetest", tt.key)
 			if err != nil {
@@ -298,8 +298,8 @@ func TestPostgresStore_GetMany(t *testing.T) {
 	// Set values
 	_, _ = store.Set(ctx, "bulktest", "key1", config.NewValue("value1"))
 	_, _ = store.Set(ctx, "bulktest", "key2", config.NewValue("value2"))
-	defer store.Delete(ctx, "bulktest", "key1")
-	defer store.Delete(ctx, "bulktest", "key2")
+	defer func() { _ = store.Delete(ctx, "bulktest", "key1") }()
+	defer func() { _ = store.Delete(ctx, "bulktest", "key2") }()
 
 	// GetMany
 	results, err := store.GetMany(ctx, "bulktest", []string{"key1", "key2", "nonexistent"})
@@ -327,8 +327,8 @@ func TestPostgresStore_SetMany(t *testing.T) {
 	if err := store.SetMany(ctx, "bulktest", values); err != nil {
 		t.Fatalf("SetMany failed: %v", err)
 	}
-	defer store.Delete(ctx, "bulktest", "bulk/key1")
-	defer store.Delete(ctx, "bulktest", "bulk/key2")
+	defer func() { _ = store.Delete(ctx, "bulktest", "bulk/key1") }()
+	defer func() { _ = store.Delete(ctx, "bulktest", "bulk/key2") }()
 
 	// Verify
 	val, err := store.Get(ctx, "bulktest", "bulk/key1")
@@ -357,7 +357,7 @@ func TestPostgresStore_SetMany_WithErrors(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for empty key, got nil")
 	}
-	defer store.Delete(ctx, "bulktest", "valid/key")
+	defer func() { _ = store.Delete(ctx, "bulktest", "valid/key") }()
 
 	// Valid key should still be set
 	val, getErr := store.Get(ctx, "bulktest", "valid/key")

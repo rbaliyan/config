@@ -31,8 +31,8 @@ type Loader struct {
 	path    string
 	opts    loaderOptions
 	mu      sync.RWMutex
-	configs map[string]any    // name -> pointer to struct
-	raw     map[string]any    // parsed file contents
+	configs map[string]any // name -> pointer to struct
+	raw     map[string]any // parsed file contents
 	loaded  bool
 }
 

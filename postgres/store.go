@@ -36,7 +36,7 @@ type Store struct {
 	watchers      map[*watchEntry]struct{}
 	stopWatch     chan struct{}
 	watchWg       sync.WaitGroup
-	droppedEvents atomic.Int64                    // Counter for dropped events due to full channels
+	droppedEvents atomic.Int64                   // Counter for dropped events due to full channels
 	onDropped     func(event config.ChangeEvent) // Optional callback when event is dropped
 	logger        *slog.Logger
 

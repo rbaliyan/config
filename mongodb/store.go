@@ -34,7 +34,7 @@ type Store struct {
 	watchers      map[*watchEntry]struct{}
 	stopWatch     chan struct{}
 	watchWg       sync.WaitGroup
-	droppedEvents atomic.Int64                    // Counter for dropped events due to full channels
+	droppedEvents atomic.Int64                   // Counter for dropped events due to full channels
 	onDropped     func(event config.ChangeEvent) // Optional callback when event is dropped
 
 	// ID-to-key mapping for delete events (populated from insert/update events)
@@ -107,8 +107,8 @@ func DefaultConfig() Config {
 		AutoCreateIndexes:  true,
 		Capped:             false,
 		CappedSizeBytes:    100 * 1024 * 1024, // 100MB
-		CappedMaxDocuments: 0,                  // No document limit
-		MaxIDCacheSize:     10000,              // 10K entries
+		CappedMaxDocuments: 0,                 // No document limit
+		MaxIDCacheSize:     10000,             // 10K entries
 	}
 }
 
@@ -125,14 +125,14 @@ type watchEntry struct {
 // mongoEntry is the MongoDB document structure.
 type mongoEntry struct {
 	ID        bson.ObjectID `bson:"_id,omitempty"`
-	Key       string             `bson:"key"`
-	Namespace string             `bson:"namespace"`
-	Value     []byte             `bson:"value"`
-	Codec     string             `bson:"codec"`
-	Type      config.Type        `bson:"type"`
-	Version   int64              `bson:"version"`
-	CreatedAt time.Time          `bson:"created_at"`
-	UpdatedAt time.Time          `bson:"updated_at"`
+	Key       string        `bson:"key"`
+	Namespace string        `bson:"namespace"`
+	Value     []byte        `bson:"value"`
+	Codec     string        `bson:"codec"`
+	Type      config.Type   `bson:"type"`
+	Version   int64         `bson:"version"`
+	CreatedAt time.Time     `bson:"created_at"`
+	UpdatedAt time.Time     `bson:"updated_at"`
 }
 
 func (e *mongoEntry) toValue() (config.Value, error) {

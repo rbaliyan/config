@@ -369,4 +369,3 @@ func (s *Store) logWarn(msg string, args ...any) {
 		logger.Warn(msg, args...)
 	}
 }
-

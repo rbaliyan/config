@@ -84,7 +84,6 @@ type memoryCache struct {
 	evictions atomic.Int64
 }
 
-
 // newMemoryCache creates a new in-memory cache.
 // If capacity is 0, it uses a default capacity of 10000.
 // For truly unbounded caches, use a very large capacity or consider memory implications.
@@ -151,4 +150,3 @@ func (c *memoryCache) Stats() CacheStats {
 		Evictions: c.evictions.Load(),
 	}
 }
-

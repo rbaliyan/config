@@ -10,10 +10,10 @@ import (
 type RefOption[T any] func(*refOptions[T])
 
 type refOptions[T any] struct {
-	pollInterval time.Duration    // default DefaultPollInterval
+	pollInterval time.Duration          // default DefaultPollInterval
 	onChange     func(oldVal, newVal T) // optional change callback
-	onError     func(error)      // error callback
-	bindOpts    []bind.Option    // forwarded to bind.New
+	onError      func(error)            // error callback
+	bindOpts     []bind.Option          // forwarded to bind.New
 }
 
 // OnChange registers a callback invoked after each config change.

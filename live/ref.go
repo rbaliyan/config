@@ -245,4 +245,3 @@ func (r *Ref[T]) safeCallback(fn func()) {
 	}()
 	fn()
 }
-

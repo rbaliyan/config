@@ -73,9 +73,9 @@ func TestRegisterPanics(t *testing.T) {
 
 type emptyNameCodec struct{}
 
-func (e emptyNameCodec) Name() string                      { return "" }
-func (e emptyNameCodec) Encode(v any) ([]byte, error)      { return nil, nil }
-func (e emptyNameCodec) Decode(data []byte, v any) error   { return nil }
+func (e emptyNameCodec) Name() string                    { return "" }
+func (e emptyNameCodec) Encode(v any) ([]byte, error)    { return nil, nil }
+func (e emptyNameCodec) Decode(data []byte, v any) error { return nil }
 
 func TestRegisterEmptyNamePanics(t *testing.T) {
 	defer func() {

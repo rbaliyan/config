@@ -118,9 +118,9 @@ type manager struct {
 
 	// Watch backoff configuration and status
 	watchBackoff  watchBackoffConfig
-	watchFailures atomic.Int32          // consecutive failures for observability
+	watchFailures atomic.Int32           // consecutive failures for observability
 	lastWatchErr  atomic.Pointer[string] // last watch error message (nil = no error)
-	lastWatchTime atomic.Int64          // unix timestamp of last watch attempt
+	lastWatchTime atomic.Int64           // unix timestamp of last watch attempt
 
 	// Config cache
 	configMu sync.RWMutex

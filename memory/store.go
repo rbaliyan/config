@@ -75,8 +75,8 @@ type watchEntry struct {
 	ch        chan config.ChangeEvent
 	ctx       context.Context
 	cancel    context.CancelFunc
-	mu        sync.Mutex  // protects send/close operations
-	closed    bool        // guarded by mu
+	mu        sync.Mutex // protects send/close operations
+	closed    bool       // guarded by mu
 	closeOnce sync.Once
 }
 

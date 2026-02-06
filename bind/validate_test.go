@@ -722,8 +722,8 @@ type testCodec struct {
 	name string
 }
 
-func (c *testCodec) Name() string                  { return c.name }
-func (c *testCodec) Encode(v any) ([]byte, error)  { return nil, nil }
+func (c *testCodec) Name() string                    { return c.name }
+func (c *testCodec) Encode(v any) ([]byte, error)    { return nil, nil }
 func (c *testCodec) Decode(data []byte, v any) error { return nil }
 
 func TestWithCodecOption(t *testing.T) {
