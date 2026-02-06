@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"fmt"
-	"path"
 	"slices"
 	"sort"
 	"strconv"
@@ -210,14 +209,14 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	if err := config.ValidateNamespace(namespace); err != nil {
 		return nil, err
 	}
-	if key == "" {
-		return nil, config.ErrInvalidKey
+	if err := config.ValidateKey(key); err != nil {
+		return nil, err
 	}
 
 	// Marshal the value
 	data, err := value.Marshal()
 	if err != nil {
-		return nil, config.WrapStoreError("marshal", namespace, key, err)
+		return nil, config.WrapStoreError("marshal", "memory", key, err)
 	}
 
 	s.mu.Lock()
@@ -530,7 +529,7 @@ func (s *Store) matchesFilter(event config.ChangeEvent, filter config.WatchFilte
 	if len(filter.Prefixes) > 0 {
 		found := false
 		for _, prefix := range filter.Prefixes {
-			if matchPattern(prefix, event.Key) {
+			if strings.HasPrefix(event.Key, prefix) {
 				found = true
 				break
 			}
@@ -541,32 +540,6 @@ func (s *Store) matchesFilter(event config.ChangeEvent, filter config.WatchFilte
 	}
 
 	return true
-}
-
-// matchPattern checks if key matches a glob pattern.
-func matchPattern(pattern, key string) bool {
-	if pattern == "" || pattern == "*" {
-		return true
-	}
-
-	// Use path.Match for glob matching
-	matched, _ := path.Match(pattern, key)
-	if matched {
-		return true
-	}
-
-	// Also support prefix matching (e.g., "app/database" matches "app/database/timeout")
-	if strings.HasPrefix(key, pattern) {
-		return true
-	}
-
-	// Support wildcard suffix (e.g., "app/*" matches "app/database")
-	if strings.HasSuffix(pattern, "*") {
-		prefix := pattern[:len(pattern)-1]
-		return strings.HasPrefix(key, prefix)
-	}
-
-	return false
 }
 
 // GetMany retrieves multiple values in a single operation.

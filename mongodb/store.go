@@ -126,7 +126,6 @@ type mongoEntry struct {
 	ID        bson.ObjectID `bson:"_id,omitempty"`
 	Key       string             `bson:"key"`
 	Namespace string             `bson:"namespace"`
-	Tags      string             `bson:"tags"` // Sorted "key1=value1,key2=value2" format
 	Value     []byte             `bson:"value"`
 	Codec     string             `bson:"codec"`
 	Type      config.Type        `bson:"type"`
@@ -503,7 +502,10 @@ func (s *Store) Close(ctx context.Context) error {
 	for entry := range s.watchers {
 		entry.cancel()
 		entry.closeOnce.Do(func() {
+			entry.mu.Lock()
+			entry.closed = true
 			close(entry.ch)
+			entry.mu.Unlock()
 		})
 	}
 	s.watchers = make(map[*watchEntry]struct{})
@@ -552,8 +554,8 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	if err := config.ValidateNamespace(namespace); err != nil {
 		return nil, err
 	}
-	if key == "" {
-		return nil, config.ErrInvalidKey
+	if err := config.ValidateKey(key); err != nil {
+		return nil, err
 	}
 
 	// Marshal the value

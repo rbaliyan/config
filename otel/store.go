@@ -419,11 +419,10 @@ func (s *InstrumentedStore) SetMany(ctx context.Context, namespace string, value
 }
 
 // DeleteMany removes multiple values in a single operation.
-// Note: This method doesn't support tags in the fallback path.
 func (s *InstrumentedStore) DeleteMany(ctx context.Context, namespace string, keys []string) (int64, error) {
 	bulk, ok := s.store.(config.BulkStore)
 	if !ok {
-		// Fallback to individual deletes (without tags)
+		// Fallback to individual deletes
 		var deleted int64
 		for _, key := range keys {
 			if err := s.Delete(ctx, namespace, key); err == nil {

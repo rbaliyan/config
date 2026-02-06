@@ -29,7 +29,6 @@ config/
 ├── context.go        # Context helpers (Get/Set from context)
 ├── cache.go          # Cache interface and memory implementation
 ├── errors.go         # Error types and helpers
-├── entry.go          # Internal entry helpers (cacheKey, entryKey)
 │
 ├── codec/            # Encoding/decoding
 │   ├── codec.go      # Codec interface and registry
@@ -49,11 +48,6 @@ config/
 ├── file/             # File-based store (fsnotify)
 │   ├── store.go
 │   └── options.go
-│
-├── env/              # Environment variable store (read-only)
-│   ├── store.go
-│   ├── options.go
-│   └── transform.go
 │
 ├── otel/             # OpenTelemetry instrumentation
 │   ├── store.go      # Instrumented store wrapper

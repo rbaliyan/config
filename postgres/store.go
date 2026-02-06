@@ -307,7 +307,10 @@ func (s *Store) Close(ctx context.Context) error {
 	for entry := range s.watchers {
 		entry.cancel()
 		entry.closeOnce.Do(func() {
+			entry.mu.Lock()
+			entry.closed = true
 			close(entry.ch)
+			entry.mu.Unlock()
 		})
 	}
 	s.watchers = make(map[*watchEntry]struct{})
@@ -368,8 +371,8 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	if err := config.ValidateNamespace(namespace); err != nil {
 		return nil, err
 	}
-	if key == "" {
-		return nil, config.ErrInvalidKey
+	if err := config.ValidateKey(key); err != nil {
+		return nil, err
 	}
 
 	// Marshal the value
