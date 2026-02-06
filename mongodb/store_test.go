@@ -158,7 +158,7 @@ func TestMongoDBStore_Find(t *testing.T) {
 
 	// Cleanup
 	for _, d := range testData {
-		store.Delete(ctx, "listtest", d.key)
+		_ = store.Delete(ctx, "listtest", d.key)
 	}
 }
 
