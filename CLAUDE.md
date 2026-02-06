@@ -64,13 +64,9 @@ config/
 │   ├── store.go      # Fallback, ReadThrough, WriteThrough strategies
 │   └── options.go
 │
-├── grpc/             # gRPC client (server removed)
-│   └── client/
-│       └── client.go # gRPC client implementing Store interface
-│
-└── proto/            # Protocol buffers
-    └── configpb/
-        └── config.proto
+└── live/             # Live config binding
+    ├── ref.go        # Atomic live reference (Ref[T])
+    └── binding.go    # Mutex-based live binding
 ```
 
 ## Key Design Decisions
@@ -310,7 +306,6 @@ Optional (for specific backends):
 - `github.com/fsnotify/fsnotify` - File store
 - `gopkg.in/yaml.v3` - YAML codec
 - `github.com/BurntSushi/toml` - TOML codec
-- `google.golang.org/grpc` - gRPC client
 - `go.opentelemetry.io/otel` - Instrumentation (opt-in)
 
 ## Recent Changes
@@ -321,7 +316,7 @@ Optional (for specific backends):
 - **Cache metrics**: `Manager.CacheStats()` returns hit/miss/eviction statistics via `CacheStats` struct
 - **DefaultNamespace constant**: `config.DefaultNamespace` for the empty string namespace
 - **Conditional writes**: `WithIfNotExists()` and `WithIfExists()` options for Set operations
-- **gRPC server removed**: Only the gRPC client (for connecting to remote servers) is included
+- **Live config binding**: `live.Ref[T]` provides atomic, lock-free access to typed config structs with background polling
 - **OpenTelemetry opt-in**: Tracing and metrics disabled by default, must use `WithTracesEnabled(true)` and/or `WithMetricsEnabled(true)`
 - **Multi-store consistency**: All strategies now write to all stores (not just primary)
 - **Tags removed**: Tag support has been removed for simplicity; use key prefixes for categorization instead

@@ -356,8 +356,133 @@ func (ms *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	return combined, nil
 }
 
+// GetMany retrieves multiple values in a single operation.
+// Tries stores in order, returning from the first that succeeds (same as Get).
+func (ms *Store) GetMany(ctx context.Context, namespace string, keys []string) (map[string]config.Value, error) {
+	if len(ms.stores) == 0 {
+		return nil, config.ErrStoreNotConnected
+	}
+
+	var lastErr error
+	for i, s := range ms.stores {
+		var results map[string]config.Value
+		if bulk, ok := s.(config.BulkStore); ok {
+			var err error
+			results, err = bulk.GetMany(ctx, namespace, keys)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+		} else {
+			// Fallback to individual gets
+			results = make(map[string]config.Value, len(keys))
+			for _, key := range keys {
+				val, err := s.Get(ctx, namespace, key)
+				if err == nil {
+					results[key] = val
+				}
+			}
+		}
+
+		// For read-through, populate earlier stores
+		if ms.strategy == StrategyReadThrough && i > 0 && len(results) > 0 {
+			for j := range i {
+				if bulk, ok := ms.stores[j].(config.BulkStore); ok {
+					_ = bulk.SetMany(ctx, namespace, results)
+				} else {
+					for key, val := range results {
+						_, _ = ms.stores[j].Set(ctx, namespace, key, val)
+					}
+				}
+			}
+		}
+		return results, nil
+	}
+
+	return nil, lastErr
+}
+
+// SetMany creates or updates multiple values across all stores.
+func (ms *Store) SetMany(ctx context.Context, namespace string, values map[string]config.Value) error {
+	if len(ms.stores) == 0 {
+		return config.ErrStoreNotConnected
+	}
+
+	var errs []error
+	var succeeded bool
+	for _, s := range ms.stores {
+		if bulk, ok := s.(config.BulkStore); ok {
+			if err := bulk.SetMany(ctx, namespace, values); err != nil {
+				errs = append(errs, err)
+			} else {
+				succeeded = true
+			}
+		} else {
+			// Fallback to individual sets
+			var storeErr error
+			for key, val := range values {
+				if _, err := s.Set(ctx, namespace, key, val); err != nil {
+					storeErr = err
+				}
+			}
+			if storeErr != nil {
+				errs = append(errs, storeErr)
+			} else {
+				succeeded = true
+			}
+		}
+	}
+
+	if !succeeded && len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+// DeleteMany removes multiple values from all stores.
+func (ms *Store) DeleteMany(ctx context.Context, namespace string, keys []string) (int64, error) {
+	if len(ms.stores) == 0 {
+		return 0, config.ErrStoreNotConnected
+	}
+
+	var errs []error
+	var maxDeleted int64
+	var succeeded bool
+	for _, s := range ms.stores {
+		if bulk, ok := s.(config.BulkStore); ok {
+			deleted, err := bulk.DeleteMany(ctx, namespace, keys)
+			if err != nil {
+				errs = append(errs, err)
+			} else {
+				succeeded = true
+				if deleted > maxDeleted {
+					maxDeleted = deleted
+				}
+			}
+		} else {
+			// Fallback to individual deletes
+			var deleted int64
+			for _, key := range keys {
+				if err := s.Delete(ctx, namespace, key); err == nil {
+					deleted++
+				}
+			}
+			succeeded = true
+			if deleted > maxDeleted {
+				maxDeleted = deleted
+			}
+		}
+	}
+
+	if !succeeded && len(errs) > 0 {
+		return 0, errors.Join(errs...)
+	}
+	return maxDeleted, nil
+}
+
 // Compile-time interface checks for optional interfaces.
 var (
 	_ config.HealthChecker = (*Store)(nil)
 	_ config.StatsProvider = (*Store)(nil)
+	_ config.BulkStore     = (*Store)(nil)
 )

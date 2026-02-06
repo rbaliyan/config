@@ -29,9 +29,6 @@ var (
 	// ErrStoreClosed is returned when operating on a closed store.
 	ErrStoreClosed = errors.New("config: store closed")
 
-	// ErrCacheDisabled is returned when cache operations are attempted with caching disabled.
-	ErrCacheDisabled = errors.New("config: cache disabled")
-
 	// ErrWatchNotSupported is returned when the store does not support watching.
 	ErrWatchNotSupported = errors.New("config: watch not supported")
 

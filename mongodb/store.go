@@ -1126,7 +1126,7 @@ func (s *Store) processChangeStream(stream *mongo.ChangeStream, ctx context.Cont
 			FullDocumentBefore mongoEntry `bson:"fullDocumentBeforeChange"` // Requires MongoDB 6.0+ with pre-image
 		}
 		if err := stream.Decode(&change); err != nil {
-			slog.Warn("mongodb: failed to decode change stream event", "error", err)
+			s.logger().Warn("failed to decode change stream event", "error", err)
 			continue
 		}
 
@@ -1156,7 +1156,12 @@ func (s *Store) processChangeStream(stream *mongo.ChangeStream, ctx context.Cont
 		if eventType != config.ChangeTypeDelete {
 			event.Namespace = change.FullDocument.Namespace
 			event.Key = change.FullDocument.Key
-			event.Value, _ = change.FullDocument.toValue()
+			val, err := change.FullDocument.toValue()
+			if err != nil {
+				s.logger().Warn("failed to convert change stream document to value",
+					"key", change.FullDocument.Key, "namespace", change.FullDocument.Namespace, "error", err)
+			}
+			event.Value = val
 
 			// Cache the ID -> (namespace, key) mapping for future delete events
 			if !docID.IsZero() && event.Key != "" {

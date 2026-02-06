@@ -603,7 +603,7 @@ func (s *Store) executeListQuery(ctx context.Context, query string, args []any) 
 			config.WithValueEntryID(fmt.Sprintf("%d", id)),
 		)
 		if err != nil {
-			slog.Warn("postgres: skipping corrupt entry in list query",
+			s.log().Warn("skipping corrupt entry in list query",
 				"key", k, "namespace", ns, "error", err)
 			lastID = id
 			continue
@@ -780,7 +780,7 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 			config.WithValueEntryID(fmt.Sprintf("%d", id)),
 		)
 		if err != nil {
-			slog.Warn("postgres: skipping corrupt entry in get_many",
+			s.log().Warn("skipping corrupt entry in get_many",
 				"key", k, "namespace", ns, "error", err)
 			continue
 		}
@@ -909,7 +909,7 @@ func (s *Store) listenNotifications() {
 
 			var payload notifyPayload
 			if err := json.Unmarshal([]byte(notification.Extra), &payload); err != nil {
-				slog.Warn("postgres: failed to decode notification payload", "error", err)
+				s.log().Warn("failed to decode notification payload", "error", err)
 				continue
 			}
 
@@ -951,7 +951,7 @@ func (s *Store) listenNotifications() {
 				if err == nil {
 					event.Value = val
 				} else {
-					slog.Warn("postgres: failed to create value from notification", "error", err)
+					s.log().Warn("failed to create value from notification", "error", err)
 				}
 			}
 

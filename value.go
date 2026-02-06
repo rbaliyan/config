@@ -296,10 +296,10 @@ func (v *Val) Unmarshal(target any) error {
 	// Otherwise use JSON round-trip
 	data, err := json.Marshal(v.raw)
 	if err != nil {
-		return fmt.Errorf("%w: marshal failed: %v", ErrTypeMismatch, err)
+		return fmt.Errorf("%w: marshal failed: %w", ErrTypeMismatch, err)
 	}
 	if err := json.Unmarshal(data, target); err != nil {
-		return fmt.Errorf("%w: unmarshal failed: %v", ErrTypeMismatch, err)
+		return fmt.Errorf("%w: unmarshal failed: %w", ErrTypeMismatch, err)
 	}
 	return nil
 }

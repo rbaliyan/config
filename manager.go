@@ -182,15 +182,24 @@ func (m *manager) Connect(ctx context.Context) error {
 	m.connectMu.Lock()
 	defer m.connectMu.Unlock()
 
-	if !atomic.CompareAndSwapInt32(&m.status, 0, 1) {
+	// Only connect from "created" state (0). Reject if already connected (1) or closed (2).
+	status := atomic.LoadInt32(&m.status)
+	if status == 2 {
 		return ErrManagerClosed
 	}
+	if status == 1 {
+		return nil // Already connected
+	}
 
-	// Connect to store (uses caller's context for connection timeout)
+	// Connect to store (uses caller's context for connection timeout).
+	// Status remains 0 during this call so concurrent operations correctly
+	// see the manager as not yet connected.
 	if err := m.store.Connect(ctx); err != nil {
-		atomic.StoreInt32(&m.status, 0)
 		return err
 	}
+
+	// Mark as connected only after store.Connect succeeds
+	atomic.StoreInt32(&m.status, 1)
 
 	// Start watching for changes (for internal cache invalidation)
 	// Uses independent context - watch should run until Close(), not until Connect's context expires

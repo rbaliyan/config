@@ -223,7 +223,9 @@ func (r *Ref[T]) loadFromStore(ctx context.Context) (*T, uint64, error) {
 // from crashing the background goroutine.
 func (r *Ref[T]) safeCallback(fn func()) {
 	defer func() {
-		recover() //nolint:errcheck // intentional panic suppression
+		if v := recover(); v != nil {
+			r.lastError.Store(errorWrapper{err: fmt.Errorf("panic in callback: %v", v)})
+		}
 	}()
 	fn()
 }

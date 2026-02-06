@@ -267,7 +267,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	// Build Value for return and notification
 	newValue, err := newEntry.clone().toValue()
 	if err != nil {
-		return nil, config.WrapStoreError("toValue", namespace, key, err)
+		return nil, config.WrapStoreError("toValue", "memory", key, err)
 	}
 
 	// Notify watchers asynchronously
@@ -547,6 +547,9 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
 	}
+	if err := config.ValidateNamespace(namespace); err != nil {
+		return nil, err
+	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -570,6 +573,9 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 	if s.closed.Load() {
 		return config.ErrStoreClosed
 	}
+	if err := config.ValidateNamespace(namespace); err != nil {
+		return err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -580,14 +586,14 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 	succeeded := make([]string, 0, len(values))
 
 	for key, value := range values {
-		if key == "" {
-			keyErrors[key] = &config.InvalidKeyError{Key: key, Reason: "key cannot be empty"}
+		if err := config.ValidateKey(key); err != nil {
+			keyErrors[key] = err
 			continue
 		}
 
 		data, err := value.Marshal()
 		if err != nil {
-			keyErrors[key] = config.WrapStoreError("marshal", namespace, key, err)
+			keyErrors[key] = config.WrapStoreError("marshal", "memory", key, err)
 			continue
 		}
 
@@ -649,6 +655,9 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string) (int64, error) {
 	if s.closed.Load() {
 		return 0, config.ErrStoreClosed
+	}
+	if err := config.ValidateNamespace(namespace); err != nil {
+		return 0, err
 	}
 
 	s.mu.Lock()
