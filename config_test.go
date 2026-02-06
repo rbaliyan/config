@@ -3,6 +3,7 @@ package config_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -906,5 +907,447 @@ func TestKeyExistsError(t *testing.T) {
 	expected2 := `config: key "test" already exists`
 	if err2.Error() != expected2 {
 		t.Errorf("Error message = %q, expected %q", err2.Error(), expected2)
+	}
+}
+
+func TestMarkStale(t *testing.T) {
+	// nil should return nil
+	if config.MarkStale(nil) != nil {
+		t.Error("MarkStale(nil) should return nil")
+	}
+
+	// Mark a concrete value as stale
+	val := config.NewValue("hello",
+		config.WithValueMetadata(1, time.Now(), time.Now()),
+	)
+	stale := config.MarkStale(val)
+
+	if stale == nil {
+		t.Fatal("MarkStale should return non-nil")
+	}
+	if !stale.Metadata().IsStale() {
+		t.Error("Stale value should have IsStale() = true")
+	}
+	// Original should not be stale
+	if val.Metadata().IsStale() {
+		t.Error("Original value should not be stale")
+	}
+	// Value should be preserved
+	s, _ := stale.String()
+	if s != "hello" {
+		t.Errorf("Stale value = %q, want %q", s, "hello")
+	}
+	// Version should be preserved
+	if stale.Metadata().Version() != 1 {
+		t.Errorf("Stale version = %d, want 1", stale.Metadata().Version())
+	}
+
+	// Mark a value without metadata
+	val2 := config.NewValue(42)
+	stale2 := config.MarkStale(val2)
+	if !stale2.Metadata().IsStale() {
+		t.Error("Stale value without original metadata should still be stale")
+	}
+}
+
+func TestTypeHelpers(t *testing.T) {
+	// String()
+	tests := []struct {
+		typ  config.Type
+		want string
+	}{
+		{config.TypeInt, "int"},
+		{config.TypeFloat, "float"},
+		{config.TypeString, "string"},
+		{config.TypeBool, "bool"},
+		{config.TypeMapStringInt, "map[string]int"},
+		{config.TypeMapStringFloat, "map[string]float64"},
+		{config.TypeMapStringString, "map[string]string"},
+		{config.TypeListInt, "[]int"},
+		{config.TypeListFloat, "[]float64"},
+		{config.TypeListString, "[]string"},
+		{config.TypeCustom, "custom"},
+		{config.TypeUnknown, "unknown(0)"},
+	}
+
+	for _, tt := range tests {
+		if got := tt.typ.String(); got != tt.want {
+			t.Errorf("Type(%d).String() = %q, want %q", tt.typ, got, tt.want)
+		}
+	}
+
+	// ParseType round-trips
+	for _, tt := range tests {
+		if tt.typ == config.TypeUnknown {
+			continue // unknown doesn't round-trip
+		}
+		parsed := config.ParseType(tt.want)
+		if parsed != tt.typ {
+			t.Errorf("ParseType(%q) = %v, want %v", tt.want, parsed, tt.typ)
+		}
+	}
+
+	// IsPrimitive
+	if !config.TypeInt.IsPrimitive() {
+		t.Error("TypeInt should be primitive")
+	}
+	if config.TypeMapStringInt.IsPrimitive() {
+		t.Error("TypeMapStringInt should not be primitive")
+	}
+
+	// IsMap
+	if !config.TypeMapStringString.IsMap() {
+		t.Error("TypeMapStringString should be a map")
+	}
+	if config.TypeInt.IsMap() {
+		t.Error("TypeInt should not be a map")
+	}
+
+	// IsList
+	if !config.TypeListInt.IsList() {
+		t.Error("TypeListInt should be a list")
+	}
+	if config.TypeString.IsList() {
+		t.Error("TypeString should not be a list")
+	}
+}
+
+func TestWriteModeString(t *testing.T) {
+	tests := []struct {
+		mode config.WriteMode
+		want string
+	}{
+		{config.WriteModeUpsert, "upsert"},
+		{config.WriteModeCreate, "create"},
+		{config.WriteModeUpdate, "update"},
+		{config.WriteMode(99), "unknown"},
+	}
+
+	for _, tt := range tests {
+		if got := tt.mode.String(); got != tt.want {
+			t.Errorf("WriteMode(%d).String() = %q, want %q", tt.mode, got, tt.want)
+		}
+	}
+}
+
+func TestChangeTypeString(t *testing.T) {
+	if config.ChangeTypeSet.String() != "set" {
+		t.Errorf("ChangeTypeSet.String() = %q, want %q", config.ChangeTypeSet.String(), "set")
+	}
+	if config.ChangeTypeDelete.String() != "delete" {
+		t.Errorf("ChangeTypeDelete.String() = %q, want %q", config.ChangeTypeDelete.String(), "delete")
+	}
+}
+
+func TestCacheStats(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	cfg := mgr.Namespace("test")
+
+	// Set and get some values to generate cache activity
+	cfg.Set(ctx, "key", "value")
+	cfg.Get(ctx, "key")
+	cfg.Get(ctx, "key") // cache hit
+
+	obs, ok := mgr.(config.ManagerObserver)
+	if !ok {
+		t.Fatal("Manager should implement ManagerObserver")
+	}
+
+	stats := obs.CacheStats()
+	// Just verify it returns without error and has reasonable values
+	if stats.HitRate() < 0 || stats.HitRate() > 1 {
+		t.Errorf("HitRate() = %f, want between 0 and 1", stats.HitRate())
+	}
+}
+
+func TestWatchStatus(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	obs, ok := mgr.(config.ManagerObserver)
+	if !ok {
+		t.Fatal("Manager should implement ManagerObserver")
+	}
+
+	ws := obs.WatchStatus()
+	if !ws.Connected {
+		t.Error("Expected Connected = true")
+	}
+}
+
+func TestValueUnmarshal(t *testing.T) {
+	val := config.NewValue(map[string]any{"name": "test", "count": float64(42)})
+
+	var result map[string]any
+	if err := val.Unmarshal(&result); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if result["name"] != "test" {
+		t.Errorf("name = %v, want %q", result["name"], "test")
+	}
+}
+
+func TestValueTypeConversionsExtended(t *testing.T) {
+	// Bool conversion
+	val := config.NewValue(true)
+	b, err := val.Bool()
+	if err != nil || !b {
+		t.Errorf("Bool() = %v, %v; want true, nil", b, err)
+	}
+
+	// Float conversion
+	val = config.NewValue(3.14)
+	f, err := val.Float64()
+	if err != nil || f != 3.14 {
+		t.Errorf("Float64() = %v, %v; want 3.14, nil", f, err)
+	}
+
+	// Int from float (exact)
+	val = config.NewValue(42.0)
+	i, err := val.Int64()
+	if err != nil {
+		t.Errorf("Int64() from exact float failed: %v", err)
+	}
+	if i != 42 {
+		t.Errorf("Int64() = %d, want 42", i)
+	}
+
+	// String from non-string
+	val = config.NewValue(42)
+	s, err := val.String()
+	if err != nil {
+		t.Errorf("String() from int failed: %v", err)
+	}
+	if s != "42" {
+		t.Errorf("String() = %q, want %q", s, "42")
+	}
+}
+
+func TestValueMarshal(t *testing.T) {
+	val := config.NewValue("hello")
+	data, err := val.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	if len(data) == 0 {
+		t.Error("Marshal returned empty data")
+	}
+}
+
+func TestGetWriteMode(t *testing.T) {
+	// Value without write mode
+	val := config.NewValue("test")
+	mode := config.GetWriteMode(val)
+	if mode != config.WriteModeUpsert {
+		t.Errorf("Default write mode = %v, want Upsert", mode)
+	}
+
+	// Value with explicit write mode
+	val = config.NewValue("test", config.WithValueWriteMode(config.WriteModeCreate))
+	mode = config.GetWriteMode(val)
+	if mode != config.WriteModeCreate {
+		t.Errorf("Write mode = %v, want Create", mode)
+	}
+}
+
+func TestConfigNamespace(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	cfg := mgr.Namespace("test")
+	if cfg.Namespace() != "test" {
+		t.Errorf("Namespace() = %q, want %q", cfg.Namespace(), "test")
+	}
+}
+
+func TestDetectType(t *testing.T) {
+	tests := []struct {
+		input any
+		want  config.Type
+	}{
+		{42, config.TypeInt},
+		{int64(42), config.TypeInt},
+		{uint(42), config.TypeInt},
+		{3.14, config.TypeFloat},
+		{float32(3.14), config.TypeFloat},
+		{42.0, config.TypeInt}, // exact float → int (JSON compat)
+		{"hello", config.TypeString},
+		{true, config.TypeBool},
+		// Slices, maps, and nil are all TypeCustom in DetectType
+		{[]int{1, 2}, config.TypeCustom},
+		{map[string]int{"a": 1}, config.TypeCustom},
+		{nil, config.TypeCustom},
+		{struct{}{}, config.TypeCustom},
+	}
+
+	for _, tt := range tests {
+		got := config.DetectType(tt.input)
+		if got != tt.want {
+			t.Errorf("DetectType(%T) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestStoreError(t *testing.T) {
+	inner := errors.New("connection refused")
+	err := &config.StoreError{
+		Op:      "get",
+		Backend: "postgres",
+		Key:     "app/name",
+		Err:     inner,
+	}
+
+	if !errors.Is(err, inner) {
+		t.Error("StoreError should unwrap to inner error")
+	}
+
+	msg := err.Error()
+	if msg == "" {
+		t.Error("StoreError.Error() should not be empty")
+	}
+}
+
+func TestInvalidKeyError(t *testing.T) {
+	err := &config.InvalidKeyError{Key: "../bad", Reason: "contains path traversal"}
+	if !errors.Is(err, config.ErrInvalidKey) {
+		t.Error("InvalidKeyError should unwrap to ErrInvalidKey")
+	}
+
+	msg := err.Error()
+	if msg == "" {
+		t.Error("InvalidKeyError.Error() should not be empty")
+	}
+}
+
+func TestTypeMismatchError(t *testing.T) {
+	err := &config.TypeMismatchError{
+		Key:      "count",
+		Expected: config.TypeInt,
+		Actual:   config.TypeString,
+	}
+	if !errors.Is(err, config.ErrTypeMismatch) {
+		t.Error("TypeMismatchError should unwrap to ErrTypeMismatch")
+	}
+
+	msg := err.Error()
+	if msg == "" {
+		t.Error("TypeMismatchError.Error() should not be empty")
+	}
+}
+
+func TestManagerConnectTwice(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	// First connect
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("First Connect failed: %v", err)
+	}
+
+	// Second connect should be idempotent (already connected)
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Second Connect failed: %v", err)
+	}
+
+	mgr.Close(ctx)
+
+	// Connect after close should fail
+	err = mgr.Connect(ctx)
+	if !errors.Is(err, config.ErrManagerClosed) {
+		t.Errorf("Connect after Close = %v, want ErrManagerClosed", err)
+	}
+}
+
+func TestNewValueFromBytesError(t *testing.T) {
+	// Invalid codec name falls back to default
+	val, err := config.NewValueFromBytes([]byte(`"hello"`), "nonexistent")
+	if err != nil {
+		t.Fatalf("NewValueFromBytes with unknown codec should fallback, got: %v", err)
+	}
+	if val == nil {
+		t.Error("Expected non-nil value")
+	}
+
+	// Invalid bytes should error
+	_, err = config.NewValueFromBytes([]byte("not-json"), "json")
+	if err == nil {
+		t.Error("Expected error for invalid JSON bytes")
+	}
+}
+
+func TestErrorHelpers(t *testing.T) {
+	// IsNotFound
+	if !config.IsNotFound(config.ErrNotFound) {
+		t.Error("IsNotFound should be true for ErrNotFound")
+	}
+	if !config.IsNotFound(&config.KeyNotFoundError{Key: "k"}) {
+		t.Error("IsNotFound should be true for KeyNotFoundError")
+	}
+	if config.IsNotFound(errors.New("other")) {
+		t.Error("IsNotFound should be false for random error")
+	}
+
+	// Wrapped errors
+	if !config.IsNotFound(fmt.Errorf("wrapped: %w", config.ErrNotFound)) {
+		t.Error("IsNotFound should work with wrapped errors")
+	}
+
+	// IsKeyExists
+	if !config.IsKeyExists(config.ErrKeyExists) {
+		t.Error("IsKeyExists should be true for ErrKeyExists")
+	}
+	if config.IsKeyExists(errors.New("other")) {
+		t.Error("IsKeyExists should be false for random error")
+	}
+
+	// WrapStoreError
+	wrapped := config.WrapStoreError("get", "memory", "mykey", errors.New("fail"))
+	if wrapped == nil {
+		t.Fatal("WrapStoreError should return non-nil")
+	}
+	var storeErr *config.StoreError
+	if !errors.As(wrapped, &storeErr) {
+		t.Error("WrapStoreError should return *StoreError")
+	}
+
+	// WrapStoreError with nil should return nil
+	if config.WrapStoreError("get", "memory", "k", nil) != nil {
+		t.Error("WrapStoreError(nil) should return nil")
+	}
+
+	// WrapStoreError should not double-wrap
+	rewrapped := config.WrapStoreError("set", "memory", "k", wrapped)
+	if rewrapped != wrapped {
+		t.Error("WrapStoreError should not double-wrap StoreError")
 	}
 }

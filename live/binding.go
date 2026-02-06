@@ -28,6 +28,10 @@ var (
 // Binding maintains a live connection between a config key and a struct.
 // It automatically reloads the struct when the config changes via polling.
 //
+// Deprecated: Use [Ref] instead. Ref provides lock-free reads via atomic swap,
+// generic type safety, and change detection via content hashing. Binding holds
+// a write lock during the entire store fetch, blocking all readers.
+//
 // The Binding must be stopped by calling Stop() when no longer needed
 // to release resources and stop the background goroutine.
 type Binding struct {

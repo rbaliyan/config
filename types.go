@@ -73,11 +73,6 @@ func (t Type) String() string {
 	}
 }
 
-// Value returns the underlying integer value of the type.
-func (t Type) Value() int {
-	return int(t)
-}
-
 // ParseType parses a string into a Type.
 // Returns TypeUnknown for unrecognized strings.
 func ParseType(s string) Type {

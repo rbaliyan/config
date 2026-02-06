@@ -150,8 +150,10 @@ func (ms *Store) Get(ctx context.Context, namespace, key string) (config.Value, 
 		}
 		lastErr = err
 
-		// Only continue to next store on NotFound or store errors
-		if !config.IsNotFound(err) && err != config.ErrStoreNotConnected {
+		// Only continue to next store on NotFound or unavailable store errors
+		if !config.IsNotFound(err) &&
+			!errors.Is(err, config.ErrStoreNotConnected) &&
+			!errors.Is(err, config.ErrStoreClosed) {
 			return nil, err
 		}
 	}
