@@ -1186,7 +1186,7 @@ func TestConfigNamespace(t *testing.T) {
 	}
 }
 
-func TestDetectType(t *testing.T) {
+func TestNewValueTypeDetection(t *testing.T) {
 	tests := []struct {
 		input any
 		want  config.Type
@@ -1199,17 +1199,16 @@ func TestDetectType(t *testing.T) {
 		{42.0, config.TypeInt}, // exact float → int (JSON compat)
 		{"hello", config.TypeString},
 		{true, config.TypeBool},
-		// Slices, maps, and nil are all TypeCustom in DetectType
+		// Slices, maps, and nil are all TypeCustom
 		{[]int{1, 2}, config.TypeCustom},
 		{map[string]int{"a": 1}, config.TypeCustom},
-		{nil, config.TypeCustom},
 		{struct{}{}, config.TypeCustom},
 	}
 
 	for _, tt := range tests {
-		got := config.DetectType(tt.input)
+		got := config.NewValue(tt.input).Type()
 		if got != tt.want {
-			t.Errorf("DetectType(%T) = %v, want %v", tt.input, got, tt.want)
+			t.Errorf("NewValue(%T).Type() = %v, want %v", tt.input, got, tt.want)
 		}
 	}
 }

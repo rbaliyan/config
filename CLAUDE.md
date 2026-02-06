@@ -21,7 +21,7 @@ This is a Go configuration library that provides type-safe, namespace-aware conf
 ```
 config/
 ├── store.go          # Store interface, ChangeEvent, filters
-├── value.go          # Value interface, Val implementation
+├── value.go          # Value interface, val implementation (unexported)
 ├── types.go          # Type enum (TypeInt, TypeString, etc.)
 ├── config.go         # Config interface (Reader + Writer)
 ├── manager.go        # Manager implementation with caching
@@ -242,7 +242,7 @@ The `Value` interface provides error-returning methods for type-safe access:
 | `String()` | `(string, error)` | Error if not convertible |
 | `Bool()` | `(bool, error)` | Error if not convertible |
 
-The concrete `Val` type also provides convenience methods (zero on error):
+The concrete value type (unexported `val`) also provides convenience methods (zero on error):
 
 | Method | Returns | Description |
 |--------|---------|-------------|
@@ -257,7 +257,7 @@ The concrete `Val` type also provides convenience methods (zero on error):
 ## Testing
 
 ```bash
-# Run all tests
+# Run all unit tests
 go test ./...
 
 # Run specific package tests
@@ -265,9 +265,14 @@ go test ./memory/...
 go test ./postgres/...  # Requires PostgreSQL
 go test ./mongodb/...   # Requires MongoDB
 
-# Environment variables for integration tests
-POSTGRES_DSN=postgres://localhost:5432/config_test?sslmode=disable
-MONGO_URI=mongodb://localhost:27017
+# Run integration tests with Docker (requires just + docker)
+just test-integration   # MongoDB + PostgreSQL
+just test-mongo         # MongoDB only
+just test-pg            # PostgreSQL only
+
+# Environment variables for manual integration testing
+POSTGRES_DSN=postgres://config_test:config_test@localhost:5433/config_test?sslmode=disable
+MONGO_URI=mongodb://localhost:27019/?directConnection=true
 ```
 
 ## Code Style
@@ -310,9 +315,10 @@ Optional (for specific backends):
 
 ## Recent Changes
 
+- **v0.2.0 API cleanup**: Unexported internal types (`Val`→`val`, `StoreMetadata`→`storeMetadata`, `DetectType`→`detectType`). Replaced `WithWatchBackoff(WatchBackoffConfig{...})` with individual options: `WithWatchInitialBackoff()`, `WithWatchMaxBackoff()`, `WithWatchBackoffFactor()`
+- **Integration test infrastructure**: `just test-integration` starts MongoDB and PostgreSQL via Docker for automated integration testing
 - **Store.Set returns Value**: `Set()` now returns `(Value, error)` with updated metadata, eliminating the need for extra Get calls
 - **BulkStore for all stores**: `GetMany`, `SetMany`, `DeleteMany` implemented for memory, postgres, and mongodb stores
-- **Configurable circuit breaker**: Use `WithCircuitBreaker(CircuitBreakerConfig{...})` to configure watch reconnection behavior
 - **Cache metrics**: `Manager.CacheStats()` returns hit/miss/eviction statistics via `CacheStats` struct
 - **DefaultNamespace constant**: `config.DefaultNamespace` for the empty string namespace
 - **Conditional writes**: `WithIfNotExists()` and `WithIfExists()` options for Set operations

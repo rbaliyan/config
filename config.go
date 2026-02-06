@@ -134,7 +134,7 @@ func (c *nsConfig) Set(ctx context.Context, key string, value any, opts ...SetOp
 	// Determine type
 	typ := setOpts.typ
 	if typ == TypeUnknown {
-		typ = DetectType(value)
+		typ = detectType(value)
 	}
 
 	// Create Value with write mode

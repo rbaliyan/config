@@ -117,7 +117,7 @@ type manager struct {
 	watchWg     sync.WaitGroup
 
 	// Watch backoff configuration and status
-	watchBackoff  WatchBackoffConfig
+	watchBackoff  watchBackoffConfig
 	watchFailures atomic.Int32          // consecutive failures for observability
 	lastWatchErr  atomic.Pointer[string] // last watch error message (nil = no error)
 	lastWatchTime atomic.Int64          // unix timestamp of last watch attempt
@@ -362,7 +362,7 @@ func (m *manager) watchChanges(ctx context.Context) {
 	defer m.watchWg.Done()
 
 	cfg := m.watchBackoff
-	backoff := cfg.InitialBackoff
+	backoff := cfg.initialBackoff
 
 	for {
 		// Check if context is cancelled before attempting to watch
@@ -397,14 +397,14 @@ func (m *manager) watchChanges(ctx context.Context) {
 			}
 
 			// Increase backoff for next retry (with cap)
-			backoff = min(time.Duration(float64(backoff)*cfg.BackoffFactor), cfg.MaxBackoff)
+			backoff = min(time.Duration(float64(backoff)*cfg.backoffFactor), cfg.maxBackoff)
 			continue
 		}
 
 		// Successfully connected, reset failures and backoff
 		m.watchFailures.Store(0)
 		m.lastWatchErr.Store(nil)
-		backoff = cfg.InitialBackoff
+		backoff = cfg.initialBackoff
 		m.logger.Debug("watch started successfully")
 
 		// Process changes until channel closes or context cancelled
@@ -424,7 +424,7 @@ func (m *manager) watchChanges(ctx context.Context) {
 		case <-time.After(jitteredBackoff(backoff)):
 		}
 
-		backoff = min(time.Duration(float64(backoff)*cfg.BackoffFactor), cfg.MaxBackoff)
+		backoff = min(time.Duration(float64(backoff)*cfg.backoffFactor), cfg.maxBackoff)
 	}
 }
 

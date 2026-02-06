@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - patch
+          - minor
   push:
     branches:
       - main
@@ -40,10 +41,9 @@ jobs:
       - name: Get latest tag
         id: get_tag
         run: |
-          # Get the latest v0.1.x tag
-          LATEST_TAG=$(git tag -l 'v0.1.*' --sort=-v:refname | head -n1)
+          LATEST_TAG=$(git tag -l 'v*.*.*' --sort=-v:refname | head -n1)
           if [ -z "$LATEST_TAG" ]; then
-            LATEST_TAG="v0.1.0"
+            LATEST_TAG="v0.0.0"
           fi
           echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
           echo "Latest tag: $LATEST_TAG"
@@ -58,8 +58,13 @@ jobs:
           # Split into major.minor.patch
           IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
 
-          # Bump patch version
-          PATCH=$((PATCH + 1))
+          BUMP="${{ github.event.inputs.bump || 'patch' }}"
+          if [ "$BUMP" = "minor" ]; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          else
+            PATCH=$((PATCH + 1))
+          fi
 
           NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT

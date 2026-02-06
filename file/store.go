@@ -350,7 +350,7 @@ func (s *Store) addEntry(namespace, key string, value any, now time.Time) error 
 		namespace: namespace,
 		value:     data,
 		codec:     c.Name(),
-		valueType: config.DetectType(value),
+		valueType: config.NewValue(value).Type(),
 		version:   1,
 		createdAt: now,
 		updatedAt: now,

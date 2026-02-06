@@ -7,30 +7,11 @@ import (
 	"github.com/rbaliyan/config/codec"
 )
 
-// WatchBackoffConfig configures the exponential backoff for watch reconnection.
-// When the watch connection fails, the manager will retry with exponential backoff.
-// This prevents hammering the backend while allowing quick recovery.
-type WatchBackoffConfig struct {
-	// InitialBackoff is the initial wait time between reconnection attempts.
-	// Default: 100ms
-	InitialBackoff time.Duration
-
-	// MaxBackoff is the maximum wait time between reconnection attempts.
-	// Default: 30 seconds
-	MaxBackoff time.Duration
-
-	// BackoffFactor is the multiplier applied to backoff after each failure.
-	// Default: 2.0
-	BackoffFactor float64
-}
-
-// DefaultWatchBackoffConfig returns the default watch backoff configuration.
-func DefaultWatchBackoffConfig() WatchBackoffConfig {
-	return WatchBackoffConfig{
-		InitialBackoff: 100 * time.Millisecond,
-		MaxBackoff:     30 * time.Second,
-		BackoffFactor:  2.0,
-	}
+// watchBackoffConfig configures the exponential backoff for watch reconnection.
+type watchBackoffConfig struct {
+	initialBackoff time.Duration
+	maxBackoff     time.Duration
+	backoffFactor  float64
 }
 
 // managerOptions holds configuration for the Manager (unexported).
@@ -38,7 +19,7 @@ type managerOptions struct {
 	store        Store
 	codec        codec.Codec
 	logger       *slog.Logger
-	watchBackoff WatchBackoffConfig
+	watchBackoff watchBackoffConfig
 }
 
 // Option configures the Manager.
@@ -47,9 +28,13 @@ type Option func(*managerOptions)
 // newManagerOptions creates options with defaults.
 func newManagerOptions() *managerOptions {
 	return &managerOptions{
-		codec:        codec.Default(),
-		logger:       slog.Default(),
-		watchBackoff: DefaultWatchBackoffConfig(),
+		codec:  codec.Default(),
+		logger: slog.Default(),
+		watchBackoff: watchBackoffConfig{
+			initialBackoff: 100 * time.Millisecond,
+			maxBackoff:     30 * time.Second,
+			backoffFactor:  2.0,
+		},
 	}
 }
 
@@ -82,30 +67,32 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
-// WithWatchBackoff configures the exponential backoff for watch reconnection.
-// When the watch connection fails, the manager retries with exponential backoff
-// to prevent hammering the backend while allowing quick recovery.
-//
-// Example:
-//
-//	mgr := config.New(
-//	    config.WithStore(store),
-//	    config.WithWatchBackoff(config.WatchBackoffConfig{
-//	        InitialBackoff: 200 * time.Millisecond,
-//	        MaxBackoff:     1 * time.Minute,
-//	        BackoffFactor:  1.5,
-//	    }),
-//	)
-func WithWatchBackoff(cfg WatchBackoffConfig) Option {
+// WithWatchInitialBackoff sets the initial wait time between watch reconnection attempts.
+// Default: 100ms.
+func WithWatchInitialBackoff(d time.Duration) Option {
 	return func(o *managerOptions) {
-		if cfg.InitialBackoff > 0 {
-			o.watchBackoff.InitialBackoff = cfg.InitialBackoff
+		if d > 0 {
+			o.watchBackoff.initialBackoff = d
 		}
-		if cfg.MaxBackoff > 0 {
-			o.watchBackoff.MaxBackoff = cfg.MaxBackoff
+	}
+}
+
+// WithWatchMaxBackoff sets the maximum wait time between watch reconnection attempts.
+// Default: 30s.
+func WithWatchMaxBackoff(d time.Duration) Option {
+	return func(o *managerOptions) {
+		if d > 0 {
+			o.watchBackoff.maxBackoff = d
 		}
-		if cfg.BackoffFactor > 0 {
-			o.watchBackoff.BackoffFactor = cfg.BackoffFactor
+	}
+}
+
+// WithWatchBackoffFactor sets the multiplier applied to backoff after each watch failure.
+// Default: 2.0.
+func WithWatchBackoffFactor(f float64) Option {
+	return func(o *managerOptions) {
+		if f > 0 {
+			o.watchBackoff.backoffFactor = f
 		}
 	}
 }

@@ -68,9 +68,8 @@ type Metadata interface {
 	IsStale() bool
 }
 
-// StoreMetadata extends Metadata with internal fields used by store implementations.
-// This interface is not intended for end-user code.
-type StoreMetadata interface {
+// storeMetadata extends Metadata with internal fields used by store implementations.
+type storeMetadata interface {
 	Metadata
 
 	// EntryID returns the unique storage identifier for this entry.
@@ -79,8 +78,8 @@ type StoreMetadata interface {
 	EntryID() string
 }
 
-// Val is the concrete Value implementation.
-type Val struct {
+// val is the concrete Value implementation.
+type val struct {
 	raw       any
 	data      []byte
 	dataType  Type
@@ -107,29 +106,29 @@ func (m *valueMetadata) IsStale() bool        { return m.stale }
 // Compile-time interface checks for valueMetadata
 var (
 	_ Metadata      = (*valueMetadata)(nil)
-	_ StoreMetadata = (*valueMetadata)(nil)
+	_ storeMetadata = (*valueMetadata)(nil)
 )
 
-// ValueOption configures a Val during construction.
-type ValueOption func(*Val)
+// ValueOption configures a value during construction.
+type ValueOption func(*val)
 
 // WithCodec sets the codec for the value.
 func WithValueCodec(c codec.Codec) ValueOption {
-	return func(v *Val) {
+	return func(v *val) {
 		v.codec = c
 	}
 }
 
 // WithValueType sets the type for the value.
 func WithValueType(t Type) ValueOption {
-	return func(v *Val) {
+	return func(v *val) {
 		v.dataType = t
 	}
 }
 
 // WithValueMetadata sets metadata for the value.
 func WithValueMetadata(version int64, createdAt, updatedAt time.Time) ValueOption {
-	return func(v *Val) {
+	return func(v *val) {
 		if v.metadata == nil {
 			v.metadata = &valueMetadata{}
 		}
@@ -143,7 +142,7 @@ func WithValueMetadata(version int64, createdAt, updatedAt time.Time) ValueOptio
 // This is used by store implementations to track the database-level ID.
 // Not intended for end-user code.
 func WithValueEntryID(id string) ValueOption {
-	return func(v *Val) {
+	return func(v *val) {
 		if v.metadata == nil {
 			v.metadata = &valueMetadata{}
 		}
@@ -154,7 +153,7 @@ func WithValueEntryID(id string) ValueOption {
 // WithValueStale marks the value as stale (served from cache due to store error).
 // This is used internally by the Manager when falling back to cached values.
 func WithValueStale(stale bool) ValueOption {
-	return func(v *Val) {
+	return func(v *val) {
 		if v.metadata == nil {
 			v.metadata = &valueMetadata{}
 		}
@@ -164,16 +163,16 @@ func WithValueStale(stale bool) ValueOption {
 
 // WithValueWriteMode sets the write mode for the value.
 func WithValueWriteMode(mode WriteMode) ValueOption {
-	return func(v *Val) {
+	return func(v *val) {
 		v.writeMode = mode
 	}
 }
 
 // NewValue creates a Value from any data with optional configuration.
 func NewValue(data any, opts ...ValueOption) Value {
-	v := &Val{
+	v := &val{
 		raw:      data,
-		dataType: DetectType(data),
+		dataType: detectType(data),
 		codec:    codec.Default(),
 	}
 
@@ -196,10 +195,10 @@ func NewValueFromBytes(data []byte, codecName string, opts ...ValueOption) (Valu
 		return nil, fmt.Errorf("decode value: %w", err)
 	}
 
-	v := &Val{
+	v := &val{
 		raw:      raw,
 		data:     data,
-		dataType: DetectType(raw),
+		dataType: detectType(raw),
 		codec:    c,
 	}
 
@@ -218,28 +217,28 @@ func MarkStale(v Value) Value {
 		return nil
 	}
 
-	// If it's our Val type, we can copy it efficiently
-	if val, ok := v.(*Val); ok {
-		newVal := &Val{
-			raw:       val.raw,
-			data:      val.data,
-			dataType:  val.dataType,
-			codec:     val.codec,
-			writeMode: val.writeMode,
+	// If it's our val type, we can copy it efficiently
+	if src, ok := v.(*val); ok {
+		cp := &val{
+			raw:       src.raw,
+			data:      src.data,
+			dataType:  src.dataType,
+			codec:     src.codec,
+			writeMode: src.writeMode,
 		}
 		// Copy metadata and set stale flag
-		if val.metadata != nil {
-			newVal.metadata = &valueMetadata{
-				version:   val.metadata.version,
-				createdAt: val.metadata.createdAt,
-				updatedAt: val.metadata.updatedAt,
-				entryID:   val.metadata.entryID,
+		if src.metadata != nil {
+			cp.metadata = &valueMetadata{
+				version:   src.metadata.version,
+				createdAt: src.metadata.createdAt,
+				updatedAt: src.metadata.updatedAt,
+				entryID:   src.metadata.entryID,
 				stale:     true,
 			}
 		} else {
-			newVal.metadata = &valueMetadata{stale: true}
+			cp.metadata = &valueMetadata{stale: true}
 		}
-		return newVal
+		return cp
 	}
 
 	// For other Value implementations, wrap with stale metadata
@@ -266,10 +265,10 @@ func (w *staleMetadataWrapper) IsStale() bool {
 }
 
 // Compile-time interface check
-var _ Value = (*Val)(nil)
+var _ Value = (*val)(nil)
 
 // Marshal serializes the value to bytes using the configured codec.
-func (v *Val) Marshal() ([]byte, error) {
+func (v *val) Marshal() ([]byte, error) {
 	if v.raw == nil {
 		return nil, ErrInvalidValue
 	}
@@ -283,7 +282,7 @@ func (v *Val) Marshal() ([]byte, error) {
 }
 
 // Unmarshal deserializes the value into the target.
-func (v *Val) Unmarshal(target any) error {
+func (v *val) Unmarshal(target any) error {
 	if v.raw == nil {
 		return ErrNotFound
 	}
@@ -305,12 +304,12 @@ func (v *Val) Unmarshal(target any) error {
 }
 
 // Type returns the detected type of the value.
-func (v *Val) Type() Type {
+func (v *val) Type() Type {
 	return v.dataType
 }
 
 // Codec returns the codec name.
-func (v *Val) Codec() string {
+func (v *val) Codec() string {
 	if v.codec != nil {
 		return v.codec.Name()
 	}
@@ -318,7 +317,7 @@ func (v *Val) Codec() string {
 }
 
 // Metadata returns associated metadata.
-func (v *Val) Metadata() Metadata {
+func (v *val) Metadata() Metadata {
 	if v.metadata == nil {
 		return &valueMetadata{}
 	}
@@ -326,13 +325,12 @@ func (v *Val) Metadata() Metadata {
 }
 
 // WriteMode returns the write mode for this value.
-// Val implements WriteModer.
-func (v *Val) WriteMode() WriteMode {
+func (v *val) WriteMode() WriteMode {
 	return v.writeMode
 }
 
 // Compile-time interface check
-var _ WriteModer = (*Val)(nil)
+var _ WriteModer = (*val)(nil)
 
 // GetWriteMode extracts the write mode from a Value.
 // Returns WriteModeUpsert (default) if the value does not implement WriteModer.
@@ -346,7 +344,7 @@ func GetWriteMode(v Value) WriteMode {
 
 // Int64 returns the value as int64.
 // Returns an error if the value cannot be converted to int64.
-func (v *Val) Int64() (int64, error) {
+func (v *val) Int64() (int64, error) {
 	if v.raw == nil {
 		return 0, ErrNotFound
 	}
@@ -387,7 +385,7 @@ func (v *Val) Int64() (int64, error) {
 
 // Float64 returns the value as float64.
 // Returns an error if the value cannot be converted to float64.
-func (v *Val) Float64() (float64, error) {
+func (v *val) Float64() (float64, error) {
 	if v.raw == nil {
 		return 0, ErrNotFound
 	}
@@ -422,7 +420,7 @@ func (v *Val) Float64() (float64, error) {
 
 // String returns the value as string.
 // Returns an error if the value is nil.
-func (v *Val) String() (string, error) {
+func (v *val) String() (string, error) {
 	if v.raw == nil {
 		return "", ErrNotFound
 	}
@@ -438,7 +436,7 @@ func (v *Val) String() (string, error) {
 
 // Bool returns the value as bool.
 // Returns an error if the value cannot be converted to bool.
-func (v *Val) Bool() (bool, error) {
+func (v *val) Bool() (bool, error) {
 	if v.raw == nil {
 		return false, ErrNotFound
 	}
@@ -462,10 +460,10 @@ func (v *Val) Bool() (bool, error) {
 
 // Helper functions
 
-// DetectType maps a Go value to its config Type.
+// detectType maps a Go value to its config Type.
 // It handles JSON-decoded numbers (float64 that are actually integers,
 // json.Number) and unsigned integer types.
-func DetectType(data any) Type {
+func detectType(data any) Type {
 	switch val := data.(type) {
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		return TypeInt
