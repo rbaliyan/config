@@ -400,9 +400,9 @@ type AppConfig struct {
 // Useful when fields are tightly coupled and should be updated atomically
 ```
 
-## Live Binding (Auto-Reload)
+## Live Config (Auto-Reload)
 
-Keep a struct automatically synchronized with configuration using polling:
+Keep a typed struct automatically synchronized with configuration using polling and atomic swap:
 
 ```go
 import "github.com/rbaliyan/config/live"
@@ -412,42 +412,39 @@ type DatabaseConfig struct {
     Port int    `json:"port"`
 }
 
-var dbConfig DatabaseConfig
-binding, err := live.Bind(ctx, cfg, "database", &dbConfig,
-    live.WithPollInterval(10*time.Second),
-    live.WithOnReload(func() {
-        log.Println("config reloaded")
+ref, err := live.New[DatabaseConfig](ctx, cfg, "database",
+    live.PollInterval(10*time.Second),
+    live.OnChange(func(old, new DatabaseConfig) {
+        log.Printf("config changed: %s -> %s", old.Host, new.Host)
     }),
-    live.WithOnError(func(err error) {
+    live.OnError(func(err error) {
         log.Printf("reload error: %v", err)
     }),
 )
 if err != nil {
     return err
 }
-defer binding.Stop()
+defer ref.Close()
 
-// dbConfig is automatically kept in sync with the backend
+// Hot path: single atomic load, zero contention
 http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-    // Safe concurrent access using Get()
-    binding.Get(func(target any) {
-        cfg := target.(*DatabaseConfig)
-        fmt.Fprintf(w, "Host: %s, Port: %d", cfg.Host, cfg.Port)
-    })
+    snap := ref.Load()
+    fmt.Fprintf(w, "Host: %s, Port: %d", snap.Host, snap.Port)
 })
 ```
 
 Options:
-- `WithPollInterval(d)` - Set polling interval (default: 30s)
-- `WithOnReload(fn)` - Callback after successful reload
-- `WithOnError(fn)` - Callback on reload error
+- `PollInterval(d)` - Set polling interval (default: 30s)
+- `OnChange(fn)` - Callback with old and new values on change
+- `OnError(fn)` - Callback on reload error
 
 Methods:
-- `Stop()` - Stop background polling
+- `Load()` - Get current snapshot (atomic, zero-cost)
+- `Close()` - Stop background polling
 - `ReloadNow(ctx)` - Force immediate reload
 - `LastReload()` - Get last reload timestamp
 - `LastError()` - Get last error (nil if successful)
-- `Get(fn)` - Safe concurrent read access
+- `ReloadCount()` - Get total successful reload count
 
 ## Codecs
 

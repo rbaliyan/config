@@ -315,6 +315,9 @@ Optional (for specific backends):
 
 ## Recent Changes
 
+- **Removed deprecated `live.Binding`**: Use `live.Ref[T]` instead for lock-free atomic reads. `DefaultPollInterval` and `ErrInvalidTarget` remain in the `live` package.
+- **Unexported `otel.Metrics`**: The metrics struct and fields are now unexported (`metrics`, `operationCount`, `errorCount`, `operationLatency`)
+- **Benchmarks**: `benchmark_test.go` provides benchmarks for Manager.Get, Value operations, MarkStale, and Store operations
 - **v0.2.0 API cleanup**: Unexported internal types (`Val`→`val`, `StoreMetadata`→`storeMetadata`, `DetectType`→`detectType`). Replaced `WithWatchBackoff(WatchBackoffConfig{...})` with individual options: `WithWatchInitialBackoff()`, `WithWatchMaxBackoff()`, `WithWatchBackoffFactor()`
 - **Integration test infrastructure**: `just test-integration` starts MongoDB and PostgreSQL via Docker for automated integration testing
 - **Store.Set returns Value**: `Set()` now returns `(Value, error)` with updated metadata, eliminating the need for extra Get calls

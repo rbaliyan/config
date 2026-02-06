@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -11,6 +12,21 @@ import (
 	"github.com/rbaliyan/config"
 	"github.com/rbaliyan/config/bind"
 )
+
+const (
+	// DefaultPollInterval is the default interval for polling config changes.
+	DefaultPollInterval = 30 * time.Second
+)
+
+var (
+	// ErrInvalidTarget is returned when the target is not a pointer to a struct.
+	ErrInvalidTarget = errors.New("live: target must be a pointer to a struct")
+)
+
+// errorWrapper wraps an error for atomic.Value (which requires consistent types).
+type errorWrapper struct {
+	err error
+}
 
 // Ref holds a live, atomically-updated reference to a typed config struct.
 // It polls for config changes in the background and swaps in new snapshots
