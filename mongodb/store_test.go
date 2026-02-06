@@ -166,8 +166,8 @@ func TestMongoDBStore_Watch(t *testing.T) {
 	store, client := skipIfNoMongo(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	defer client.Disconnect(ctx)
-	defer store.Close(ctx)
+	defer func() { _ = client.Disconnect(ctx) }()
+	defer func() { _ = store.Close(ctx) }()
 
 	// Start watching
 	changes, err := store.Watch(ctx, config.WatchFilter{
@@ -200,14 +200,14 @@ func TestMongoDBStore_Watch(t *testing.T) {
 	}
 
 	// Cleanup
-	store.Delete(ctx, "watchtest", "watched/key")
+	_ = store.Delete(ctx, "watchtest", "watched/key")
 }
 
 func TestMongoDBStore_Health(t *testing.T) {
 	store, client := skipIfNoMongo(t)
 	ctx := context.Background()
-	defer client.Disconnect(ctx)
-	defer store.Close(ctx)
+	defer func() { _ = client.Disconnect(ctx) }()
+	defer func() { _ = store.Close(ctx) }()
 
 	if err := store.Health(ctx); err != nil {
 		t.Errorf("Health check failed: %v", err)
@@ -217,13 +217,13 @@ func TestMongoDBStore_Health(t *testing.T) {
 func TestMongoDBStore_Stats(t *testing.T) {
 	store, client := skipIfNoMongo(t)
 	ctx := context.Background()
-	defer client.Disconnect(ctx)
-	defer store.Close(ctx)
+	defer func() { _ = client.Disconnect(ctx) }()
+	defer func() { _ = store.Close(ctx) }()
 
 	// Set a value
 	value := config.NewValue(1, config.WithValueType(config.TypeInt))
 	_, _ = store.Set(ctx, "statstest", "stats/key", value)
-	defer store.Delete(ctx, "statstest", "stats/key")
+	defer func() { _ = store.Delete(ctx, "statstest", "stats/key") }()
 
 	stats, err := store.Stats(ctx)
 	if err != nil {

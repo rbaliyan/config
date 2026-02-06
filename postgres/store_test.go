@@ -169,7 +169,7 @@ func TestPostgresStore_Find(t *testing.T) {
 
 	// Cleanup
 	for _, d := range testData {
-		store.Delete(ctx, "listtest", d.key)
+		_ = store.Delete(ctx, "listtest", d.key)
 	}
 }
 
@@ -212,7 +212,7 @@ func TestPostgresStore_Watch(t *testing.T) {
 	}
 
 	// Cleanup
-	store.Delete(ctx, "watchtest", "watched/key")
+	_ = store.Delete(ctx, "watchtest", "watched/key")
 }
 
 func TestPostgresStore_Health(t *testing.T) {
@@ -237,7 +237,7 @@ func TestPostgresStore_Stats(t *testing.T) {
 	// Set a value
 	value := config.NewValue(1, config.WithValueType(config.TypeInt))
 	_, _ = store.Set(ctx, "statstest", "stats/key", value)
-	defer store.Delete(ctx, "statstest", "stats/key")
+	defer func() { _ = store.Delete(ctx, "statstest", "stats/key") }()
 
 	stats, err := store.Stats(ctx)
 	if err != nil {
