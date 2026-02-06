@@ -134,9 +134,9 @@ func TestPostgresStore_Find(t *testing.T) {
 	defer store.Close(ctx)
 
 	// Clean up any existing test data
-	store.Delete(ctx, "listtest", "app/db/host")
-	store.Delete(ctx, "listtest", "app/db/port")
-	store.Delete(ctx, "listtest", "app/cache/ttl")
+	_ = store.Delete(ctx, "listtest", "app/db/host")
+	_ = store.Delete(ctx, "listtest", "app/db/port")
+	_ = store.Delete(ctx, "listtest", "app/cache/ttl")
 
 	// Set multiple values
 	testData := []struct {

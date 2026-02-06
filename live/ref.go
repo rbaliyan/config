@@ -181,7 +181,7 @@ func (r *Ref[T]) run() {
 			return
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), r.opts.pollInterval/2)
-			r.reload(ctx)
+			_ = r.reload(ctx)
 			cancel()
 		}
 	}

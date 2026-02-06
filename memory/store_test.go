@@ -207,7 +207,7 @@ func TestStore_WatchDelete(t *testing.T) {
 	// Delete the value
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		store.Delete(ctx, "ns", "delete-key")
+		_ = store.Delete(ctx, "ns", "delete-key")
 	}()
 
 	// Wait for event
@@ -1340,7 +1340,7 @@ func TestStore_DeleteManyNotifications(t *testing.T) {
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		store.DeleteMany(ctx, "ns", []string{"del1", "del2"})
+		_, _ = store.DeleteMany(ctx, "ns", []string{"del1", "del2"})
 	}()
 
 	// Should receive at least one delete event

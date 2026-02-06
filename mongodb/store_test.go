@@ -45,7 +45,7 @@ func skipIfNoMongo(t *testing.T) (*mongodb.Store, *mongo.Client) {
 	)
 
 	if err := store.Connect(ctx); err != nil {
-		client.Disconnect(ctx)
+		_ = client.Disconnect(ctx)
 		t.Skipf("Store connect failed: %v", err)
 	}
 
@@ -55,8 +55,8 @@ func skipIfNoMongo(t *testing.T) (*mongodb.Store, *mongo.Client) {
 func TestMongoDBStore_BasicOperations(t *testing.T) {
 	store, client := skipIfNoMongo(t)
 	ctx := context.Background()
-	defer client.Disconnect(ctx)
-	defer store.Close(ctx)
+	defer func() { _ = client.Disconnect(ctx) }()
+	defer func() { _ = store.Close(ctx) }()
 
 	// Set a value
 	value := config.NewValue(42, config.WithValueType(config.TypeInt))
@@ -119,13 +119,13 @@ func TestMongoDBStore_BasicOperations(t *testing.T) {
 func TestMongoDBStore_Find(t *testing.T) {
 	store, client := skipIfNoMongo(t)
 	ctx := context.Background()
-	defer client.Disconnect(ctx)
-	defer store.Close(ctx)
+	defer func() { _ = client.Disconnect(ctx) }()
+	defer func() { _ = store.Close(ctx) }()
 
 	// Clean up any existing test data
-	store.Delete(ctx, "listtest", "app/db/host")
-	store.Delete(ctx, "listtest", "app/db/port")
-	store.Delete(ctx, "listtest", "app/cache/ttl")
+	_ = store.Delete(ctx, "listtest", "app/db/host")
+	_ = store.Delete(ctx, "listtest", "app/db/port")
+	_ = store.Delete(ctx, "listtest", "app/cache/ttl")
 
 	// Set multiple values
 	testData := []struct {

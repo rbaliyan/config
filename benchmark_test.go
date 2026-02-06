@@ -43,7 +43,7 @@ func BenchmarkManagerGetCached(b *testing.B) {
 	cfg := mgr.Namespace("bench")
 
 	// Prime cache
-	cfg.Get(ctx, "key")
+	_, _ = cfg.Get(ctx, "key")
 
 	b.ResetTimer()
 	for b.Loop() {

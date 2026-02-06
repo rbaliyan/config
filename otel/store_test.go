@@ -132,7 +132,7 @@ func TestInstrumentedStore_Get(t *testing.T) {
 
 	// Set a value first
 	val := config.NewValue("test-value")
-	store.Set(ctx, "ns", "key", val)
+	_, _ = store.Set(ctx, "ns", "key", val)
 
 	// Get via instrumented store
 	got, err := wrapped.Get(ctx, "ns", "key")
