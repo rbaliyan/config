@@ -1,3 +1,4 @@
+// Package memory provides an in-memory configuration store for testing and single-instance deployments.
 package memory
 
 import (

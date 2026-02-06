@@ -1,3 +1,4 @@
+// Package postgres provides a PostgreSQL-backed configuration store with LISTEN/NOTIFY change notifications.
 package postgres
 
 import (

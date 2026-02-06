@@ -4,22 +4,19 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-// Metrics holds all OTEL metrics for the store.
-type Metrics struct {
-	// Counters
-	OperationCount metric.Int64Counter
-	ErrorCount     metric.Int64Counter
-
-	// Histograms
-	OperationLatency metric.Float64Histogram
+// metrics holds all OTEL metrics for the store.
+type metrics struct {
+	operationCount   metric.Int64Counter
+	errorCount       metric.Int64Counter
+	operationLatency metric.Float64Histogram
 }
 
-// initMetrics initializes all metrics
-func initMetrics(meter metric.Meter) (*Metrics, error) {
-	m := &Metrics{}
+// initMetrics initializes all metrics.
+func initMetrics(meter metric.Meter) (*metrics, error) {
+	m := &metrics{}
 	var err error
 
-	m.OperationCount, err = meter.Int64Counter(
+	m.operationCount, err = meter.Int64Counter(
 		"config.operations.total",
 		metric.WithDescription("Total number of config operations"),
 		metric.WithUnit("1"),
@@ -28,7 +25,7 @@ func initMetrics(meter metric.Meter) (*Metrics, error) {
 		return nil, err
 	}
 
-	m.ErrorCount, err = meter.Int64Counter(
+	m.errorCount, err = meter.Int64Counter(
 		"config.errors.total",
 		metric.WithDescription("Total number of config operation errors"),
 		metric.WithUnit("1"),
@@ -37,7 +34,7 @@ func initMetrics(meter metric.Meter) (*Metrics, error) {
 		return nil, err
 	}
 
-	m.OperationLatency, err = meter.Float64Histogram(
+	m.operationLatency, err = meter.Float64Histogram(
 		"config.operation.duration",
 		metric.WithDescription("Duration of config operations in seconds"),
 		metric.WithUnit("s"),

@@ -19,7 +19,7 @@ type InstrumentedStore struct {
 	store   config.Store
 	tracer  trace.Tracer
 	meter   metric.Meter
-	metrics *Metrics
+	metrics *metrics
 	opts    options
 }
 
@@ -489,12 +489,12 @@ func (s *InstrumentedStore) recordOperation(ctx context.Context, op, namespace, 
 		attrs = append(attrs, attribute.String("namespace", namespace))
 	}
 
-	s.metrics.OperationCount.Add(ctx, 1, metric.WithAttributes(attrs...))
-	s.metrics.OperationLatency.Record(ctx, latency, metric.WithAttributes(attrs...))
+	s.metrics.operationCount.Add(ctx, 1, metric.WithAttributes(attrs...))
+	s.metrics.operationLatency.Record(ctx, latency, metric.WithAttributes(attrs...))
 
 	if err != nil {
 		errorAttrs := append(attrs, attribute.String("error_type", errorType(err)))
-		s.metrics.ErrorCount.Add(ctx, 1, metric.WithAttributes(errorAttrs...))
+		s.metrics.errorCount.Add(ctx, 1, metric.WithAttributes(errorAttrs...))
 	}
 }
 

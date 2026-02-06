@@ -1,3 +1,4 @@
+// Package mongodb provides a MongoDB-backed configuration store with change stream notifications.
 package mongodb
 
 import (
