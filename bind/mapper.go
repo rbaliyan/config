@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 )
 
@@ -248,7 +249,17 @@ func (m *FieldMapper) FlatMapToStruct(data map[string]any, prefix string, target
 func buildNestedMap(data map[string]any, prefix string) map[string]any {
 	result := make(map[string]any)
 
-	for fullKey, value := range data {
+	// Sort keys so shorter paths are processed first.
+	// This ensures that when a key exists both as a leaf ("db") and a prefix
+	// ("db/host"), the deeper key deterministically wins by overwriting the leaf.
+	keys := make([]string, 0, len(data))
+	for k := range data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, fullKey := range keys {
+		value := data[fullKey]
 		// Remove prefix from key
 		key := fullKey
 		if prefix != "" {

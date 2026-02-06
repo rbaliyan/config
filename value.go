@@ -284,7 +284,7 @@ func (v *val) Marshal() ([]byte, error) {
 // Unmarshal deserializes the value into the target.
 func (v *val) Unmarshal(target any) error {
 	if v.raw == nil {
-		return ErrNotFound
+		return ErrInvalidValue
 	}
 
 	// If we have raw bytes, use the codec

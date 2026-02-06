@@ -2,14 +2,18 @@ package config_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/rbaliyan/config"
+	"github.com/rbaliyan/config/codec"
 	"github.com/rbaliyan/config/memory"
 )
 
@@ -1348,5 +1352,1169 @@ func TestErrorHelpers(t *testing.T) {
 	rewrapped := config.WrapStoreError("set", "memory", "k", wrapped)
 	if rewrapped != wrapped {
 		t.Error("WrapStoreError should not double-wrap StoreError")
+	}
+}
+
+// --- Additional tests for coverage ---
+
+// TestContextHelpersNoManager tests context helpers when no manager is set.
+func TestContextHelpersNoManager(t *testing.T) {
+	ctx := context.Background()
+
+	// Get without manager in context
+	_, err := config.Get(ctx, "key")
+	if err != config.ErrManagerClosed {
+		t.Errorf("Get without manager should return ErrManagerClosed, got: %v", err)
+	}
+
+	// Set without manager in context
+	err = config.Set(ctx, "key", "value")
+	if err != config.ErrManagerClosed {
+		t.Errorf("Set without manager should return ErrManagerClosed, got: %v", err)
+	}
+}
+
+// TestContextManagerReturnsNil tests ContextManager returns nil for missing manager.
+func TestContextManagerReturnsNil(t *testing.T) {
+	ctx := context.Background()
+	mgr := config.ContextManager(ctx)
+	if mgr != nil {
+		t.Error("ContextManager should return nil when no manager in context")
+	}
+}
+
+// TestContextNamespaceReturnsEmpty tests ContextNamespace returns empty for missing namespace.
+func TestContextNamespaceReturnsEmpty(t *testing.T) {
+	ctx := context.Background()
+	ns := config.ContextNamespace(ctx)
+	if ns != "" {
+		t.Errorf("ContextNamespace should return empty string, got: %q", ns)
+	}
+}
+
+// TestContextGetWithDefaultNamespace tests Get uses default namespace when none is set.
+func TestContextGetWithDefaultNamespace(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	// Set via default namespace
+	cfg := mgr.Namespace("")
+	cfg.Set(ctx, "key", "value")
+
+	// Use context helper without setting namespace (defaults to "")
+	ctx = config.ContextWithManager(ctx, mgr)
+	val, err := config.Get(ctx, "key")
+	if err != nil {
+		t.Fatalf("Get via context failed: %v", err)
+	}
+	s, _ := val.String()
+	if s != "value" {
+		t.Errorf("Expected 'value', got %q", s)
+	}
+}
+
+// TestStaleValueWrapper tests MarkStale with a non-*val Value implementation.
+func TestStaleValueWrapper(t *testing.T) {
+	// Create a custom Value implementation to trigger the staleValueWrapper path
+	custom := &customValue{
+		raw: "hello",
+		meta: &customMetadata{
+			version: 5,
+		},
+	}
+
+	stale := config.MarkStale(custom)
+	if stale == nil {
+		t.Fatal("MarkStale should return non-nil")
+	}
+	if !stale.Metadata().IsStale() {
+		t.Error("Stale wrapper should have IsStale() = true")
+	}
+	// Verify original metadata is preserved through wrapper
+	if stale.Metadata().Version() != 5 {
+		t.Errorf("Version = %d, want 5", stale.Metadata().Version())
+	}
+}
+
+// customValue is a Value implementation that is NOT the internal *val type,
+// used to test the staleValueWrapper path in MarkStale.
+type customValue struct {
+	raw  string
+	meta *customMetadata
+}
+
+type customMetadata struct {
+	version int64
+}
+
+func (m *customMetadata) Version() int64       { return m.version }
+func (m *customMetadata) CreatedAt() time.Time { return time.Time{} }
+func (m *customMetadata) UpdatedAt() time.Time { return time.Time{} }
+func (m *customMetadata) IsStale() bool        { return false }
+
+func (v *customValue) Marshal() ([]byte, error) { return json.Marshal(v.raw) }
+func (v *customValue) Unmarshal(target any) error {
+	data, _ := json.Marshal(v.raw)
+	return json.Unmarshal(data, target)
+}
+func (v *customValue) Type() config.Type    { return config.TypeString }
+func (v *customValue) Codec() string        { return "json" }
+func (v *customValue) Metadata() config.Metadata { return v.meta }
+func (v *customValue) Int64() (int64, error) {
+	return 0, errors.New("not an int")
+}
+func (v *customValue) Float64() (float64, error) {
+	return 0, errors.New("not a float")
+}
+func (v *customValue) String() (string, error) {
+	return v.raw, nil
+}
+func (v *customValue) Bool() (bool, error) {
+	return false, errors.New("not a bool")
+}
+
+// TestCacheResilienceStaleMarker verifies stale values returned from cache have IsStale() = true.
+func TestCacheResilienceStaleMarker(t *testing.T) {
+	ctx := context.Background()
+
+	underlying := memory.NewStore()
+	store := &failingStore{Store: underlying}
+
+	mgr, err := config.New(config.WithStore(store))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	cfg := mgr.Namespace("test")
+
+	// Set a value and read it (populates cache)
+	cfg.Set(ctx, "app/timeout", 30)
+	val, err := cfg.Get(ctx, "app/timeout")
+	if err != nil {
+		t.Fatalf("First Get failed: %v", err)
+	}
+	if val.Metadata().IsStale() {
+		t.Error("First Get should not be stale")
+	}
+
+	// Simulate store failure
+	store.failGet.Store(true)
+
+	// Second Get returns stale cached value
+	val, err = cfg.Get(ctx, "app/timeout")
+	if err != nil {
+		t.Fatalf("Get during failure should return cached value, got: %v", err)
+	}
+	if !val.Metadata().IsStale() {
+		t.Error("Value from cache fallback should be marked stale")
+	}
+	i, _ := val.Int64()
+	if i != 30 {
+		t.Errorf("Expected 30, got %d", i)
+	}
+}
+
+// TestProcessWatchEventsSetAndDelete tests that watch events update the cache.
+func TestProcessWatchEventsSetAndDelete(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	cfg := mgr.Namespace("test")
+
+	// Set and Get a value
+	cfg.Set(ctx, "app/name", "myapp")
+	val, err := cfg.Get(ctx, "app/name")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	s, _ := val.String()
+	if s != "myapp" {
+		t.Errorf("Expected 'myapp', got %q", s)
+	}
+
+	// Delete it
+	if err := cfg.Delete(ctx, "app/name"); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	// Wait a moment for watch events to propagate
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify deletion
+	_, getErr := cfg.Get(ctx, "app/name")
+	if !config.IsNotFound(getErr) {
+		t.Errorf("Expected NotFound after delete, got: %v", getErr)
+	}
+}
+
+// TestWatchHealthErrorMessages tests WatchHealthError message formatting.
+func TestWatchHealthErrorMessages(t *testing.T) {
+	// With last error
+	err1 := &config.WatchHealthError{
+		ConsecutiveFailures: 5,
+		LastError:           "connection refused",
+	}
+	msg1 := err1.Error()
+	if msg1 == "" {
+		t.Error("WatchHealthError.Error() should not be empty")
+	}
+	if !config.IsWatchUnhealthy(err1) {
+		t.Error("IsWatchUnhealthy should return true for WatchHealthError")
+	}
+
+	// Without last error
+	err2 := &config.WatchHealthError{
+		ConsecutiveFailures: 3,
+		LastError:           "",
+	}
+	msg2 := err2.Error()
+	if msg2 == "" {
+		t.Error("WatchHealthError.Error() without LastError should not be empty")
+	}
+
+	// Verify unwrap
+	if !errors.Is(err1, config.ErrWatchUnhealthy) {
+		t.Error("WatchHealthError should unwrap to ErrWatchUnhealthy")
+	}
+}
+
+// TestBulkWriteErrorMethods tests BulkWriteError helper methods.
+func TestBulkWriteErrorMethods(t *testing.T) {
+	bwe := &config.BulkWriteError{
+		Errors: map[string]error{
+			"key1": errors.New("fail1"),
+			"key2": errors.New("fail2"),
+		},
+		Succeeded: []string{"key3", "key4"},
+	}
+
+	// Error message
+	msg := bwe.Error()
+	if msg == "" {
+		t.Error("BulkWriteError.Error() should not be empty")
+	}
+
+	// Unwrap
+	if !errors.Is(bwe, config.ErrBulkWritePartial) {
+		t.Error("BulkWriteError should unwrap to ErrBulkWritePartial")
+	}
+
+	// KeyErrors
+	keyErrors := bwe.KeyErrors()
+	if len(keyErrors) != 2 {
+		t.Errorf("Expected 2 key errors, got %d", len(keyErrors))
+	}
+
+	// FailedKeys
+	failedKeys := bwe.FailedKeys()
+	if len(failedKeys) != 2 {
+		t.Errorf("Expected 2 failed keys, got %d", len(failedKeys))
+	}
+
+	// IsBulkWritePartial
+	if !config.IsBulkWritePartial(bwe) {
+		t.Error("IsBulkWritePartial should return true for BulkWriteError")
+	}
+	if config.IsBulkWritePartial(errors.New("other")) {
+		t.Error("IsBulkWritePartial should return false for random error")
+	}
+}
+
+// TestCacheStatsHitRateZero tests HitRate when there are no lookups.
+func TestCacheStatsHitRateZero(t *testing.T) {
+	stats := &config.CacheStats{}
+	if stats.HitRate() != 0 {
+		t.Errorf("HitRate() = %f, want 0 for zero lookups", stats.HitRate())
+	}
+
+	// With only hits
+	stats2 := &config.CacheStats{Hits: 10, Misses: 0}
+	if stats2.HitRate() != 1.0 {
+		t.Errorf("HitRate() = %f, want 1.0 for all hits", stats2.HitRate())
+	}
+
+	// Mixed
+	stats3 := &config.CacheStats{Hits: 3, Misses: 7}
+	if stats3.HitRate() != 0.3 {
+		t.Errorf("HitRate() = %f, want 0.3", stats3.HitRate())
+	}
+}
+
+// TestValueInt64EdgeCases tests Int64 conversion for edge case types.
+func TestValueInt64EdgeCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   any
+		want    int64
+		wantErr bool
+	}{
+		{"int8", int8(42), 42, false},
+		{"int16", int16(42), 42, false},
+		{"int32", int32(42), 42, false},
+		{"int64", int64(42), 42, false},
+		{"float32 exact", float32(42.0), 42, false},
+		{"float32 truncation", float32(3.14), 0, true},
+		{"float64 non-integer", 3.14, 0, true},
+		{"float64 Inf", math.Inf(1), 0, true},
+		{"float64 NaN", math.NaN(), 0, true},
+		{"string parseable", "123", 123, false},
+		{"string not parseable", "abc", 0, true},
+		{"json.Number int", json.Number("42"), 42, false},
+		{"json.Number not int", json.Number("3.14"), 0, true},
+		{"unsupported type", []int{1}, 0, true},
+		{"nil", nil, 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			val := config.NewValue(tt.input)
+			got, err := val.Int64()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Int64() error = %v, wantErr = %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("Int64() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestValueFloat64EdgeCases tests Float64 conversion for edge case types.
+func TestValueFloat64EdgeCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   any
+		want    float64
+		wantErr bool
+	}{
+		{"float32", float32(3.14), float64(float32(3.14)), false},
+		{"int", 42, 42.0, false},
+		{"int8", int8(10), 10.0, false},
+		{"int16", int16(10), 10.0, false},
+		{"int32", int32(10), 10.0, false},
+		{"int64", int64(10), 10.0, false},
+		{"string parseable", "3.14", 3.14, false},
+		{"string not parseable", "abc", 0, true},
+		{"json.Number", json.Number("3.14"), 3.14, false},
+		{"json.Number invalid", json.Number("abc"), 0, true},
+		{"unsupported type", []int{1}, 0, true},
+		{"nil", nil, 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			val := config.NewValue(tt.input)
+			got, err := val.Float64()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Float64() error = %v, wantErr = %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("Float64() = %f, want %f", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestValueBoolEdgeCases tests Bool conversion for edge case types.
+func TestValueBoolEdgeCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   any
+		want    bool
+		wantErr bool
+	}{
+		{"true", true, true, false},
+		{"false", false, false, false},
+		{"int nonzero", 1, true, false},
+		{"int zero", 0, false, false},
+		{"int64 nonzero", int64(1), true, false},
+		{"int64 zero", int64(0), false, false},
+		{"float64 nonzero", 1.0, true, false},
+		{"float64 zero", 0.0, false, false},
+		{"string true", "true", true, false},
+		{"string false", "false", false, false},
+		{"string invalid", "maybe", false, true},
+		{"unsupported type", []int{}, false, true},
+		{"nil", nil, false, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			val := config.NewValue(tt.input)
+			got, err := val.Bool()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Bool() error = %v, wantErr = %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("Bool() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestValueStringEdgeCases tests String conversion for edge case types.
+func TestValueStringEdgeCases(t *testing.T) {
+	// String from bytes
+	val := config.NewValue([]byte("hello"))
+	s, err := val.String()
+	if err != nil {
+		t.Fatalf("String() from []byte failed: %v", err)
+	}
+	if s != "hello" {
+		t.Errorf("String() = %q, want %q", s, "hello")
+	}
+
+	// String from nil
+	val = config.NewValue(nil)
+	_, err = val.String()
+	if err == nil {
+		t.Error("String() from nil should return error")
+	}
+}
+
+// TestValueMarshalNil tests Marshal with nil raw value.
+func TestValueMarshalNil(t *testing.T) {
+	val := config.NewValue(nil)
+	_, err := val.Marshal()
+	if err == nil {
+		t.Error("Marshal() with nil should return error")
+	}
+	if !errors.Is(err, config.ErrInvalidValue) {
+		t.Errorf("Expected ErrInvalidValue, got: %v", err)
+	}
+}
+
+// TestValueUnmarshalNil tests Unmarshal with nil raw value.
+func TestValueUnmarshalNil(t *testing.T) {
+	val := config.NewValue(nil)
+	var target string
+	err := val.Unmarshal(&target)
+	if err == nil {
+		t.Error("Unmarshal() with nil should return error")
+	}
+	if !errors.Is(err, config.ErrInvalidValue) {
+		t.Errorf("Expected ErrInvalidValue, got: %v", err)
+	}
+}
+
+// TestValueMarshalWithPreEncodedData tests Marshal when data is already encoded.
+func TestValueMarshalWithPreEncodedData(t *testing.T) {
+	val, err := config.NewValueFromBytes([]byte(`"hello"`), "json")
+	if err != nil {
+		t.Fatalf("NewValueFromBytes failed: %v", err)
+	}
+
+	data, err := val.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	if string(data) != `"hello"` {
+		t.Errorf("Marshal = %q, want %q", string(data), `"hello"`)
+	}
+}
+
+// TestValueUnmarshalWithCodecData tests Unmarshal using codec path.
+func TestValueUnmarshalWithCodecData(t *testing.T) {
+	val, err := config.NewValueFromBytes([]byte(`{"name":"test"}`), "json")
+	if err != nil {
+		t.Fatalf("NewValueFromBytes failed: %v", err)
+	}
+
+	var result map[string]any
+	if err := val.Unmarshal(&result); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if result["name"] != "test" {
+		t.Errorf("name = %v, want %q", result["name"], "test")
+	}
+}
+
+// TestGetWriteModeNonWriteModer tests GetWriteMode with a Value that does not implement WriteModer.
+func TestGetWriteModeNonWriteModer(t *testing.T) {
+	custom := &customValue{raw: "test", meta: &customMetadata{}}
+	mode := config.GetWriteMode(custom)
+	if mode != config.WriteModeUpsert {
+		t.Errorf("GetWriteMode for non-WriteModer = %v, want Upsert", mode)
+	}
+}
+
+// TestKeyNotFoundErrorWithoutNamespace tests KeyNotFoundError message without namespace.
+func TestKeyNotFoundErrorWithoutNamespace(t *testing.T) {
+	err := &config.KeyNotFoundError{Key: "mykey"}
+	expected := `config: key "mykey" not found`
+	if err.Error() != expected {
+		t.Errorf("Error() = %q, want %q", err.Error(), expected)
+	}
+}
+
+// TestKeyNotFoundErrorWithNamespace tests KeyNotFoundError message with namespace.
+func TestKeyNotFoundErrorWithNamespace(t *testing.T) {
+	err := &config.KeyNotFoundError{Key: "mykey", Namespace: "ns"}
+	expected := `config: key "mykey" not found in namespace "ns"`
+	if err.Error() != expected {
+		t.Errorf("Error() = %q, want %q", err.Error(), expected)
+	}
+}
+
+// TestStoreErrorWithoutKey tests StoreError message without key.
+func TestStoreErrorWithoutKey(t *testing.T) {
+	err := &config.StoreError{Op: "connect", Backend: "postgres", Err: errors.New("refused")}
+	msg := err.Error()
+	if msg == "" {
+		t.Error("StoreError.Error() should not be empty")
+	}
+	// Verify it doesn't include key= in the message
+	expected := "config: connect [postgres]: refused"
+	if msg != expected {
+		t.Errorf("Error() = %q, want %q", msg, expected)
+	}
+}
+
+// TestStoreErrorWithKey tests StoreError message with key.
+func TestStoreErrorWithKey(t *testing.T) {
+	err := &config.StoreError{Op: "get", Backend: "postgres", Key: "app/name", Err: errors.New("refused")}
+	expected := `config: get [postgres] key="app/name": refused`
+	if err.Error() != expected {
+		t.Errorf("Error() = %q, want %q", err.Error(), expected)
+	}
+}
+
+// TestManagerOptions tests option functions.
+func TestManagerOptions(t *testing.T) {
+	ctx := context.Background()
+
+	// Test WithCodec, WithLogger, and backoff options
+	logger := slog.Default()
+	mgr, err := config.New(
+		config.WithStore(memory.NewStore()),
+		config.WithCodec(codec.Default()),
+		config.WithLogger(logger),
+		config.WithWatchInitialBackoff(200*time.Millisecond),
+		config.WithWatchMaxBackoff(60*time.Second),
+		config.WithWatchBackoffFactor(3.0),
+	)
+	if err != nil {
+		t.Fatalf("New with options failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	// Test nil-safe option guards
+	mgr2, err := config.New(
+		config.WithStore(nil),   // should be ignored
+		config.WithCodec(nil),   // should be ignored
+		config.WithLogger(nil),  // should be ignored
+		config.WithWatchInitialBackoff(0),  // should be ignored (non-positive)
+		config.WithWatchMaxBackoff(0),      // should be ignored
+		config.WithWatchBackoffFactor(0),   // should be ignored
+	)
+	if err != nil {
+		t.Fatalf("New with nil options failed: %v", err)
+	}
+	// Manager without store should fail to connect
+	err = mgr2.Connect(ctx)
+	if err != config.ErrStoreNotConnected {
+		t.Errorf("Connect without store = %v, want ErrStoreNotConnected", err)
+	}
+}
+
+// TestSetOptions tests set option functions.
+func TestSetOptions(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	cfg := mgr.Namespace("test")
+
+	// Set with explicit type
+	err = cfg.Set(ctx, "typed-value", 42, config.WithType(config.TypeInt))
+	if err != nil {
+		t.Fatalf("Set with type failed: %v", err)
+	}
+
+	// Set with codec
+	err = cfg.Set(ctx, "coded-value", "hello", config.WithSetCodec(codec.Default()))
+	if err != nil {
+		t.Fatalf("Set with codec failed: %v", err)
+	}
+
+	// Set with nil codec (should be ignored, use default)
+	err = cfg.Set(ctx, "nil-codec-value", "hello", config.WithSetCodec(nil))
+	if err != nil {
+		t.Fatalf("Set with nil codec failed: %v", err)
+	}
+}
+
+// TestValueMetadataOptions tests value creation with metadata options.
+func TestValueMetadataOptions(t *testing.T) {
+	now := time.Now()
+	val := config.NewValue("hello",
+		config.WithValueMetadata(5, now, now.Add(time.Hour)),
+		config.WithValueEntryID("entry-123"),
+		config.WithValueStale(true),
+	)
+
+	meta := val.Metadata()
+	if meta.Version() != 5 {
+		t.Errorf("Version = %d, want 5", meta.Version())
+	}
+	if !meta.CreatedAt().Equal(now) {
+		t.Error("CreatedAt mismatch")
+	}
+	if !meta.UpdatedAt().Equal(now.Add(time.Hour)) {
+		t.Error("UpdatedAt mismatch")
+	}
+	if !meta.IsStale() {
+		t.Error("Expected stale = true")
+	}
+}
+
+// TestValueEntryIDWithoutPriorMetadata tests WithValueEntryID when metadata is nil.
+func TestValueEntryIDWithoutPriorMetadata(t *testing.T) {
+	val := config.NewValue("test",
+		config.WithValueEntryID("id-1"),
+	)
+	// Should not panic; metadata is created internally
+	if val.Metadata() == nil {
+		t.Error("Metadata should not be nil")
+	}
+}
+
+// TestValueStaleWithoutPriorMetadata tests WithValueStale when metadata is nil.
+func TestValueStaleWithoutPriorMetadata(t *testing.T) {
+	val := config.NewValue("test",
+		config.WithValueStale(true),
+	)
+	if !val.Metadata().IsStale() {
+		t.Error("Expected stale = true")
+	}
+}
+
+// TestValueMetadataNil tests Metadata when no metadata was set.
+func TestValueMetadataNil(t *testing.T) {
+	val := config.NewValue("hello")
+	meta := val.Metadata()
+	if meta == nil {
+		t.Fatal("Metadata should never be nil")
+	}
+	if meta.Version() != 0 {
+		t.Errorf("Default version = %d, want 0", meta.Version())
+	}
+	if meta.IsStale() {
+		t.Error("Default stale should be false")
+	}
+}
+
+// TestNewValueFromBytesValid tests NewValueFromBytes with valid JSON.
+func TestNewValueFromBytesValid(t *testing.T) {
+	val, err := config.NewValueFromBytes([]byte(`42`), "json",
+		config.WithValueType(config.TypeInt),
+		config.WithValueMetadata(1, time.Now(), time.Now()),
+	)
+	if err != nil {
+		t.Fatalf("NewValueFromBytes failed: %v", err)
+	}
+	if val.Type() != config.TypeInt {
+		t.Errorf("Type = %v, want TypeInt", val.Type())
+	}
+}
+
+// TestValueCodecName tests the Codec() method.
+func TestValueCodecName(t *testing.T) {
+	val := config.NewValue("hello")
+	codecName := val.Codec()
+	if codecName != "json" {
+		t.Errorf("Codec() = %q, want %q", codecName, "json")
+	}
+}
+
+// TestDetectTypeJsonNumber tests detectType with json.Number.
+func TestDetectTypeJsonNumber(t *testing.T) {
+	// json.Number that parses as int
+	val := config.NewValue(json.Number("42"))
+	if val.Type() != config.TypeInt {
+		t.Errorf("json.Number('42').Type() = %v, want TypeInt", val.Type())
+	}
+
+	// json.Number that doesn't parse as int (float)
+	val = config.NewValue(json.Number("3.14"))
+	if val.Type() != config.TypeFloat {
+		t.Errorf("json.Number('3.14').Type() = %v, want TypeFloat", val.Type())
+	}
+}
+
+// TestDetectTypeUnsigned tests detectType with unsigned int types.
+func TestDetectTypeUnsigned(t *testing.T) {
+	tests := []struct {
+		input any
+		want  config.Type
+	}{
+		{uint8(42), config.TypeInt},
+		{uint16(42), config.TypeInt},
+		{uint32(42), config.TypeInt},
+		{uint64(42), config.TypeInt},
+	}
+
+	for _, tt := range tests {
+		val := config.NewValue(tt.input)
+		if val.Type() != tt.want {
+			t.Errorf("NewValue(%T).Type() = %v, want %v", tt.input, val.Type(), tt.want)
+		}
+	}
+}
+
+// TestChangeTypeStringUnknown tests ChangeType.String() for an unknown type.
+func TestChangeTypeStringUnknown(t *testing.T) {
+	ct := config.ChangeType(99)
+	if ct.String() != "unknown" {
+		t.Errorf("ChangeType(99).String() = %q, want %q", ct.String(), "unknown")
+	}
+}
+
+// TestManagerCloseTwice tests that closing a manager twice is safe.
+func TestManagerCloseTwice(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+
+	// First close
+	err = mgr.Close(ctx)
+	if err != nil {
+		t.Fatalf("First Close failed: %v", err)
+	}
+
+	// Second close should be safe (no-op)
+	err = mgr.Close(ctx)
+	if err != nil {
+		t.Fatalf("Second Close should not error, got: %v", err)
+	}
+}
+
+// TestManagerCloseBeforeConnect tests closing a manager that was never connected.
+func TestManagerCloseBeforeConnect(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	// Close without connecting should be safe (no-op)
+	err = mgr.Close(ctx)
+	if err != nil {
+		t.Fatalf("Close before connect should not error, got: %v", err)
+	}
+}
+
+// watchFailStore is a store that fails Watch on demand, to test watchChanges error paths.
+type watchFailStore struct {
+	config.Store
+	watchFails atomic.Int32
+	watchCalls atomic.Int32
+}
+
+func (s *watchFailStore) Watch(ctx context.Context, filter config.WatchFilter) (<-chan config.ChangeEvent, error) {
+	call := s.watchCalls.Add(1)
+	remaining := s.watchFails.Load()
+	if remaining > 0 && call <= remaining {
+		return nil, errors.New("simulated watch failure")
+	}
+	return s.Store.Watch(ctx, filter)
+}
+
+// TestWatchReconnectsAfterFailure tests that watchChanges retries on failure.
+func TestWatchReconnectsAfterFailure(t *testing.T) {
+	ctx := context.Background()
+
+	underlying := memory.NewStore()
+	store := &watchFailStore{Store: underlying}
+	store.watchFails.Store(2) // Fail first 2 watch attempts
+
+	mgr, err := config.New(
+		config.WithStore(store),
+		config.WithWatchInitialBackoff(10*time.Millisecond),
+		config.WithWatchMaxBackoff(50*time.Millisecond),
+		config.WithWatchBackoffFactor(2.0),
+	)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+
+	// Wait for watch to recover (2 failures * backoff + some margin)
+	time.Sleep(200 * time.Millisecond)
+
+	// After recovery, watch should work - verify via observer
+	obs, ok := mgr.(config.ManagerObserver)
+	if !ok {
+		t.Fatal("Manager should implement ManagerObserver")
+	}
+
+	ws := obs.WatchStatus()
+	if ws.ConsecutiveFailures != 0 {
+		t.Errorf("ConsecutiveFailures = %d after recovery, want 0", ws.ConsecutiveFailures)
+	}
+
+	mgr.Close(ctx)
+}
+
+// watchNotSupportedStore is a store that returns ErrWatchNotSupported.
+type watchNotSupportedStore struct {
+	config.Store
+}
+
+func (s *watchNotSupportedStore) Watch(ctx context.Context, filter config.WatchFilter) (<-chan config.ChangeEvent, error) {
+	return nil, config.ErrWatchNotSupported
+}
+
+// TestWatchNotSupported tests that watch exits gracefully when not supported.
+func TestWatchNotSupported(t *testing.T) {
+	ctx := context.Background()
+
+	store := &watchNotSupportedStore{Store: memory.NewStore()}
+	mgr, err := config.New(config.WithStore(store))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+
+	// Give watch goroutine time to exit
+	time.Sleep(50 * time.Millisecond)
+
+	// Close should work cleanly
+	mgr.Close(ctx)
+}
+
+// healthCheckStore is a store that implements HealthChecker.
+type healthCheckStore struct {
+	config.Store
+	healthErr error
+}
+
+func (s *healthCheckStore) Health(ctx context.Context) error {
+	return s.healthErr
+}
+
+// TestHealthWithHealthChecker tests Health when store implements HealthChecker.
+func TestHealthWithHealthChecker(t *testing.T) {
+	ctx := context.Background()
+
+	hcStore := &healthCheckStore{
+		Store:     memory.NewStore(),
+		healthErr: nil,
+	}
+
+	mgr, err := config.New(config.WithStore(hcStore))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	// Healthy
+	if err := mgr.Health(ctx); err != nil {
+		t.Errorf("Health should be nil, got: %v", err)
+	}
+
+	// Unhealthy store
+	hcStore.healthErr = errors.New("store unhealthy")
+	if err := mgr.Health(ctx); err == nil {
+		t.Error("Health should return error when store is unhealthy")
+	}
+}
+
+// TestHealthWithWatchFailures tests Health when watch has consecutive failures.
+func TestHealthWithWatchFailures(t *testing.T) {
+	ctx := context.Background()
+
+	underlying := memory.NewStore()
+	store := &watchFailStore{Store: underlying}
+	// Make watch fail many times
+	store.watchFails.Store(100)
+
+	mgr, err := config.New(
+		config.WithStore(store),
+		config.WithWatchInitialBackoff(5*time.Millisecond),
+		config.WithWatchMaxBackoff(10*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	// Wait for at least 3 failures to accumulate
+	time.Sleep(200 * time.Millisecond)
+
+	err = mgr.Health(ctx)
+	if err == nil {
+		t.Error("Health should fail with watch failures")
+	}
+	if !config.IsWatchUnhealthy(err) {
+		t.Errorf("Expected watch unhealthy error, got: %v", err)
+	}
+
+	// Check WatchStatus shows failures
+	obs := mgr.(config.ManagerObserver)
+	ws := obs.WatchStatus()
+	if ws.ConsecutiveFailures < 3 {
+		t.Errorf("ConsecutiveFailures = %d, want >= 3", ws.ConsecutiveFailures)
+	}
+	if ws.LastError == "" {
+		t.Error("LastError should not be empty after failures")
+	}
+	if ws.LastAttempt.IsZero() {
+		t.Error("LastAttempt should not be zero")
+	}
+}
+
+// TestWatchStatusAfterClose tests WatchStatus after manager is closed.
+func TestWatchStatusAfterClose(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+
+	obs := mgr.(config.ManagerObserver)
+
+	mgr.Close(ctx)
+
+	ws := obs.WatchStatus()
+	if ws.Connected {
+		t.Error("Expected Connected = false after close")
+	}
+}
+
+// TestNewPage tests the NewPage constructor.
+func TestNewPage(t *testing.T) {
+	results := map[string]config.Value{
+		"key1": config.NewValue("val1"),
+		"key2": config.NewValue("val2"),
+	}
+	p := config.NewPage(results, "cursor123", 10)
+	if len(p.Results()) != 2 {
+		t.Errorf("Results = %d, want 2", len(p.Results()))
+	}
+	if p.NextCursor() != "cursor123" {
+		t.Errorf("NextCursor = %q, want %q", p.NextCursor(), "cursor123")
+	}
+	if p.Limit() != 10 {
+		t.Errorf("Limit = %d, want 10", p.Limit())
+	}
+}
+
+// TestParseTypeUnknown tests ParseType with an unrecognized string.
+func TestParseTypeUnknown(t *testing.T) {
+	got := config.ParseType("foobar")
+	if got != config.TypeUnknown {
+		t.Errorf("ParseType('foobar') = %v, want TypeUnknown", got)
+	}
+}
+
+// TestWriteModeStringValues tests all WriteMode.String() values.
+func TestWriteModeStringValues(t *testing.T) {
+	if config.WriteModeUpsert.String() != "upsert" {
+		t.Errorf("WriteModeUpsert.String() = %q", config.WriteModeUpsert.String())
+	}
+	if config.WriteModeCreate.String() != "create" {
+		t.Errorf("WriteModeCreate.String() = %q", config.WriteModeCreate.String())
+	}
+	if config.WriteModeUpdate.String() != "update" {
+		t.Errorf("WriteModeUpdate.String() = %q", config.WriteModeUpdate.String())
+	}
+}
+
+// TestDefaultNamespace tests DefaultNamespace constant.
+func TestDefaultNamespace(t *testing.T) {
+	if config.DefaultNamespace != "" {
+		t.Errorf("DefaultNamespace = %q, want empty string", config.DefaultNamespace)
+	}
+}
+
+// TestValueWriteMode tests Value's WriteMode when set via option.
+func TestValueWriteMode(t *testing.T) {
+	val := config.NewValue("test", config.WithValueWriteMode(config.WriteModeCreate))
+	mode := config.GetWriteMode(val)
+	if mode != config.WriteModeCreate {
+		t.Errorf("WriteMode = %v, want Create", mode)
+	}
+}
+
+// TestIsWatchUnhealthyFalse tests IsWatchUnhealthy with non-matching error.
+func TestIsWatchUnhealthyFalse(t *testing.T) {
+	if config.IsWatchUnhealthy(errors.New("other")) {
+		t.Error("IsWatchUnhealthy should return false for random error")
+	}
+}
+
+// TestConcurrentNamespaceCreation tests concurrent namespace creation.
+func TestConcurrentNamespaceCreation(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	var wg sync.WaitGroup
+	results := make([]config.Config, 20)
+
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			results[idx] = mgr.Namespace("concurrent")
+		}(i)
+	}
+	wg.Wait()
+
+	// All should return the same instance
+	for i := 1; i < 20; i++ {
+		if results[i] != results[0] {
+			t.Error("All concurrent Namespace calls should return the same instance")
+			break
+		}
+	}
+}
+
+// TestFindWithKeys tests Find using specific keys mode.
+func TestFindWithKeys(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	cfg := mgr.Namespace("test")
+	cfg.Set(ctx, "key1", "val1")
+	cfg.Set(ctx, "key2", "val2")
+	cfg.Set(ctx, "key3", "val3")
+
+	// Find specific keys
+	page, err := cfg.Find(ctx, config.NewFilter().WithKeys("key1", "key3").Build())
+	if err != nil {
+		t.Fatalf("Find failed: %v", err)
+	}
+	if len(page.Results()) != 2 {
+		t.Errorf("Expected 2 results, got %d", len(page.Results()))
+	}
+}
+
+// TestRefreshNotFoundClearsCache tests that refreshing a deleted key clears cache.
+func TestRefreshNotFoundClearsCache(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	cfg := mgr.Namespace("test")
+
+	// Set and get (populates cache)
+	cfg.Set(ctx, "temp-key", "temp-val")
+	cfg.Get(ctx, "temp-key")
+
+	// Delete directly from store, then refresh
+	cfg.Delete(ctx, "temp-key")
+
+	// Refresh should return NotFound (key is deleted)
+	err = mgr.Refresh(ctx, "test", "temp-key")
+	if !config.IsNotFound(err) {
+		t.Errorf("Refresh after delete should return NotFound, got: %v", err)
+	}
+}
+
+// TestRefreshBeforeConnect tests that Refresh fails when not connected.
+func TestRefreshBeforeConnect(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	err = mgr.Refresh(ctx, "test", "key")
+	if err != config.ErrManagerClosed {
+		t.Errorf("Refresh before connect = %v, want ErrManagerClosed", err)
+	}
+}
+
+// TestDetectTypeFloat64Special tests detectType with special float64 values.
+func TestDetectTypeFloat64Special(t *testing.T) {
+	// Inf should be detected as float
+	val := config.NewValue(math.Inf(1))
+	if val.Type() != config.TypeFloat {
+		t.Errorf("Inf type = %v, want TypeFloat", val.Type())
+	}
+
+	// NaN should be detected as float
+	val = config.NewValue(math.NaN())
+	if val.Type() != config.TypeFloat {
+		t.Errorf("NaN type = %v, want TypeFloat", val.Type())
 	}
 }
