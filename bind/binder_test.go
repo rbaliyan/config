@@ -314,7 +314,7 @@ func TestNonrecursiveTag(t *testing.T) {
 
 	type AppConfig struct {
 		Name  string      `json:"name"`
-		Creds Credentials `json:"creds,nonrecursive"` // Store as single JSON value
+		Creds Credentials `json:"creds,nonrecursive"` //nolint:staticcheck // nonrecursive is a custom bind option
 	}
 
 	original := AppConfig{

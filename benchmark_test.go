@@ -11,33 +11,33 @@ import (
 func BenchmarkManagerGet(b *testing.B) {
 	ctx := context.Background()
 	store := memory.NewStore()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
-	store.Set(ctx, "bench", "key", config.NewValue("hello"))
+	_, _ = store.Set(ctx, "bench", "key", config.NewValue("hello"))
 
 	mgr, _ := config.New(config.WithStore(store))
-	mgr.Connect(ctx)
+	_ = mgr.Connect(ctx)
 	defer mgr.Close(ctx)
 
 	cfg := mgr.Namespace("bench")
 
 	b.ResetTimer()
 	for b.Loop() {
-		cfg.Get(ctx, "key")
+		_, _ = cfg.Get(ctx, "key")
 	}
 }
 
 func BenchmarkManagerGetCached(b *testing.B) {
 	ctx := context.Background()
 	store := memory.NewStore()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
-	store.Set(ctx, "bench", "key", config.NewValue(42))
+	_, _ = store.Set(ctx, "bench", "key", config.NewValue(42))
 
 	mgr, _ := config.New(config.WithStore(store))
-	mgr.Connect(ctx)
+	_ = mgr.Connect(ctx)
 	defer mgr.Close(ctx)
 
 	cfg := mgr.Namespace("bench")
@@ -47,7 +47,7 @@ func BenchmarkManagerGetCached(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		cfg.Get(ctx, "key")
+		_, _ = cfg.Get(ctx, "key")
 	}
 }
 
@@ -61,7 +61,7 @@ func BenchmarkValueInt64(b *testing.B) {
 	v := config.NewValue(42)
 	b.ResetTimer()
 	for b.Loop() {
-		v.Int64()
+		_, _ = v.Int64()
 	}
 }
 
@@ -69,7 +69,7 @@ func BenchmarkValueString(b *testing.B) {
 	v := config.NewValue("hello world")
 	b.ResetTimer()
 	for b.Loop() {
-		v.String()
+		_, _ = v.String()
 	}
 }
 
@@ -77,7 +77,7 @@ func BenchmarkValueMarshal(b *testing.B) {
 	v := config.NewValue(map[string]any{"host": "localhost", "port": 5432})
 	b.ResetTimer()
 	for b.Loop() {
-		v.Marshal()
+		_, _ = v.Marshal()
 	}
 }
 
@@ -92,27 +92,27 @@ func BenchmarkMarkStale(b *testing.B) {
 func BenchmarkStoreGet(b *testing.B) {
 	ctx := context.Background()
 	store := memory.NewStore()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
-	store.Set(ctx, "bench", "key", config.NewValue("value"))
+	_, _ = store.Set(ctx, "bench", "key", config.NewValue("value"))
 
 	b.ResetTimer()
 	for b.Loop() {
-		store.Get(ctx, "bench", "key")
+		_, _ = store.Get(ctx, "bench", "key")
 	}
 }
 
 func BenchmarkStoreSet(b *testing.B) {
 	ctx := context.Background()
 	store := memory.NewStore()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	v := config.NewValue("value")
 
 	b.ResetTimer()
 	for b.Loop() {
-		store.Set(ctx, "bench", "key", v)
+		_, _ = store.Set(ctx, "bench", "key", v)
 	}
 }

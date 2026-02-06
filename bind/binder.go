@@ -162,8 +162,8 @@ func (bc *boundConfig) GetStructDigest(ctx context.Context, key string, target a
 	// Compute FNV-64a digest from sorted keys for deterministic ordering
 	h := fnv.New64a()
 	for _, k := range slices.Sorted(maps.Keys(data)) {
-		io.WriteString(h, k)
-		fmt.Fprint(h, data[k])
+		_, _ = io.WriteString(h, k)
+		_, _ = fmt.Fprint(h, data[k])
 	}
 	digest := h.Sum64()
 

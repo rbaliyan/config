@@ -116,7 +116,7 @@ func TestInstrumentedStore_Close(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	if err := wrapped.Close(ctx); err != nil {
 		t.Errorf("Close failed: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestInstrumentedStore_Get(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// Set a value first
@@ -151,7 +151,7 @@ func TestInstrumentedStore_Get_NotFound(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	_, err := wrapped.Get(ctx, "ns", "nonexistent")
@@ -165,7 +165,7 @@ func TestInstrumentedStore_Set(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	val := config.NewValue(42)
@@ -190,7 +190,7 @@ func TestInstrumentedStore_Delete(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// Set and then delete
@@ -212,7 +212,7 @@ func TestInstrumentedStore_Find(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// Set some values
@@ -236,7 +236,7 @@ func TestInstrumentedStore_Watch(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	ch, err := wrapped.Watch(ctx, config.WatchFilter{Namespaces: []string{"ns"}})
@@ -254,7 +254,7 @@ func TestInstrumentedStore_Health(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// Memory store implements HealthChecker
@@ -268,7 +268,7 @@ func TestInstrumentedStore_Stats(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// Memory store implements StatsProvider
@@ -285,7 +285,7 @@ func TestInstrumentedStore_GetMany(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// Set values
@@ -308,7 +308,7 @@ func TestInstrumentedStore_SetMany(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// SetMany
@@ -333,7 +333,7 @@ func TestInstrumentedStore_DeleteMany(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// Set values
@@ -362,7 +362,7 @@ func TestInstrumentedStore_TracingDisabled(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(false), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// Operations should still work without tracing
@@ -387,7 +387,7 @@ func TestInstrumentedStore_MetricsDisabled(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(false))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// Operations should still work without metrics
@@ -612,7 +612,7 @@ func TestInstrumentedStore_NonBulkStore_GetMany(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// Set values via the instrumented store (uses individual Set)
@@ -638,7 +638,7 @@ func TestInstrumentedStore_NonBulkStore_SetMany(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// SetMany should fall back to individual Sets
@@ -669,7 +669,7 @@ func TestInstrumentedStore_NonBulkStore_DeleteMany(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// Set up data
@@ -697,7 +697,7 @@ func TestInstrumentedStore_NonBulkStore_WithTracing(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	_, _ = wrapped.Set(ctx, "ns", "k1", config.NewValue("v1"))
@@ -739,7 +739,7 @@ func TestInstrumentedStore_BulkStore_WithTracingEnabled(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// SetMany with BulkStore + tracing
@@ -780,7 +780,7 @@ func TestInstrumentedStore_BulkStore_TracingDisabledMetricsEnabled(t *testing.T)
 	}
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// SetMany
@@ -927,7 +927,7 @@ func TestInstrumentedStore_Set_Error_WithTracing(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// Set with invalid namespace should fail
@@ -943,7 +943,7 @@ func TestInstrumentedStore_Delete_Error_WithTracing(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	err := wrapped.Delete(ctx, "ns", "nonexistent")
@@ -958,7 +958,7 @@ func TestInstrumentedStore_Find_Error_WithTracing(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	_, err := wrapped.Find(ctx, "!bad!", config.NewFilter().Build())
@@ -973,10 +973,10 @@ func TestInstrumentedStore_Watch_Error_WithTracing(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 
 	// Close store to force Watch error
-	wrapped.Close(ctx)
+	_ = wrapped.Close(ctx)
 
 	_, err := wrapped.Watch(ctx, config.WatchFilter{})
 	if err == nil {
@@ -990,7 +990,7 @@ func TestInstrumentedStore_RecordOperation_MetricsDisabled(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(false), WithMetricsEnabled(false))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	// These operations go through the no-metrics path in recordOperation
@@ -1017,7 +1017,7 @@ func TestWrapStore_DefaultOptions(t *testing.T) {
 
 	// Operations should still work fine
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	_, err = wrapped.Set(ctx, "ns", "key", config.NewValue("val"))
@@ -1041,10 +1041,10 @@ func TestInstrumentedStore_GetMany_Error_WithTracing(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 
 	// Close the underlying store to force errors
-	store.Close(ctx)
+	_ = store.Close(ctx)
 
 	_, err := wrapped.GetMany(ctx, "ns", []string{"key1"})
 	if err == nil {
@@ -1058,10 +1058,10 @@ func TestInstrumentedStore_SetMany_Error_WithTracing(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 
 	// Close underlying store
-	store.Close(ctx)
+	_ = store.Close(ctx)
 
 	err := wrapped.SetMany(ctx, "ns", map[string]config.Value{
 		"key1": config.NewValue("val"),
@@ -1077,10 +1077,10 @@ func TestInstrumentedStore_DeleteMany_Error_WithTracing(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 
 	// Close underlying store
-	store.Close(ctx)
+	_ = store.Close(ctx)
 
 	_, err := wrapped.DeleteMany(ctx, "ns", []string{"key1"})
 	if err == nil {
@@ -1096,7 +1096,7 @@ func TestInstrumentedStore_Health_Error_WithTracing(t *testing.T) {
 	ctx := context.Background()
 
 	// Close store so Health returns error
-	store.Close(ctx)
+	_ = store.Close(ctx)
 
 	err := wrapped.Health(ctx)
 	if err == nil {
@@ -1110,7 +1110,7 @@ func TestInstrumentedStore_Set_ReturnsResult_WithTracing(t *testing.T) {
 	wrapped, _ := WrapStore(store, WithTracesEnabled(true), WithMetricsEnabled(true))
 
 	ctx := context.Background()
-	wrapped.Connect(ctx)
+	_ = wrapped.Connect(ctx)
 	defer wrapped.Close(ctx)
 
 	result, err := wrapped.Set(ctx, "ns", "key", config.NewValue("hello"))

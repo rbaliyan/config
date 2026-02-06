@@ -23,7 +23,7 @@ func setupTestConfig(t *testing.T) config.Config {
 		t.Fatalf("Connect failed: %v", err)
 	}
 	t.Cleanup(func() {
-		mgr.Close(context.Background())
+		_ = mgr.Close(context.Background())
 	})
 	return mgr.Namespace("test")
 }
@@ -38,8 +38,8 @@ func TestRef_InitialLoad(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
-	cfg.Set(ctx, "database/host", "localhost")
-	cfg.Set(ctx, "database/port", 5432)
+	_ = cfg.Set(ctx, "database/host", "localhost")
+	_ = cfg.Set(ctx, "database/port", 5432)
 
 	ref, err := New[refDBConfig](ctx, cfg, "database",
 		WithRefPollInterval[refDBConfig](time.Second),
@@ -86,8 +86,8 @@ func TestRef_AutoReload(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
-	cfg.Set(ctx, "database/host", "localhost")
-	cfg.Set(ctx, "database/port", 5432)
+	_ = cfg.Set(ctx, "database/host", "localhost")
+	_ = cfg.Set(ctx, "database/port", 5432)
 
 	ref, err := New[refDBConfig](ctx, cfg, "database",
 		WithRefPollInterval[refDBConfig](50*time.Millisecond),
@@ -104,8 +104,8 @@ func TestRef_AutoReload(t *testing.T) {
 	}
 
 	// Update config
-	cfg.Set(ctx, "database/host", "remotehost")
-	cfg.Set(ctx, "database/port", 5433)
+	_ = cfg.Set(ctx, "database/host", "remotehost")
+	_ = cfg.Set(ctx, "database/port", 5433)
 
 	// Wait for poll cycle
 	time.Sleep(200 * time.Millisecond)
@@ -126,8 +126,8 @@ func TestRef_OnChange(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
-	cfg.Set(ctx, "database/host", "localhost")
-	cfg.Set(ctx, "database/port", 5432)
+	_ = cfg.Set(ctx, "database/host", "localhost")
+	_ = cfg.Set(ctx, "database/port", 5432)
 
 	var mu sync.Mutex
 	var gotOld, gotNew refDBConfig
@@ -149,8 +149,8 @@ func TestRef_OnChange(t *testing.T) {
 	defer ref.Close()
 
 	// Update config
-	cfg.Set(ctx, "database/host", "newhost")
-	cfg.Set(ctx, "database/port", 9999)
+	_ = cfg.Set(ctx, "database/host", "newhost")
+	_ = cfg.Set(ctx, "database/port", 9999)
 
 	// Wait for change detection
 	time.Sleep(200 * time.Millisecond)
@@ -179,8 +179,8 @@ func TestRef_OnError(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
-	cfg.Set(ctx, "database/host", "localhost")
-	cfg.Set(ctx, "database/port", 5432)
+	_ = cfg.Set(ctx, "database/host", "localhost")
+	_ = cfg.Set(ctx, "database/port", 5432)
 
 	var errorCount atomic.Int32
 
@@ -196,8 +196,8 @@ func TestRef_OnError(t *testing.T) {
 	defer ref.Close()
 
 	// Delete keys to cause error on next reload
-	cfg.Delete(ctx, "database/host")
-	cfg.Delete(ctx, "database/port")
+	_ = cfg.Delete(ctx, "database/host")
+	_ = cfg.Delete(ctx, "database/port")
 
 	// Wait for poll
 	time.Sleep(200 * time.Millisecond)
@@ -221,8 +221,8 @@ func TestRef_Close(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
-	cfg.Set(ctx, "database/host", "localhost")
-	cfg.Set(ctx, "database/port", 5432)
+	_ = cfg.Set(ctx, "database/host", "localhost")
+	_ = cfg.Set(ctx, "database/port", 5432)
 
 	ref, err := New[refDBConfig](ctx, cfg, "database",
 		WithRefPollInterval[refDBConfig](50*time.Millisecond),
@@ -260,8 +260,8 @@ func TestRef_ReloadNow(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
-	cfg.Set(ctx, "database/host", "localhost")
-	cfg.Set(ctx, "database/port", 5432)
+	_ = cfg.Set(ctx, "database/host", "localhost")
+	_ = cfg.Set(ctx, "database/port", 5432)
 
 	ref, err := New[refDBConfig](ctx, cfg, "database",
 		WithRefPollInterval[refDBConfig](10*time.Second), // long interval
@@ -272,7 +272,7 @@ func TestRef_ReloadNow(t *testing.T) {
 	defer ref.Close()
 
 	// Update config
-	cfg.Set(ctx, "database/host", "forced-host")
+	_ = cfg.Set(ctx, "database/host", "forced-host")
 
 	// Force immediate reload
 	if err := ref.ReloadNow(ctx); err != nil {
@@ -292,8 +292,8 @@ func TestRef_ConcurrentAccess(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
-	cfg.Set(ctx, "database/host", "localhost")
-	cfg.Set(ctx, "database/port", 5432)
+	_ = cfg.Set(ctx, "database/host", "localhost")
+	_ = cfg.Set(ctx, "database/port", 5432)
 
 	ref, err := New[refDBConfig](ctx, cfg, "database",
 		WithRefPollInterval[refDBConfig](20*time.Millisecond),
@@ -324,7 +324,7 @@ func TestRef_ConcurrentAccess(t *testing.T) {
 
 	// Meanwhile, mutate config
 	for i := 0; i < 10; i++ {
-		cfg.Set(ctx, "database/port", 6000+i)
+		_ = cfg.Set(ctx, "database/port", 6000+i)
 		time.Sleep(10 * time.Millisecond)
 	}
 
@@ -343,10 +343,10 @@ func TestRef_NestedStruct(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
-	cfg.Set(ctx, "app/database/host", "dbhost")
-	cfg.Set(ctx, "app/database/port", 3306)
-	cfg.Set(ctx, "app/cache/ttl", 300)
-	cfg.Set(ctx, "app/cache/enabled", true)
+	_ = cfg.Set(ctx, "app/database/host", "dbhost")
+	_ = cfg.Set(ctx, "app/database/port", 3306)
+	_ = cfg.Set(ctx, "app/cache/ttl", 300)
+	_ = cfg.Set(ctx, "app/cache/enabled", true)
 
 	ref, err := New[refNestedConfig](ctx, cfg, "app",
 		WithRefPollInterval[refNestedConfig](time.Second),
@@ -380,8 +380,8 @@ func TestRef_WithBindOptions(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
-	cfg.Set(ctx, "svc/host", "tagged-host")
-	cfg.Set(ctx, "svc/port", 7777)
+	_ = cfg.Set(ctx, "svc/host", "tagged-host")
+	_ = cfg.Set(ctx, "svc/port", 7777)
 
 	ref, err := New[taggedConfig](ctx, cfg, "svc",
 		WithRefPollInterval[taggedConfig](time.Second),
@@ -405,8 +405,8 @@ func TestRef_OnChangeSkipsUnchanged(t *testing.T) {
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
-	cfg.Set(ctx, "database/host", "localhost")
-	cfg.Set(ctx, "database/port", 5432)
+	_ = cfg.Set(ctx, "database/host", "localhost")
+	_ = cfg.Set(ctx, "database/port", 5432)
 
 	var callCount atomic.Int32
 
@@ -435,7 +435,7 @@ func TestRef_OnChangeSkipsUnchanged(t *testing.T) {
 	}
 
 	// Now make an actual change
-	cfg.Set(ctx, "database/host", "changed-host")
+	_ = cfg.Set(ctx, "database/host", "changed-host")
 	time.Sleep(200 * time.Millisecond)
 
 	// onChange should have been called exactly once (for the change)

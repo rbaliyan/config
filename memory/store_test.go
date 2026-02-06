@@ -33,7 +33,7 @@ func TestStore_ConnectClose(t *testing.T) {
 func TestStore_SetGet(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Set a value
@@ -60,7 +60,7 @@ func TestStore_SetGet(t *testing.T) {
 func TestStore_GetNotFound(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	_, err := store.Get(ctx, "ns", "nonexistent")
@@ -72,7 +72,7 @@ func TestStore_GetNotFound(t *testing.T) {
 func TestStore_Delete(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Set a value
@@ -94,7 +94,7 @@ func TestStore_Delete(t *testing.T) {
 func TestStore_DeleteNotFound(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	err := store.Delete(ctx, "ns", "nonexistent")
@@ -106,7 +106,7 @@ func TestStore_DeleteNotFound(t *testing.T) {
 func TestStore_Find(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Set multiple values
@@ -130,7 +130,7 @@ func TestStore_Find(t *testing.T) {
 func TestStore_FindWithLimit(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Set 5 values
@@ -156,7 +156,7 @@ func TestStore_Watch(t *testing.T) {
 	store := NewStore()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Start watching
@@ -189,7 +189,7 @@ func TestStore_WatchDelete(t *testing.T) {
 	store := NewStore()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Set a value first
@@ -224,7 +224,7 @@ func TestStore_WatchDelete(t *testing.T) {
 func TestStore_NamespaceIsolation(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Set same key in different namespaces
@@ -255,7 +255,7 @@ func TestStore_NamespaceIsolation(t *testing.T) {
 func TestStore_Health(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	if err := store.Health(ctx); err != nil {
@@ -266,7 +266,7 @@ func TestStore_Health(t *testing.T) {
 func TestStore_Stats(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Set some values
@@ -287,7 +287,7 @@ func TestStore_Stats(t *testing.T) {
 func TestStore_GetMany(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Set values
@@ -308,7 +308,7 @@ func TestStore_GetMany(t *testing.T) {
 func TestStore_SetMany(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	values := map[string]config.Value{
@@ -331,7 +331,7 @@ func TestStore_SetMany(t *testing.T) {
 func TestStore_DeleteMany(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Set values
@@ -358,7 +358,7 @@ func TestStore_DeleteMany(t *testing.T) {
 func TestStore_ConcurrentAccess(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	var wg sync.WaitGroup
@@ -397,7 +397,7 @@ func TestStore_ConcurrentAccess(t *testing.T) {
 func TestStore_ValueMetadata(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Set a value
@@ -427,7 +427,7 @@ func TestStore_ValueMetadata(t *testing.T) {
 func TestStore_SetWithIfNotExists(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// First set should succeed (key doesn't exist)
@@ -454,7 +454,7 @@ func TestStore_SetWithIfNotExists(t *testing.T) {
 func TestStore_SetWithIfExists(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// First set should fail (key doesn't exist)
@@ -484,7 +484,7 @@ func TestStore_SetWithIfExists(t *testing.T) {
 func TestStore_SetUpsertIsDefault(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Set without write mode should create
@@ -520,7 +520,7 @@ var (
 func TestStore_SetManyPartialFailure_InvalidKey(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	values := map[string]config.Value{
@@ -563,8 +563,8 @@ func TestStore_SetManyPartialFailure_InvalidKey(t *testing.T) {
 func TestStore_SetManyClosedStore(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
-	store.Close(ctx)
+	_ = store.Connect(ctx)
+	_ = store.Close(ctx)
 
 	err := store.SetMany(ctx, "ns", map[string]config.Value{
 		"key1": config.NewValue("value1"),
@@ -577,7 +577,7 @@ func TestStore_SetManyClosedStore(t *testing.T) {
 func TestStore_SetManyInvalidNamespace(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	err := store.SetMany(ctx, "!invalid!", map[string]config.Value{
@@ -592,7 +592,7 @@ func TestStore_DroppedEvents(t *testing.T) {
 	// Create store with very small watch buffer
 	store := NewStore(WithWatchBufferSize(1))
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Start watching but never consume from the channel
@@ -630,7 +630,7 @@ func TestStore_DroppedEventsCallback(t *testing.T) {
 		}),
 	)
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Start watching but never consume
@@ -661,7 +661,7 @@ func TestStore_DroppedEventsCallback(t *testing.T) {
 func TestStore_FindWithEmptyPrefix(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	_, _ = store.Set(ctx, "ns", "alpha", config.NewValue("a"))
@@ -682,7 +682,7 @@ func TestStore_FindWithEmptyPrefix(t *testing.T) {
 func TestStore_FindWithKeysFilterNonExistent(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	_, _ = store.Set(ctx, "ns", "exists", config.NewValue("yes"))
@@ -710,7 +710,7 @@ func TestStore_FindWithKeysFilterNonExistent(t *testing.T) {
 func TestStore_FindCursorPagination(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Insert 5 values (they get IDs 1-5 in order)
@@ -776,7 +776,7 @@ func TestStore_FindCursorPagination(t *testing.T) {
 func TestStore_FindCursorWithNoMoreResults(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	_, _ = store.Set(ctx, "ns", "only-key", config.NewValue("val"))
@@ -795,7 +795,7 @@ func TestStore_FindCursorWithNoMoreResults(t *testing.T) {
 func TestStore_DeleteManyMixedExistingNonExisting(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Create some entries
@@ -838,8 +838,8 @@ func TestStore_DeleteManyMixedExistingNonExisting(t *testing.T) {
 func TestStore_DeleteManyClosedStore(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
-	store.Close(ctx)
+	_ = store.Connect(ctx)
+	_ = store.Close(ctx)
 
 	_, err := store.DeleteMany(ctx, "ns", []string{"key1"})
 	if !errors.Is(err, config.ErrStoreClosed) {
@@ -850,7 +850,7 @@ func TestStore_DeleteManyClosedStore(t *testing.T) {
 func TestStore_DeleteManyInvalidNamespace(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	_, err := store.DeleteMany(ctx, "!bad!", []string{"key1"})
@@ -863,7 +863,7 @@ func TestStore_WatchMultipleWatchers(t *testing.T) {
 	store := NewStore()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Create two watchers on the same namespace
@@ -923,7 +923,7 @@ func TestStore_WatchMultipleWatchers(t *testing.T) {
 func TestStore_WatchCloseOneDoesNotAffectOther(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Create two watchers with independent contexts
@@ -971,7 +971,7 @@ func TestStore_WatchWithPrefixFilter(t *testing.T) {
 	store := NewStore()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Watch only keys with prefix "app/"
@@ -1004,7 +1004,7 @@ func TestStore_WatchNamespaceFilter(t *testing.T) {
 	store := NewStore()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Watch only namespace "target"
@@ -1035,8 +1035,8 @@ func TestStore_WatchNamespaceFilter(t *testing.T) {
 func TestStore_WatchClosedStore(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
-	store.Close(ctx)
+	_ = store.Connect(ctx)
+	_ = store.Close(ctx)
 
 	_, err := store.Watch(ctx, config.WatchFilter{})
 	if !errors.Is(err, config.ErrStoreClosed) {
@@ -1047,8 +1047,8 @@ func TestStore_WatchClosedStore(t *testing.T) {
 func TestStore_OperationsOnClosedStore(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
-	store.Close(ctx)
+	_ = store.Connect(ctx)
+	_ = store.Close(ctx)
 
 	// Get on closed store
 	_, err := store.Get(ctx, "ns", "key")
@@ -1096,7 +1096,7 @@ func TestStore_OperationsOnClosedStore(t *testing.T) {
 func TestStore_DoubleClose(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 
 	if err := store.Close(ctx); err != nil {
 		t.Fatalf("First Close failed: %v", err)
@@ -1111,7 +1111,7 @@ func TestStore_DoubleClose(t *testing.T) {
 func TestStore_InvalidNamespace(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Get with invalid namespace
@@ -1148,7 +1148,7 @@ func TestStore_InvalidNamespace(t *testing.T) {
 func TestStore_SetInvalidKey(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Empty key
@@ -1167,7 +1167,7 @@ func TestStore_SetInvalidKey(t *testing.T) {
 func TestStore_SetReturnsValueWithMetadata(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Test that Set returns the stored value with metadata
@@ -1193,7 +1193,7 @@ func TestStore_SetReturnsValueWithMetadata(t *testing.T) {
 func TestStore_FindWithKeysEmptySlice(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	_, _ = store.Set(ctx, "ns", "key1", config.NewValue("val1"))
@@ -1217,7 +1217,7 @@ func TestStore_WithCodecOption(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Basic operations should still work
@@ -1238,7 +1238,7 @@ func TestStore_WithWatchBufferSizeZero(t *testing.T) {
 func TestStore_FindDifferentNamespaces(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	_, _ = store.Set(ctx, "ns1", "key1", config.NewValue("val1"))
@@ -1261,7 +1261,7 @@ func TestStore_WatchAllNamespaces(t *testing.T) {
 	store := NewStore()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Watch all namespaces (empty filter)
@@ -1288,7 +1288,7 @@ func TestStore_WatchAllNamespaces(t *testing.T) {
 func TestStore_SetManyUpdatesExisting(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Create initial entries
@@ -1324,7 +1324,7 @@ func TestStore_DeleteManyNotifications(t *testing.T) {
 	store := NewStore()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	_, _ = store.Set(ctx, "ns", "del1", config.NewValue("v1"))
@@ -1357,7 +1357,7 @@ func TestStore_DeleteManyNotifications(t *testing.T) {
 func TestStore_BulkWriteErrorDetails(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	values := map[string]config.Value{

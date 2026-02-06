@@ -23,9 +23,6 @@ type failStore struct {
 	watchErr   error
 	healthErr  error
 	statsErr   error
-	getManyErr error
-	setManyErr error
-	delManyErr error
 }
 
 func (f *failStore) Connect(ctx context.Context) error { return f.connectErr }
@@ -119,7 +116,7 @@ func TestMultiStore_Close(t *testing.T) {
 	ms := NewStore([]config.Store{store1, store2})
 	ctx := context.Background()
 
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	if err := ms.Close(ctx); err != nil {
 		t.Errorf("Close failed: %v", err)
 	}
@@ -132,7 +129,7 @@ func TestMultiStore_SetAndGet_Fallback(t *testing.T) {
 	ms := NewStore([]config.Store{store1, store2}, WithStrategy(StrategyFallback))
 	ctx := context.Background()
 
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
 	// Create a value
@@ -173,12 +170,12 @@ func TestMultiStore_SetAndGet_ReadThrough(t *testing.T) {
 	ms := NewStore([]config.Store{cache, backend}, WithStrategy(StrategyReadThrough))
 	ctx := context.Background()
 
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
 	// Directly set value in backend only
 	val := config.NewValue("backend-value")
-	backend.Set(ctx, "ns", "key", val)
+	_, _ = backend.Set(ctx,"ns", "key", val)
 
 	// Get should read from backend and populate cache
 	got, err := ms.Get(ctx, "ns", "key")
@@ -210,7 +207,7 @@ func TestMultiStore_SetAndGet_ReadThrough_WriteAll(t *testing.T) {
 	ms := NewStore([]config.Store{cache, backend}, WithStrategy(StrategyReadThrough))
 	ctx := context.Background()
 
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
 	// Set via multi-store writes to all stores for consistency
@@ -247,7 +244,7 @@ func TestMultiStore_Delete_Fallback(t *testing.T) {
 	ms := NewStore([]config.Store{store1, store2}, WithStrategy(StrategyFallback))
 	ctx := context.Background()
 
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
 	// Set value in both stores
@@ -275,12 +272,12 @@ func TestMultiStore_Fallback_PrimaryFailure(t *testing.T) {
 	ms := NewStore([]config.Store{store1, store2}, WithStrategy(StrategyFallback))
 	ctx := context.Background()
 
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
 	// Only set value in secondary store
 	val := config.NewValue("secondary-value")
-	store2.Set(ctx, "ns", "key", val)
+	_, _ = store2.Set(ctx,"ns", "key", val)
 
 	// Get should fall back to secondary
 	got, err := ms.Get(ctx, "ns", "key")
@@ -301,14 +298,14 @@ func TestMultiStore_Find(t *testing.T) {
 	ms := NewStore([]config.Store{store1, store2})
 	ctx := context.Background()
 
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
 	// Set values in primary store
 	val1 := config.NewValue("value1")
 	val2 := config.NewValue("value2")
-	store1.Set(ctx, "ns", "app/key1", val1)
-	store1.Set(ctx, "ns", "app/key2", val2)
+	_, _ = store1.Set(ctx,"ns", "app/key1", val1)
+	_, _ = store1.Set(ctx,"ns", "app/key2", val2)
 
 	// Find should search primary only
 	page, err := ms.Find(ctx, "ns", config.NewFilter().WithPrefix("app/").Build())
@@ -329,7 +326,7 @@ func TestMultiStore_Watch(t *testing.T) {
 	ms := NewStore([]config.Store{store1, store2})
 	ctx := context.Background()
 
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
 	// Watch should work through primary
@@ -396,7 +393,7 @@ func TestMultiStore_WriteThrough(t *testing.T) {
 	ms := NewStore([]config.Store{store1, store2}, WithStrategy(StrategyWriteThrough))
 	ctx := context.Background()
 
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
 	// Set should write to all stores
@@ -424,7 +421,7 @@ func TestMultiStore_Health(t *testing.T) {
 	ms := NewStore([]config.Store{store1, store2})
 	ctx := context.Background()
 
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
 	// Memory stores implement HealthChecker, should be healthy
@@ -450,7 +447,7 @@ func TestMultiStore_Stats(t *testing.T) {
 	ms := NewStore([]config.Store{store1, store2})
 	ctx := context.Background()
 
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
 	// Set some values
@@ -489,7 +486,7 @@ func TestMultiStore_Get_AllStoresFail(t *testing.T) {
 
 	ms := NewStore([]config.Store{store1, store2})
 	ctx := context.Background()
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
 	_, err := ms.Get(ctx, "ns", "nokey")
@@ -514,7 +511,7 @@ func TestMultiStore_Get_ErrorFromLastStore(t *testing.T) {
 func TestMultiStore_Get_NonRetryableError(t *testing.T) {
 	f1 := &failStore{getErr: errMock}
 	store2 := memory.NewStore()
-	store2.Set(context.Background(), "ns", "key", config.NewValue("val"))
+	_, _ = store2.Set(context.Background(),"ns", "key", config.NewValue("val"))
 
 	ms := NewStore([]config.Store{f1, store2})
 	ctx := context.Background()
@@ -528,7 +525,7 @@ func TestMultiStore_Get_NonRetryableError(t *testing.T) {
 func TestMultiStore_Get_ClosedStoreRetries(t *testing.T) {
 	f1 := &failStore{getErr: config.ErrStoreClosed}
 	store2 := memory.NewStore()
-	store2.Set(context.Background(), "ns", "key", config.NewValue("val"))
+	_, _ = store2.Set(context.Background(),"ns", "key", config.NewValue("val"))
 
 	ms := NewStore([]config.Store{f1, store2})
 	ctx := context.Background()
@@ -546,7 +543,7 @@ func TestMultiStore_Get_ClosedStoreRetries(t *testing.T) {
 func TestMultiStore_Get_NotConnectedRetries(t *testing.T) {
 	f1 := &failStore{getErr: config.ErrStoreNotConnected}
 	store2 := memory.NewStore()
-	store2.Set(context.Background(), "ns", "key", config.NewValue("hello"))
+	_, _ = store2.Set(context.Background(),"ns", "key", config.NewValue("hello"))
 
 	ms := NewStore([]config.Store{f1, store2})
 	ctx := context.Background()
@@ -590,7 +587,7 @@ func TestMultiStore_Set_PartialFailure(t *testing.T) {
 
 	ms := NewStore([]config.Store{f1, store2})
 	ctx := context.Background()
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 
 	result, err := ms.Set(ctx, "ns", "key", config.NewValue("val"))
 	if err != nil {
@@ -617,7 +614,7 @@ func TestMultiStore_Delete_AllNotFound(t *testing.T) {
 
 	ms := NewStore([]config.Store{store1, store2})
 	ctx := context.Background()
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
 	err := ms.Delete(ctx, "ns", "nokey")
@@ -632,10 +629,10 @@ func TestMultiStore_Delete_PartialPresence(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{store1, store2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
-	store1.Set(ctx, "ns", "key", config.NewValue("v"))
+	_, _ = store1.Set(ctx,"ns", "key", config.NewValue("v"))
 
 	err := ms.Delete(ctx, "ns", "key")
 	if err != nil {
@@ -667,12 +664,12 @@ func TestMultiStore_Find_PrimaryOnly(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{store1, store2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
-	store1.Set(ctx, "ns", "app/a", config.NewValue("v1"))
-	store2.Set(ctx, "ns", "app/b", config.NewValue("v2"))
-	store2.Set(ctx, "ns", "app/c", config.NewValue("v3"))
+	_, _ = store1.Set(ctx,"ns", "app/a", config.NewValue("v1"))
+	_, _ = store2.Set(ctx,"ns", "app/b", config.NewValue("v2"))
+	_, _ = store2.Set(ctx,"ns", "app/c", config.NewValue("v3"))
 
 	page, err := ms.Find(ctx, "ns", config.NewFilter().WithPrefix("app/").Build())
 	if err != nil {
@@ -694,7 +691,7 @@ func TestMultiStore_Watch_FallbackOnUnsupported(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{nw, store2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
 	ch, err := ms.Watch(ctx, config.WatchFilter{})
@@ -824,10 +821,6 @@ func (s *noHealthStore) Health(_ context.Context) error {
 	return nil
 }
 
-type noStatsStore struct {
-	memory.Store
-}
-
 func TestMultiStore_Stats_NoStatsProviders(t *testing.T) {
 	ms := NewStore([]config.Store{&plainStore{}, &plainStore{}})
 	ctx := context.Background()
@@ -857,14 +850,14 @@ func TestMultiStore_Stats_Aggregation(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{store1, store2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
-	store1.Set(ctx, "ns1", "k1", config.NewValue("v1"))
-	store1.Set(ctx, "ns1", "k2", config.NewValue("v2"))
-	store2.Set(ctx, "ns1", "k1", config.NewValue("v1"))
-	store2.Set(ctx, "ns1", "k2", config.NewValue("v2"))
-	store2.Set(ctx, "ns2", "k3", config.NewValue(42))
+	_, _ = store1.Set(ctx,"ns1", "k1", config.NewValue("v1"))
+	_, _ = store1.Set(ctx,"ns1", "k2", config.NewValue("v2"))
+	_, _ = store2.Set(ctx,"ns1", "k1", config.NewValue("v1"))
+	_, _ = store2.Set(ctx,"ns1", "k2", config.NewValue("v2"))
+	_, _ = store2.Set(ctx,"ns2", "k3", config.NewValue(42))
 
 	stats, err := ms.Stats(ctx)
 	if err != nil {
@@ -887,9 +880,9 @@ func TestMultiStore_Stats_StatsErrorSkipped(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{f1, store2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 
-	store2.Set(ctx, "ns", "k", config.NewValue("v"))
+	_, _ = store2.Set(ctx,"ns", "k", config.NewValue("v"))
 
 	stats, err := ms.Stats(ctx)
 	if err != nil {
@@ -909,11 +902,11 @@ func TestMultiStore_GetMany_Fallback(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{store1, store2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
-	store1.Set(ctx, "ns", "k1", config.NewValue("v1"))
-	store1.Set(ctx, "ns", "k2", config.NewValue("v2"))
+	_, _ = store1.Set(ctx,"ns", "k1", config.NewValue("v1"))
+	_, _ = store1.Set(ctx,"ns", "k2", config.NewValue("v2"))
 
 	results, err := ms.GetMany(ctx, "ns", []string{"k1", "k2", "k3"})
 	if err != nil {
@@ -946,9 +939,9 @@ func TestMultiStore_GetMany_FallbackToSecondStore(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{f1, store2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 
-	store2.Set(ctx, "ns", "k1", config.NewValue("v1"))
+	_, _ = store2.Set(ctx,"ns", "k1", config.NewValue("v1"))
 
 	results, err := ms.GetMany(ctx, "ns", []string{"k1"})
 	if err != nil {
@@ -978,10 +971,10 @@ func TestMultiStore_GetMany_ReadThrough(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{f1, backend}, WithStrategy(StrategyReadThrough))
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 
-	backend.Set(ctx, "ns", "k1", config.NewValue("v1"))
-	backend.Set(ctx, "ns", "k2", config.NewValue("v2"))
+	_, _ = backend.Set(ctx,"ns", "k1", config.NewValue("v1"))
+	_, _ = backend.Set(ctx,"ns", "k2", config.NewValue("v2"))
 
 	results, err := ms.GetMany(ctx, "ns", []string{"k1", "k2"})
 	if err != nil {
@@ -998,9 +991,9 @@ func TestMultiStore_GetMany_NonBulkStoreFallback(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{f1, store2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 
-	store2.Set(ctx, "ns", "k1", config.NewValue("v1"))
+	_, _ = store2.Set(ctx,"ns", "k1", config.NewValue("v1"))
 
 	results, err := ms.GetMany(ctx, "ns", []string{"k1"})
 	if err != nil {
@@ -1027,7 +1020,7 @@ func TestMultiStore_SetMany_WritesToAll(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{store1, store2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
 	vals := map[string]config.Value{
@@ -1080,7 +1073,7 @@ func TestMultiStore_SetMany_PartialFailure(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{f1, store2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 
 	err := ms.SetMany(ctx, "ns", map[string]config.Value{"k": config.NewValue("v")})
 	if err != nil {
@@ -1113,11 +1106,11 @@ func TestMultiStore_DeleteMany_FromAll(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{store1, store2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
-	ms.Set(ctx, "ns", "k1", config.NewValue("v1"))
-	ms.Set(ctx, "ns", "k2", config.NewValue("v2"))
+	_, _ = ms.Set(ctx,"ns", "k1", config.NewValue("v1"))
+	_, _ = ms.Set(ctx,"ns", "k2", config.NewValue("v2"))
 
 	deleted, err := ms.DeleteMany(ctx, "ns", []string{"k1", "k2"})
 	if err != nil {
@@ -1143,9 +1136,9 @@ func TestMultiStore_DeleteMany_NonBulkFallback(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{store1, f2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 
-	store1.Set(ctx, "ns", "k1", config.NewValue("v"))
+	_, _ = store1.Set(ctx,"ns", "k1", config.NewValue("v"))
 
 	deleted, err := ms.DeleteMany(ctx, "ns", []string{"k1", "k2"})
 	if err != nil {
@@ -1197,12 +1190,12 @@ func TestMultiStore_GetMany_BulkStoreUsed(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{store1, store2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
-	store1.Set(ctx, "ns", "k1", config.NewValue("v1"))
-	store1.Set(ctx, "ns", "k2", config.NewValue("v2"))
-	store1.Set(ctx, "ns", "k3", config.NewValue("v3"))
+	_, _ = store1.Set(ctx,"ns", "k1", config.NewValue("v1"))
+	_, _ = store1.Set(ctx,"ns", "k2", config.NewValue("v2"))
+	_, _ = store1.Set(ctx,"ns", "k3", config.NewValue("v3"))
 
 	results, err := ms.GetMany(ctx, "ns", []string{"k1", "k2", "k3", "k4"})
 	if err != nil {
@@ -1219,10 +1212,10 @@ func TestMultiStore_GetMany_NonBulkStoreIndividualGets(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{store1, f2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 
-	store1.Set(ctx, "ns", "k1", config.NewValue("v1"))
-	store1.Set(ctx, "ns", "k2", config.NewValue("v2"))
+	_, _ = store1.Set(ctx,"ns", "k1", config.NewValue("v1"))
+	_, _ = store1.Set(ctx,"ns", "k2", config.NewValue("v2"))
 
 	results, err := ms.GetMany(ctx, "ns", []string{"k1", "k2", "k3"})
 	if err != nil {
@@ -1239,7 +1232,7 @@ func TestMultiStore_SetMany_NonBulkStoreFallback(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{f1, store2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 
 	vals := map[string]config.Value{
 		"k1": config.NewValue("v1"),
@@ -1284,10 +1277,10 @@ func TestMultiStore_ReadThrough_PopulatesMultipleEarlierStores(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{cache1, cache2, backend}, WithStrategy(StrategyReadThrough))
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
-	backend.Set(ctx, "ns", "key", config.NewValue("deep-value"))
+	_, _ = backend.Set(ctx,"ns", "key", config.NewValue("deep-value"))
 
 	got, err := ms.Get(ctx, "ns", "key")
 	if err != nil {
@@ -1356,10 +1349,10 @@ func TestMultiStore_GetMany_ReadThrough_PopulatesBulkCache(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{f1, backend}, WithStrategy(StrategyReadThrough))
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 
-	backend.Set(ctx, "ns", "a", config.NewValue("va"))
-	backend.Set(ctx, "ns", "b", config.NewValue("vb"))
+	_, _ = backend.Set(ctx,"ns", "a", config.NewValue("va"))
+	_, _ = backend.Set(ctx,"ns", "b", config.NewValue("vb"))
 
 	results, err := ms.GetMany(ctx, "ns", []string{"a", "b"})
 	if err != nil {
@@ -1376,9 +1369,9 @@ func TestMultiStore_GetMany_ReadThrough_NonBulkCachePopulated(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{f1, backend}, WithStrategy(StrategyReadThrough))
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 
-	backend.Set(ctx, "ns", "k1", config.NewValue("v1"))
+	_, _ = backend.Set(ctx,"ns", "k1", config.NewValue("v1"))
 
 	results, err := ms.GetMany(ctx, "ns", []string{"k1"})
 	if err != nil {
@@ -1395,9 +1388,9 @@ func TestMultiStore_GetMany_NonBulkStoreReturnsEmpty(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{f1, backend})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 
-	backend.Set(ctx, "ns", "k1", config.NewValue("v1"))
+	_, _ = backend.Set(ctx,"ns", "k1", config.NewValue("v1"))
 
 	results, err := ms.GetMany(ctx, "ns", []string{"k1"})
 	if err != nil {
@@ -1414,7 +1407,7 @@ func TestMultiStore_SetMany_BulkStoreError(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{f1, store2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 
 	err := ms.SetMany(ctx, "ns", map[string]config.Value{"k": config.NewValue("v")})
 	if err != nil {
@@ -1428,12 +1421,12 @@ func TestMultiStore_DeleteMany_MaxDeleted(t *testing.T) {
 
 	ctx := context.Background()
 	ms := NewStore([]config.Store{store1, store2})
-	ms.Connect(ctx)
+	_ = ms.Connect(ctx)
 	defer ms.Close(ctx)
 
-	store1.Set(ctx, "ns", "k1", config.NewValue("v"))
-	store2.Set(ctx, "ns", "k1", config.NewValue("v"))
-	store2.Set(ctx, "ns", "k2", config.NewValue("v"))
+	_, _ = store1.Set(ctx,"ns", "k1", config.NewValue("v"))
+	_, _ = store2.Set(ctx,"ns", "k1", config.NewValue("v"))
+	_, _ = store2.Set(ctx,"ns", "k2", config.NewValue("v"))
 
 	deleted, err := ms.DeleteMany(ctx, "ns", []string{"k1", "k2"})
 	if err != nil {

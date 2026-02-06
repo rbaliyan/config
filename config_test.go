@@ -163,9 +163,9 @@ func TestFind(t *testing.T) {
 	cfg := mgr.Namespace("test")
 
 	// Set multiple values
-	cfg.Set(ctx, "app/db/host", "localhost")
-	cfg.Set(ctx, "app/db/port", 5432)
-	cfg.Set(ctx, "app/cache/ttl", 300)
+	_ = cfg.Set(ctx,"app/db/host", "localhost")
+	_ = cfg.Set(ctx,"app/db/port", 5432)
+	_ = cfg.Set(ctx,"app/cache/ttl", 300)
 
 	// Find with prefix filter
 	page, err := cfg.Find(ctx, config.NewFilter().WithPrefix("app/db").Build())
@@ -335,7 +335,7 @@ func TestManagerHealth(t *testing.T) {
 		t.Errorf("Health should succeed when connected, got: %v", err)
 	}
 
-	mgr.Close(ctx)
+	_ = mgr.Close(ctx)
 
 	// Health should fail after close
 	if err := mgr.Health(ctx); err != config.ErrManagerClosed {
@@ -359,7 +359,7 @@ func TestManagerRefresh(t *testing.T) {
 	cfg := mgr.Namespace("test")
 
 	// Set a value
-	cfg.Set(ctx, "app/timeout", 30)
+	_ = cfg.Set(ctx,"app/timeout", 30)
 
 	// Refresh should succeed for existing key
 	if err := mgr.Refresh(ctx, "test", "app/timeout"); err != nil {
@@ -581,10 +581,10 @@ func TestClosedManagerOperations(t *testing.T) {
 	}
 
 	cfg := mgr.Namespace("test")
-	cfg.Set(ctx, "key", "value")
+	_ = cfg.Set(ctx,"key", "value")
 
 	// Close the manager
-	mgr.Close(ctx)
+	_ = mgr.Close(ctx)
 
 	// All operations should fail
 	_, err = cfg.Get(ctx, "key")
@@ -643,7 +643,7 @@ func TestConcurrentAccess(t *testing.T) {
 	cfg := mgr.Namespace("test")
 
 	// Set initial value
-	cfg.Set(ctx, "counter", 0)
+	_ = cfg.Set(ctx,"counter", 0)
 
 	var wg sync.WaitGroup
 	numReaders := 10
@@ -734,7 +734,7 @@ func TestFindWithPagination(t *testing.T) {
 
 	// Create multiple entries
 	for i := 0; i < 10; i++ {
-		cfg.Set(ctx, "key"+string(rune('a'+i)), i)
+		_ = cfg.Set(ctx,"key"+string(rune('a'+i)), i)
 	}
 
 	// Get first page
@@ -778,7 +778,7 @@ func TestValueMetadata(t *testing.T) {
 
 	// Set a value
 	before := time.Now()
-	cfg.Set(ctx, "key", "value")
+	_ = cfg.Set(ctx,"key", "value")
 	after := time.Now()
 
 	// Get and check metadata
@@ -799,7 +799,7 @@ func TestValueMetadata(t *testing.T) {
 
 	// Update and check version increments
 	time.Sleep(time.Millisecond) // Ensure time difference
-	cfg.Set(ctx, "key", "value2")
+	_ = cfg.Set(ctx,"key", "value2")
 
 	val, _ = cfg.Get(ctx, "key")
 	meta = val.Metadata()
@@ -870,7 +870,7 @@ func TestSetWithIfExists(t *testing.T) {
 	}
 
 	// Create the key normally
-	cfg.Set(ctx, "app/timeout", 30)
+	_ = cfg.Set(ctx,"app/timeout", 30)
 
 	// Now set with IfExists should succeed
 	err = cfg.Set(ctx, "app/timeout", 60, config.WithIfExists())
@@ -1058,9 +1058,9 @@ func TestCacheStats(t *testing.T) {
 	cfg := mgr.Namespace("test")
 
 	// Set and get some values to generate cache activity
-	cfg.Set(ctx, "key", "value")
-	cfg.Get(ctx, "key")
-	cfg.Get(ctx, "key") // cache hit
+	_ = cfg.Set(ctx,"key", "value")
+	_, _ = cfg.Get(ctx, "key")
+	_, _ = cfg.Get(ctx, "key") // cache hit
 
 	obs, ok := mgr.(config.ManagerObserver)
 	if !ok {
@@ -1282,7 +1282,7 @@ func TestManagerConnectTwice(t *testing.T) {
 		t.Fatalf("Second Connect failed: %v", err)
 	}
 
-	mgr.Close(ctx)
+	_ = mgr.Close(ctx)
 
 	// Connect after close should fail
 	err = mgr.Connect(ctx)
@@ -1407,7 +1407,7 @@ func TestContextGetWithDefaultNamespace(t *testing.T) {
 
 	// Set via default namespace
 	cfg := mgr.Namespace("")
-	cfg.Set(ctx, "key", "value")
+	_ = cfg.Set(ctx,"key", "value")
 
 	// Use context helper without setting namespace (defaults to "")
 	ctx = config.ContextWithManager(ctx, mgr)
@@ -1500,7 +1500,7 @@ func TestCacheResilienceStaleMarker(t *testing.T) {
 	cfg := mgr.Namespace("test")
 
 	// Set a value and read it (populates cache)
-	cfg.Set(ctx, "app/timeout", 30)
+	_ = cfg.Set(ctx,"app/timeout", 30)
 	val, err := cfg.Get(ctx, "app/timeout")
 	if err != nil {
 		t.Fatalf("First Get failed: %v", err)
@@ -1542,7 +1542,7 @@ func TestProcessWatchEventsSetAndDelete(t *testing.T) {
 	cfg := mgr.Namespace("test")
 
 	// Set and Get a value
-	cfg.Set(ctx, "app/name", "myapp")
+	_ = cfg.Set(ctx,"app/name", "myapp")
 	val, err := cfg.Get(ctx, "app/name")
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
@@ -2195,7 +2195,7 @@ func TestWatchReconnectsAfterFailure(t *testing.T) {
 		t.Errorf("ConsecutiveFailures = %d after recovery, want 0", ws.ConsecutiveFailures)
 	}
 
-	mgr.Close(ctx)
+	_ = mgr.Close(ctx)
 }
 
 // watchNotSupportedStore is a store that returns ErrWatchNotSupported.
@@ -2224,7 +2224,7 @@ func TestWatchNotSupported(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Close should work cleanly
-	mgr.Close(ctx)
+	_ = mgr.Close(ctx)
 }
 
 // healthCheckStore is a store that implements HealthChecker.
@@ -2328,7 +2328,7 @@ func TestWatchStatusAfterClose(t *testing.T) {
 
 	obs := mgr.(config.ManagerObserver)
 
-	mgr.Close(ctx)
+	_ = mgr.Close(ctx)
 
 	ws := obs.WatchStatus()
 	if ws.Connected {
@@ -2446,9 +2446,9 @@ func TestFindWithKeys(t *testing.T) {
 	defer mgr.Close(ctx)
 
 	cfg := mgr.Namespace("test")
-	cfg.Set(ctx, "key1", "val1")
-	cfg.Set(ctx, "key2", "val2")
-	cfg.Set(ctx, "key3", "val3")
+	_ = cfg.Set(ctx,"key1", "val1")
+	_ = cfg.Set(ctx,"key2", "val2")
+	_ = cfg.Set(ctx,"key3", "val3")
 
 	// Find specific keys
 	page, err := cfg.Find(ctx, config.NewFilter().WithKeys("key1", "key3").Build())
@@ -2476,11 +2476,11 @@ func TestRefreshNotFoundClearsCache(t *testing.T) {
 	cfg := mgr.Namespace("test")
 
 	// Set and get (populates cache)
-	cfg.Set(ctx, "temp-key", "temp-val")
-	cfg.Get(ctx, "temp-key")
+	_ = cfg.Set(ctx,"temp-key", "temp-val")
+	_, _ = cfg.Get(ctx, "temp-key")
 
 	// Delete directly from store, then refresh
-	cfg.Delete(ctx, "temp-key")
+	_ = cfg.Delete(ctx, "temp-key")
 
 	// Refresh should return NotFound (key is deleted)
 	err = mgr.Refresh(ctx, "test", "temp-key")

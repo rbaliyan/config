@@ -101,7 +101,7 @@ func TestStore_Get(t *testing.T) {
 func TestStore_Get_NotFound(t *testing.T) {
 	store := NewStore("testdata/config.yaml")
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	_, err := store.Get(ctx, "db", "nonexistent")
@@ -118,7 +118,7 @@ func TestStore_Get_NotFound(t *testing.T) {
 func TestStore_ReadOnly(t *testing.T) {
 	store := NewStore("testdata/config.yaml")
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	_, err := store.Set(ctx, "db", "host", config.NewValue("new"))
@@ -135,7 +135,7 @@ func TestStore_ReadOnly(t *testing.T) {
 func TestStore_Watch(t *testing.T) {
 	store := NewStore("testdata/config.yaml")
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	_, err := store.Watch(ctx, config.WatchFilter{})
@@ -147,7 +147,7 @@ func TestStore_Watch(t *testing.T) {
 func TestStore_Find_Prefix(t *testing.T) {
 	store := NewStore("testdata/config.yaml")
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	filter := config.NewFilter().WithPrefix("stores/").Build()
@@ -171,7 +171,7 @@ func TestStore_Find_Prefix(t *testing.T) {
 func TestStore_Find_Keys(t *testing.T) {
 	store := NewStore("testdata/config.yaml")
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	filter := config.NewFilter().WithKeys("host", "port").Build()
@@ -189,7 +189,7 @@ func TestStore_Find_Keys(t *testing.T) {
 func TestStore_Find_AllInNamespace(t *testing.T) {
 	store := NewStore("testdata/config.yaml")
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	filter := config.NewFilter().WithPrefix("").Build()
@@ -208,7 +208,7 @@ func TestStore_Find_AllInNamespace(t *testing.T) {
 func TestStore_Find_Pagination(t *testing.T) {
 	store := NewStore("testdata/config.yaml")
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	// Get first page with limit 2
@@ -255,14 +255,14 @@ func TestStore_Health(t *testing.T) {
 		t.Errorf("Health() before connect = %v, want ErrStoreNotConnected", err)
 	}
 
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 
 	// After connect
 	if err := store.Health(ctx); err != nil {
 		t.Errorf("Health() after connect = %v, want nil", err)
 	}
 
-	store.Close(ctx)
+	_ = store.Close(ctx)
 
 	// After close
 	if err := store.Health(ctx); !errors.Is(err, config.ErrStoreClosed) {
@@ -273,7 +273,7 @@ func TestStore_Health(t *testing.T) {
 func TestStore_Stats(t *testing.T) {
 	store := NewStore("testdata/config.yaml")
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
 	stats, err := store.Stats(ctx)
@@ -295,7 +295,7 @@ func TestStore_Stats(t *testing.T) {
 func TestStore_Close(t *testing.T) {
 	store := NewStore("testdata/config.yaml")
 	ctx := context.Background()
-	store.Connect(ctx)
+	_ = store.Connect(ctx)
 
 	// Close should work
 	if err := store.Close(ctx); err != nil {
@@ -361,13 +361,13 @@ func TestStore_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			store.Get(ctx, "db", "host")
-			store.Get(ctx, "db", "port")
+			_, _ = store.Get(ctx, "db", "host")
+			_, _ = store.Get(ctx, "db", "port")
 			store.Namespaces()
-			store.Health(ctx)
-			store.Stats(ctx)
+			_ = store.Health(ctx)
+			_, _ = store.Stats(ctx)
 			filter := config.NewFilter().WithPrefix("").Build()
-			store.Find(ctx, "db", filter)
+			_, _ = store.Find(ctx, "db", filter)
 		}()
 	}
 	wg.Wait()

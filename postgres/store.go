@@ -523,7 +523,6 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 			FROM %s WHERE namespace = $%d AND key IN (%s)
 		`, s.cfg.Table, argNum, strings.Join(placeholders, ","))
 		args = append(args, namespace)
-		argNum++
 
 		query += " ORDER BY id"
 

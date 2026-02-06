@@ -144,7 +144,7 @@ func TestStructToMapNonrecursive(t *testing.T) {
 		B int    `json:"b"`
 	}
 	type Outer struct {
-		Inner Inner `json:"inner,nonrecursive"`
+		Inner Inner `json:"inner,nonrecursive"` //nolint:staticcheck // nonrecursive is a custom bind option
 	}
 
 	m := NewFieldMapper("json")
@@ -269,7 +269,7 @@ func TestStructToMapPointerToStructNonrecursive(t *testing.T) {
 		Val string `json:"val"`
 	}
 	type Outer struct {
-		Inner *Inner `json:"inner,nonrecursive"`
+		Inner *Inner `json:"inner,nonrecursive"` //nolint:staticcheck // nonrecursive is a custom bind option
 	}
 
 	m := NewFieldMapper("json")
@@ -551,7 +551,7 @@ func TestStructToFlatMapNonrecursive(t *testing.T) {
 		Pass string `json:"pass"`
 	}
 	type S struct {
-		Creds Creds `json:"creds,nonrecursive"`
+		Creds Creds `json:"creds,nonrecursive"` //nolint:staticcheck // nonrecursive is a custom bind option
 	}
 
 	m := NewFieldMapper("json")
@@ -573,7 +573,7 @@ func TestStructToFlatMapNonrecursivePointer(t *testing.T) {
 		Val string `json:"val"`
 	}
 	type S struct {
-		Inner *Inner `json:"inner,nonrecursive"`
+		Inner *Inner `json:"inner,nonrecursive"` //nolint:staticcheck // nonrecursive is a custom bind option
 	}
 
 	m := NewFieldMapper("json")

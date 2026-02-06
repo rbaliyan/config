@@ -48,11 +48,11 @@ func ExampleConfig_Get() {
 	ctx := context.Background()
 
 	mgr, _ := config.New(config.WithStore(memory.NewStore()))
-	mgr.Connect(ctx)
+	_ = mgr.Connect(ctx)
 	defer mgr.Close(ctx)
 
 	cfg := mgr.Namespace("app")
-	cfg.Set(ctx, "feature/dark-mode", true)
+	_ = cfg.Set(ctx, "feature/dark-mode", true)
 
 	val, err := cfg.Get(ctx, "feature/dark-mode")
 	if err != nil {
@@ -85,7 +85,7 @@ func ExampleContextWithManager() {
 	ctx := context.Background()
 
 	mgr, _ := config.New(config.WithStore(memory.NewStore()))
-	mgr.Connect(ctx)
+	_ = mgr.Connect(ctx)
 	defer mgr.Close(ctx)
 
 	// Add manager and namespace to context
@@ -93,7 +93,7 @@ func ExampleContextWithManager() {
 	ctx = config.ContextWithNamespace(ctx, "myapp")
 
 	// Set and get via context convenience functions
-	config.Set(ctx, "greeting", "hello")
+	_ = config.Set(ctx, "greeting", "hello")
 
 	val, _ := config.Get(ctx, "greeting")
 	s, _ := val.String()
