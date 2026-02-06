@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -383,7 +384,7 @@ func (m *manager) watchChanges(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(backoff):
+			case <-time.After(jitteredBackoff(backoff)):
 			}
 
 			// Increase backoff for next retry (with cap)
@@ -411,7 +412,7 @@ func (m *manager) watchChanges(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff):
+		case <-time.After(jitteredBackoff(backoff)):
 		}
 
 		backoff = min(time.Duration(float64(backoff)*cfg.BackoffFactor), cfg.MaxBackoff)
@@ -479,4 +480,10 @@ func (m *manager) handleChange(ctx context.Context, change ChangeEvent) {
 			}
 		}
 	}
+}
+
+// jitteredBackoff adds jitter to a backoff duration.
+// Returns a duration in the range [0.5*d, 1.5*d).
+func jitteredBackoff(d time.Duration) time.Duration {
+	return time.Duration(float64(d) * (0.5 + rand.Float64()))
 }
