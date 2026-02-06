@@ -575,7 +575,7 @@ func (s *Store) executeListQuery(ctx context.Context, query string, args []any) 
 	if err != nil {
 		return nil, "", config.WrapStoreError("list", "postgres", "", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	results := make(map[string]config.Value)
 	var lastID int64
@@ -698,7 +698,7 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	typeQuery := fmt.Sprintf(`SELECT type, COUNT(*) FROM %s GROUP BY type`, s.cfg.Table)
 	typeRows, err := s.db.QueryContext(ctx, typeQuery)
 	if err == nil {
-		defer typeRows.Close()
+		defer func() { _ = typeRows.Close() }()
 		for typeRows.Next() {
 			var t config.Type
 			var count int64
@@ -712,7 +712,7 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	nsQuery := fmt.Sprintf(`SELECT namespace, COUNT(*) FROM %s GROUP BY namespace`, s.cfg.Table)
 	nsRows, err := s.db.QueryContext(ctx, nsQuery)
 	if err == nil {
-		defer nsRows.Close()
+		defer func() { _ = nsRows.Close() }()
 		for nsRows.Next() {
 			var ns string
 			var count int64
@@ -755,7 +755,7 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 	if err != nil {
 		return nil, config.WrapStoreError("get_many", "postgres", "", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	results := make(map[string]config.Value, len(keys))
 	for rows.Next() {

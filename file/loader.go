@@ -94,7 +94,7 @@ func (l *Loader) Load() error {
 	if err != nil {
 		return fmt.Errorf("file: open %s: %w", l.path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	return l.LoadReader(f)
 }

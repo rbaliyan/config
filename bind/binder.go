@@ -97,7 +97,7 @@ type boundConfig struct {
 // GetStruct reads all keys with the given prefix and maps them to the target struct.
 func (bc *boundConfig) GetStruct(ctx context.Context, key string, target any) error {
 	// Find all keys with the given prefix
-	page, err := bc.Config.Find(ctx, config.NewFilter().WithPrefix(key).Build())
+	page, err := bc.Find(ctx, config.NewFilter().WithPrefix(key).Build())
 	if err != nil {
 		return err
 	}
@@ -139,7 +139,7 @@ func (bc *boundConfig) GetStruct(ctx context.Context, key string, target any) er
 // GetStructDigest is like GetStruct but also returns an FNV-64a digest
 // computed from the raw config values before struct mapping.
 func (bc *boundConfig) GetStructDigest(ctx context.Context, key string, target any) (uint64, error) {
-	page, err := bc.Config.Find(ctx, config.NewFilter().WithPrefix(key).Build())
+	page, err := bc.Find(ctx, config.NewFilter().WithPrefix(key).Build())
 	if err != nil {
 		return 0, err
 	}
@@ -209,7 +209,7 @@ func (bc *boundConfig) SetStruct(ctx context.Context, key string, value any, opt
 
 	// Set each key
 	for k, v := range flatMap {
-		if err := bc.Config.Set(ctx, k, v, opts...); err != nil {
+		if err := bc.Set(ctx, k, v, opts...); err != nil {
 			return err
 		}
 	}

@@ -745,7 +745,7 @@ func (s *Store) executeListQuery(ctx context.Context, filter bson.M, opts *optio
 	if err != nil {
 		return nil, "", config.WrapStoreError("list", "mongodb", "", err)
 	}
-	defer cursor.Close(ctx)
+	defer func() { _ = cursor.Close(ctx) }()
 
 	results := make(map[string]config.Value)
 	var lastID bson.ObjectID
@@ -853,7 +853,7 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	}
 	typeCursor, err := s.collection.Aggregate(ctx, typePipeline)
 	if err == nil {
-		defer typeCursor.Close(ctx)
+		defer func() { _ = typeCursor.Close(ctx) }()
 		for typeCursor.Next(ctx) {
 			var result struct {
 				ID    config.Type `bson:"_id"`
@@ -871,7 +871,7 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	}
 	nsCursor, err := s.collection.Aggregate(ctx, nsPipeline)
 	if err == nil {
-		defer nsCursor.Close(ctx)
+		defer func() { _ = nsCursor.Close(ctx) }()
 		for nsCursor.Next(ctx) {
 			var result struct {
 				ID    string `bson:"_id"`
@@ -907,7 +907,7 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 	if err != nil {
 		return nil, config.WrapStoreError("get_many", "mongodb", "", err)
 	}
-	defer cursor.Close(ctx)
+	defer func() { _ = cursor.Close(ctx) }()
 
 	results := make(map[string]config.Value, len(keys))
 	for cursor.Next(ctx) {
@@ -1105,7 +1105,7 @@ func (s *Store) watchChangeStream() {
 		}
 
 		s.processChangeStream(stream, watchCtx)
-		stream.Close(watchCtx)
+		_ = stream.Close(watchCtx)
 		watchCancel()
 	}
 }
