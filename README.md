@@ -1,5 +1,9 @@
 # Config
 
+[![CI](https://github.com/rbaliyan/config/actions/workflows/ci.yml/badge.svg)](https://github.com/rbaliyan/config/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/rbaliyan/config.svg)](https://pkg.go.dev/github.com/rbaliyan/config)
+[![Go Report Card](https://goreportcard.com/badge/github.com/rbaliyan/config)](https://goreportcard.com/report/github.com/rbaliyan/config)
+
 A type-safe, namespace-aware configuration library for Go with support for multiple storage backends, built-in resilience, and OpenTelemetry instrumentation.
 
 ## Features
