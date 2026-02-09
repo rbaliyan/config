@@ -41,7 +41,7 @@ test-integration: mongo-start pg-start
     echo "Running integration tests..."
     MONGO_URI="mongodb://localhost:{{MONGO_PORT}}/?directConnection=true" \
     POSTGRES_DSN="postgres://{{PG_USER}}:{{PG_PASS}}@localhost:{{PG_PORT}}/{{PG_DB}}?sslmode=disable" \
-    go test -v -count=1 ./mongodb/... ./postgres/...
+    go test -v -count=1 ./mongodb/... ./postgres/... ./sqlite/...
     just mongo-stop
     just pg-stop
 
@@ -58,6 +58,10 @@ test-pg: pg-start
     set -euo pipefail
     POSTGRES_DSN="postgres://{{PG_USER}}:{{PG_PASS}}@localhost:{{PG_PORT}}/{{PG_DB}}?sslmode=disable" go test -v -count=1 ./postgres/...
     just pg-stop
+
+# Run SQLite tests (no external services needed)
+test-sqlite:
+    go test -v -count=1 ./sqlite/...
 
 # Start MongoDB replica set for testing
 mongo-start:
