@@ -5,7 +5,7 @@ import (
 )
 
 func init() {
-	Register(&yamlCodec{})
+	_ = Register(&yamlCodec{})
 }
 
 // yamlCodec implements the Codec interface using YAML encoding.

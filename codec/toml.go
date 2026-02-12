@@ -7,7 +7,7 @@ import (
 )
 
 func init() {
-	Register(&tomlCodec{})
+	_ = Register(&tomlCodec{})
 }
 
 // tomlCodec implements the Codec interface using TOML encoding.

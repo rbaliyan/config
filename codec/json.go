@@ -5,7 +5,7 @@ import (
 )
 
 func init() {
-	Register(&jsonCodec{})
+	_ = Register(&jsonCodec{})
 }
 
 // jsonCodec implements Codec using JSON encoding.
