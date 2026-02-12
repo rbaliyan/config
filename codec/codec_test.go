@@ -61,14 +61,10 @@ func TestNames(t *testing.T) {
 	}
 }
 
-func TestRegisterPanics(t *testing.T) {
-	// Test nil codec panic
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for nil codec")
-		}
-	}()
-	Register(nil)
+func TestRegisterNilReturnsError(t *testing.T) {
+	if err := Register(nil); err == nil {
+		t.Error("expected error for nil codec")
+	}
 }
 
 type emptyNameCodec struct{}
@@ -77,13 +73,10 @@ func (e emptyNameCodec) Name() string                    { return "" }
 func (e emptyNameCodec) Encode(v any) ([]byte, error)    { return nil, nil }
 func (e emptyNameCodec) Decode(data []byte, v any) error { return nil }
 
-func TestRegisterEmptyNamePanics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for empty name codec")
-		}
-	}()
-	Register(emptyNameCodec{})
+func TestRegisterEmptyNameReturnsError(t *testing.T) {
+	if err := Register(emptyNameCodec{}); err == nil {
+		t.Error("expected error for empty name codec")
+	}
 }
 
 func TestJSONCodec(t *testing.T) {
