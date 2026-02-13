@@ -1065,7 +1065,14 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 func (s *Store) watchChangeStream() {
 	defer s.watchWg.Done()
 
-	pipeline := mongo.Pipeline{}
+	// Filter the change stream server-side to only the operation types we handle.
+	// Without this, MongoDB sends all event types (drop, rename, invalidate, etc.)
+	// which we'd decode and discard in Go — wasted network I/O and CPU.
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{
+			"operationType": bson.M{"$in": bson.A{"insert", "update", "replace", "delete"}},
+		}}},
+	}
 	opts := options.ChangeStream().SetFullDocument(options.UpdateLookup)
 
 	// Request pre-images for delete events if enabled
