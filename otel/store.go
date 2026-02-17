@@ -498,6 +498,15 @@ func (s *InstrumentedStore) recordOperation(ctx context.Context, op, namespace, 
 	}
 }
 
+// SupportsCodec delegates codec validation to the underlying store.
+// Returns true if the underlying store does not implement CodecValidator.
+func (s *InstrumentedStore) SupportsCodec(codecName string) bool {
+	if cv, ok := s.store.(config.CodecValidator); ok {
+		return cv.SupportsCodec(codecName)
+	}
+	return true
+}
+
 // errorType returns a string classification of the error
 func errorType(err error) string {
 	if config.IsNotFound(err) {
