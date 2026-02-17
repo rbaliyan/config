@@ -43,6 +43,9 @@ var (
 
 	// ErrKeyExists is returned when attempting to create a key that already exists.
 	ErrKeyExists = errors.New("config: key already exists")
+
+	// ErrUnsupportedCodec is returned when a store does not support the requested codec.
+	ErrUnsupportedCodec = errors.New("config: unsupported codec")
 )
 
 // KeyNotFoundError provides details about a missing key.
@@ -158,6 +161,25 @@ func (e *KeyExistsError) Unwrap() error {
 // IsKeyExists checks if an error indicates a key already exists.
 func IsKeyExists(err error) bool {
 	return errors.Is(err, ErrKeyExists)
+}
+
+// UnsupportedCodecError provides details about a codec that is not supported by the store.
+type UnsupportedCodecError struct {
+	Codec   string
+	Backend string
+}
+
+func (e *UnsupportedCodecError) Error() string {
+	return fmt.Sprintf("config: codec %q is not supported by backend %q", e.Codec, e.Backend)
+}
+
+func (e *UnsupportedCodecError) Unwrap() error {
+	return ErrUnsupportedCodec
+}
+
+// IsUnsupportedCodec checks if an error indicates an unsupported codec.
+func IsUnsupportedCodec(err error) bool {
+	return errors.Is(err, ErrUnsupportedCodec)
 }
 
 // ErrWatchUnhealthy is returned by Health() when watch has consecutive failures.

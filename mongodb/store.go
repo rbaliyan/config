@@ -127,7 +127,7 @@ type mongoEntry struct {
 	ID        bson.ObjectID `bson:"_id,omitempty"`
 	Key       string        `bson:"key"`
 	Namespace string        `bson:"namespace"`
-	Value     []byte        `bson:"value"`
+	Value     bson.RawValue `bson:"value"`
 	Codec     string        `bson:"codec"`
 	Type      config.Type   `bson:"type"`
 	Version   int64         `bson:"version"`
@@ -136,13 +136,64 @@ type mongoEntry struct {
 }
 
 func (e *mongoEntry) toValue() (config.Value, error) {
+	data, err := fromBSONValue(e.Codec, e.Value)
+	if err != nil {
+		return nil, fmt.Errorf("read value for key %q: %w", e.Key, err)
+	}
 	return config.NewValueFromBytes(
-		e.Value,
+		data,
 		e.Codec,
 		config.WithValueType(e.Type),
 		config.WithValueMetadata(e.Version, e.CreatedAt, e.UpdatedAt),
 		config.WithValueEntryID(e.ID.Hex()),
 	)
+}
+
+// toBSONValue converts codec-encoded bytes to a bson.RawValue for native MongoDB storage.
+// - "bson" codec: data is [type_byte][value_bytes...], stored as native BSON type
+// - "json" codec: data is JSON bytes, stored as a BSON string (readable in MongoDB)
+// - other codecs (e.g., encrypted): stored as BSON binary (BinData)
+func toBSONValue(codecName string, data []byte) bson.RawValue {
+	switch codecName {
+	case "bson":
+		// data = [type_byte][value_bytes...] from bsonCodec.Encode
+		return bson.RawValue{Type: bson.Type(data[0]), Value: data[1:]}
+	case "json":
+		// Store JSON bytes as a BSON string for readability in MongoDB
+		t, val, _ := bson.MarshalValue(string(data))
+		return bson.RawValue{Type: t, Value: val}
+	default:
+		// Encrypted or other codecs: store as BinData
+		t, val, _ := bson.MarshalValue(data)
+		return bson.RawValue{Type: t, Value: val}
+	}
+}
+
+// fromBSONValue converts a bson.RawValue back to codec-encoded bytes.
+// Handles both new native format and legacy BinData format for backward compatibility.
+func fromBSONValue(codecName string, rv bson.RawValue) ([]byte, error) {
+	switch {
+	case codecName == "bson" && rv.Type != bson.TypeBinary:
+		// New format: native BSON type → reconstruct type-prefixed bytes for bsonCodec.Decode
+		data := make([]byte, 1+len(rv.Value))
+		data[0] = byte(rv.Type)
+		copy(data[1:], rv.Value)
+		return data, nil
+	case codecName == "json" && rv.Type == bson.TypeString:
+		// New format: JSON stored as BSON string
+		var s string
+		if err := rv.Unmarshal(&s); err != nil {
+			return nil, fmt.Errorf("unmarshal json string: %w", err)
+		}
+		return []byte(s), nil
+	default:
+		// Legacy BinData format OR encrypted codec
+		var data []byte
+		if err := rv.Unmarshal(&data); err != nil {
+			return nil, fmt.Errorf("unmarshal binary: %w", err)
+		}
+		return data, nil
+	}
 }
 
 // Option configures the MongoDB store.
@@ -277,11 +328,24 @@ func NewStore(client *mongo.Client, opts ...Option) *Store {
 
 // Compile-time interface checks
 var (
-	_ config.Store         = (*Store)(nil)
-	_ config.HealthChecker = (*Store)(nil)
-	_ config.StatsProvider = (*Store)(nil)
-	_ config.BulkStore     = (*Store)(nil)
+	_ config.Store          = (*Store)(nil)
+	_ config.HealthChecker  = (*Store)(nil)
+	_ config.StatsProvider  = (*Store)(nil)
+	_ config.BulkStore      = (*Store)(nil)
+	_ config.CodecValidator = (*Store)(nil)
 )
+
+// SupportsCodec reports whether the MongoDB store supports the given codec.
+// Supported codecs: "bson" (native BSON types), "json" (stored as BSON string),
+// and any codec with "encrypted:" prefix (stored as BinData).
+func (s *Store) SupportsCodec(codecName string) bool {
+	switch codecName {
+	case "bson", "json":
+		return true
+	default:
+		return strings.HasPrefix(codecName, "encrypted:")
+	}
+}
 
 // Connect initializes the store (optionally creates collection/indexes and starts change stream listener).
 // The MongoDB client must already be connected.
@@ -565,6 +629,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		return nil, config.WrapStoreError("marshal", "mongodb", key, err)
 	}
 
+	bsonVal := toBSONValue(value.Codec(), data)
 	now := time.Now().UTC()
 
 	writeMode := config.GetWriteMode(value)
@@ -574,7 +639,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		doc := mongoEntry{
 			Key:       key,
 			Namespace: namespace,
-			Value:     data,
+			Value:     bsonVal,
 			Codec:     value.Codec(),
 			Type:      value.Type(),
 			Version:   1,
@@ -605,7 +670,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		}
 		update := bson.M{
 			"$set": bson.M{
-				"value":      data,
+				"value":      bsonVal,
 				"codec":      value.Codec(),
 				"type":       value.Type(),
 				"updated_at": now,
@@ -637,7 +702,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 			"$set": bson.M{
 				"key":        key,
 				"namespace":  namespace,
-				"value":      data,
+				"value":      bsonVal,
 				"codec":      value.Codec(),
 				"type":       value.Type(),
 				"updated_at": now,
@@ -965,6 +1030,8 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			continue
 		}
 
+		bsonVal := toBSONValue(value.Codec(), data)
+
 		filter := bson.M{
 			"namespace": namespace,
 			"key":       key,
@@ -973,7 +1040,7 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			"$set": bson.M{
 				"key":        key,
 				"namespace":  namespace,
-				"value":      data,
+				"value":      bsonVal,
 				"codec":      value.Codec(),
 				"type":       value.Type(),
 				"updated_at": now,
