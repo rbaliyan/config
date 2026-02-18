@@ -3,6 +3,7 @@ package mongodb_test
 import (
 	"testing"
 
+	"github.com/rbaliyan/config/codec"
 	"github.com/rbaliyan/config/mongodb"
 )
 
@@ -137,5 +138,23 @@ func TestBSONCodec_TypeByte(t *testing.T) {
 	}
 	if data[0] != 0x10 {
 		t.Errorf("expected type byte 0x10 for int32, got 0x%02x", data[0])
+	}
+}
+
+// TestMongoDBImportUpgradesCodecRegistry verifies that importing the mongodb
+// package upgrades the global codec registry with BSON-aware versions of
+// json, yaml, and toml codecs. These BSON-aware codecs implement BSONValueCodec,
+// allowing native BSON storage while producing identical Encode/Decode output.
+func TestMongoDBImportUpgradesCodecRegistry(t *testing.T) {
+	for _, name := range []string{"json", "yaml", "toml"} {
+		t.Run(name, func(t *testing.T) {
+			c := codec.Get(name)
+			if c == nil {
+				t.Fatalf("codec %q not registered", name)
+			}
+			if _, ok := c.(mongodb.BSONValueCodec); !ok {
+				t.Errorf("codec %q does not implement BSONValueCodec after mongodb import", name)
+			}
+		})
 	}
 }

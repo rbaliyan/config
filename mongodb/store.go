@@ -17,6 +17,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/rbaliyan/config"
+	"github.com/rbaliyan/config/codec"
 )
 
 // Store is a MongoDB configuration store implementation.
@@ -136,7 +137,11 @@ type mongoEntry struct {
 }
 
 func (e *mongoEntry) toValue() (config.Value, error) {
-	data, err := fromBSONValue(e.Codec, e.Value)
+	c := codec.Get(e.Codec)
+	if c == nil {
+		return nil, fmt.Errorf("read value for key %q: codec %q not registered", e.Key, e.Codec)
+	}
+	data, err := fromBSONValue(c, e.Value)
 	if err != nil {
 		return nil, fmt.Errorf("read value for key %q: %w", e.Key, err)
 	}
@@ -150,50 +155,33 @@ func (e *mongoEntry) toValue() (config.Value, error) {
 }
 
 // toBSONValue converts codec-encoded bytes to a bson.RawValue for native MongoDB storage.
-// - "bson" codec: data is [type_byte][value_bytes...], stored as native BSON type
-// - "json" codec: data is JSON bytes, stored as a BSON string (readable in MongoDB)
-// - other codecs (e.g., encrypted): stored as BSON binary (BinData)
-func toBSONValue(codecName string, data []byte) bson.RawValue {
-	switch codecName {
-	case "bson":
-		// data = [type_byte][value_bytes...] from bsonCodec.Encode
-		return bson.RawValue{Type: bson.Type(data[0]), Value: data[1:]}
-	case "json":
-		// Store JSON bytes as a BSON string for readability in MongoDB
-		t, val, _ := bson.MarshalValue(string(data))
-		return bson.RawValue{Type: t, Value: val}
-	default:
-		// Encrypted or other codecs: store as BinData
-		t, val, _ := bson.MarshalValue(data)
-		return bson.RawValue{Type: t, Value: val}
+// If the codec implements BSONValueCodec, it controls the BSON representation.
+// Otherwise, data is stored as BinData (binary fallback).
+func toBSONValue(c codec.Codec, data []byte) (bson.RawValue, error) {
+	if bc, ok := c.(BSONValueCodec); ok {
+		return bc.ToBSON(data)
 	}
+	// Fallback: store as BinData
+	t, val, err := bson.MarshalValue(data)
+	if err != nil {
+		return bson.RawValue{}, fmt.Errorf("marshal to BSON binary: %w", err)
+	}
+	return bson.RawValue{Type: t, Value: val}, nil
 }
 
 // fromBSONValue converts a bson.RawValue back to codec-encoded bytes.
-// Handles both new native format and legacy BinData format for backward compatibility.
-func fromBSONValue(codecName string, rv bson.RawValue) ([]byte, error) {
-	switch {
-	case codecName == "bson" && rv.Type != bson.TypeBinary:
-		// New format: native BSON type → reconstruct type-prefixed bytes for bsonCodec.Decode
-		data := make([]byte, 1+len(rv.Value))
-		data[0] = byte(rv.Type)
-		copy(data[1:], rv.Value)
-		return data, nil
-	case codecName == "json" && rv.Type == bson.TypeString:
-		// New format: JSON stored as BSON string
-		var s string
-		if err := rv.Unmarshal(&s); err != nil {
-			return nil, fmt.Errorf("unmarshal json string: %w", err)
-		}
-		return []byte(s), nil
-	default:
-		// Legacy BinData format OR encrypted codec
-		var data []byte
-		if err := rv.Unmarshal(&data); err != nil {
-			return nil, fmt.Errorf("unmarshal binary: %w", err)
-		}
-		return data, nil
+// If the codec implements BSONValueCodec, it controls deserialization.
+// Otherwise, data is unmarshalled as binary (BinData fallback).
+func fromBSONValue(c codec.Codec, rv bson.RawValue) ([]byte, error) {
+	if bc, ok := c.(BSONValueCodec); ok {
+		return bc.FromBSON(rv)
 	}
+	// Fallback: unmarshal as binary
+	var data []byte
+	if err := rv.Unmarshal(&data); err != nil {
+		return nil, fmt.Errorf("unmarshal binary from BSON: %w", err)
+	}
+	return data, nil
 }
 
 // Option configures the MongoDB store.
@@ -336,15 +324,10 @@ var (
 )
 
 // SupportsCodec reports whether the MongoDB store supports the given codec.
-// Supported codecs: "bson" (native BSON types), "json" (stored as BSON string),
-// and any codec with "encrypted:" prefix (stored as BinData).
+// Any registered codec is supported. BSONValueCodec-aware codecs get native
+// storage; others fall back to BinData.
 func (s *Store) SupportsCodec(codecName string) bool {
-	switch codecName {
-	case "bson", "json":
-		return true
-	default:
-		return strings.HasPrefix(codecName, "encrypted:")
-	}
+	return codec.Get(codecName) != nil
 }
 
 // Connect initializes the store (optionally creates collection/indexes and starts change stream listener).
@@ -600,7 +583,7 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 
 	var doc mongoEntry
 	err := s.collection.FindOne(ctx, filter).Decode(&doc)
-	if err == mongo.ErrNoDocuments {
+	if errors.Is(err, mongo.ErrNoDocuments) {
 		return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
 	}
 	if err != nil {
@@ -629,7 +612,14 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		return nil, config.WrapStoreError("marshal", "mongodb", key, err)
 	}
 
-	bsonVal := toBSONValue(value.Codec(), data)
+	c := codec.Get(value.Codec())
+	if c == nil {
+		return nil, config.WrapStoreError("set", "mongodb", key, fmt.Errorf("codec %q not registered", value.Codec()))
+	}
+	bsonVal, err := toBSONValue(c, data)
+	if err != nil {
+		return nil, config.WrapStoreError("set", "mongodb", key, err)
+	}
 	now := time.Now().UTC()
 
 	writeMode := config.GetWriteMode(value)
@@ -685,7 +675,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		var doc mongoEntry
 		err = s.collection.FindOneAndUpdate(ctx, filter, update, opts).Decode(&doc)
 		if err != nil {
-			if err == mongo.ErrNoDocuments {
+			if errors.Is(err, mongo.ErrNoDocuments) {
 				return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
 			}
 			return nil, config.WrapStoreError("set", "mongodb", key, err)
@@ -1030,7 +1020,16 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			continue
 		}
 
-		bsonVal := toBSONValue(value.Codec(), data)
+		c := codec.Get(value.Codec())
+		if c == nil {
+			keyErrors[key] = config.WrapStoreError("set_many", "mongodb", key, fmt.Errorf("codec %q not registered", value.Codec()))
+			continue
+		}
+		bsonVal, err := toBSONValue(c, data)
+		if err != nil {
+			keyErrors[key] = config.WrapStoreError("set_many", "mongodb", key, err)
+			continue
+		}
 
 		filter := bson.M{
 			"namespace": namespace,

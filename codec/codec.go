@@ -23,6 +23,8 @@ var (
 )
 
 // Register adds a codec to the global registry.
+// Re-registering a name replaces the previous codec (e.g., the mongodb
+// package upgrades json/yaml/toml with BSON-aware versions).
 // Returns an error if codec is nil or has an empty name.
 func Register(codec Codec) error {
 	if codec == nil {
@@ -62,6 +64,8 @@ func Names() []string {
 }
 
 // Default returns the default codec (JSON).
+// Returns nil if the "json" codec has not been registered.
+// The config package automatically registers JSON via blank import.
 func Default() Codec {
 	return Get("json")
 }
