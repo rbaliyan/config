@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/rbaliyan/config/codec"
+	_ "github.com/rbaliyan/config/codec/json"
 )
 
 // Reader provides read-only access to configuration.

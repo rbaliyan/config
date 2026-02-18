@@ -18,7 +18,10 @@ func init() {
 // in MongoDB while maintaining a []byte interface for the codec system.
 type bsonCodec struct{}
 
-var _ codec.Codec = (*bsonCodec)(nil)
+var (
+	_ codec.Codec    = (*bsonCodec)(nil)
+	_ BSONValueCodec = (*bsonCodec)(nil)
+)
 
 func (c *bsonCodec) Name() string { return "bson" }
 
@@ -43,6 +46,20 @@ func (c *bsonCodec) Decode(data []byte, v any) error {
 		return fmt.Errorf("bson decode: %w", err)
 	}
 	return nil
+}
+
+func (c *bsonCodec) ToBSON(encoded []byte) (bson.RawValue, error) {
+	if len(encoded) == 0 {
+		return bson.RawValue{}, fmt.Errorf("bson ToBSON: empty data")
+	}
+	return bson.RawValue{Type: bson.Type(encoded[0]), Value: encoded[1:]}, nil
+}
+
+func (c *bsonCodec) FromBSON(rv bson.RawValue) ([]byte, error) {
+	data := make([]byte, 1+len(rv.Value))
+	data[0] = byte(rv.Type)
+	copy(data[1:], rv.Value)
+	return data, nil
 }
 
 // BSON returns the BSON codec instance.

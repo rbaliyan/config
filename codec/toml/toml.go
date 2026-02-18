@@ -1,20 +1,22 @@
-package codec
+// Package toml provides a TOML codec for the config library.
+package toml
 
 import (
 	"bytes"
 
 	"github.com/BurntSushi/toml"
+	"github.com/rbaliyan/config/codec"
 )
 
 func init() {
-	_ = Register(&tomlCodec{})
+	_ = codec.Register(&tomlCodec{})
 }
 
 // tomlCodec implements the Codec interface using TOML encoding.
 type tomlCodec struct{}
 
 // Compile-time interface check
-var _ Codec = (*tomlCodec)(nil)
+var _ codec.Codec = (*tomlCodec)(nil)
 
 // Name returns the codec name.
 func (c *tomlCodec) Name() string {
@@ -37,7 +39,7 @@ func (c *tomlCodec) Decode(data []byte, v any) error {
 	return err
 }
 
-// TOML returns a new TOML codec instance.
-func TOML() Codec {
+// New returns a new TOML codec instance.
+func New() codec.Codec {
 	return &tomlCodec{}
 }

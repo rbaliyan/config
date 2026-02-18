@@ -7,6 +7,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"github.com/rbaliyan/config"
 	"github.com/rbaliyan/config/codec"
 )
 
@@ -81,7 +82,7 @@ func WithBatchSize(n int) MigrateOption {
 // Safe to run on a live system — uses FindOneAndUpdate per document.
 func (s *Store) Migrate(ctx context.Context, opts ...MigrateOption) (*MigrateResult, error) {
 	if s.closed.Load() {
-		return nil, fmt.Errorf("store is closed")
+		return nil, config.ErrStoreClosed
 	}
 
 	o := &migrateOptions{batchSize: 100}
@@ -185,7 +186,10 @@ func (s *Store) migrateDocument(ctx context.Context, doc mongoEntry, o *migrateO
 	}
 
 	// Convert to native bson.RawValue
-	bsonVal := toBSONValue(targetCodecName, encoded)
+	bsonVal, err := toBSONValue(targetCodec, encoded)
+	if err != nil {
+		return fmt.Errorf("convert to BSON for %q: %w", targetCodecName, err)
+	}
 
 	// Update document
 	updateFilter := bson.M{"_id": doc.ID}
