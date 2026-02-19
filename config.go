@@ -2,8 +2,10 @@ package config
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/rbaliyan/config/codec"
+	_ "github.com/rbaliyan/config/codec/json"
 )
 
 // Reader provides read-only access to configuration.
@@ -129,6 +131,13 @@ func (c *nsConfig) Set(ctx context.Context, key string, value any, opts ...SetOp
 	}
 	if codecToUse == nil {
 		codecToUse = codec.Default()
+	}
+
+	// Validate codec against store
+	if cv, ok := c.manager.store.(CodecValidator); ok {
+		if !cv.SupportsCodec(codecToUse.Name()) {
+			return &UnsupportedCodecError{Codec: codecToUse.Name(), Backend: fmt.Sprintf("%T", c.manager.store)}
+		}
 	}
 
 	// Determine type

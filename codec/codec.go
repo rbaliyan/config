@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"fmt"
 	"sync"
 )
 
@@ -22,20 +23,23 @@ var (
 )
 
 // Register adds a codec to the global registry.
-// Panics if name is empty or codec is nil.
-func Register(codec Codec) {
+// Re-registering a name replaces the previous codec (e.g., the mongodb
+// package upgrades json/yaml/toml with BSON-aware versions).
+// Returns an error if codec is nil or has an empty name.
+func Register(codec Codec) error {
 	if codec == nil {
-		panic("codec: Register codec is nil")
+		return fmt.Errorf("codec: Register codec is nil")
 	}
 	name := codec.Name()
 	if name == "" {
-		panic("codec: Register codec name is empty")
+		return fmt.Errorf("codec: Register codec name is empty")
 	}
 
 	registryMu.Lock()
 	defer registryMu.Unlock()
 
 	registry[name] = codec
+	return nil
 }
 
 // Get retrieves a codec by name from the registry.
@@ -60,6 +64,8 @@ func Names() []string {
 }
 
 // Default returns the default codec (JSON).
+// Returns nil if the "json" codec has not been registered.
+// The config package automatically registers JSON via blank import.
 func Default() Codec {
 	return Get("json")
 }

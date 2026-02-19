@@ -482,9 +482,24 @@ func (ms *Store) DeleteMany(ctx context.Context, namespace string, keys []string
 	return maxDeleted, nil
 }
 
+// SupportsCodec checks all underlying stores for codec support.
+// Returns false if any store rejects the codec.
+// Returns true if no stores implement CodecValidator.
+func (ms *Store) SupportsCodec(codecName string) bool {
+	for _, s := range ms.stores {
+		if cv, ok := s.(config.CodecValidator); ok {
+			if !cv.SupportsCodec(codecName) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // Compile-time interface checks for optional interfaces.
 var (
-	_ config.HealthChecker = (*Store)(nil)
-	_ config.StatsProvider = (*Store)(nil)
-	_ config.BulkStore     = (*Store)(nil)
+	_ config.HealthChecker  = (*Store)(nil)
+	_ config.StatsProvider  = (*Store)(nil)
+	_ config.BulkStore      = (*Store)(nil)
+	_ config.CodecValidator = (*Store)(nil)
 )

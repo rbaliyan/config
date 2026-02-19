@@ -1,18 +1,20 @@
-package codec
+// Package yaml provides a YAML codec for the config library.
+package yaml
 
 import (
+	"github.com/rbaliyan/config/codec"
 	"gopkg.in/yaml.v3"
 )
 
 func init() {
-	Register(&yamlCodec{})
+	_ = codec.Register(&yamlCodec{})
 }
 
 // yamlCodec implements the Codec interface using YAML encoding.
 type yamlCodec struct{}
 
 // Compile-time interface check
-var _ Codec = (*yamlCodec)(nil)
+var _ codec.Codec = (*yamlCodec)(nil)
 
 // Name returns the codec name.
 func (c *yamlCodec) Name() string {
@@ -29,7 +31,7 @@ func (c *yamlCodec) Decode(data []byte, v any) error {
 	return yaml.Unmarshal(data, v)
 }
 
-// YAML returns a new YAML codec instance.
-func YAML() Codec {
+// New returns a new YAML codec instance.
+func New() codec.Codec {
 	return &yamlCodec{}
 }
