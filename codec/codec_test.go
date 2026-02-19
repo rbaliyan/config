@@ -1,14 +1,19 @@
-package codec
+package codec_test
 
 import (
 	"testing"
+
+	"github.com/rbaliyan/config/codec"
+	_ "github.com/rbaliyan/config/codec/json"
+	_ "github.com/rbaliyan/config/codec/toml"
+	_ "github.com/rbaliyan/config/codec/yaml"
 )
 
 func TestRegisterAndGet(t *testing.T) {
-	// JSON, YAML, TOML are registered at init
+	// JSON, YAML, TOML are registered at init via blank imports
 
 	// Test Get returns registered codecs
-	jsonCodec := Get("json")
+	jsonCodec := codec.Get("json")
 	if jsonCodec == nil {
 		t.Error("expected json codec to be registered")
 	}
@@ -16,24 +21,24 @@ func TestRegisterAndGet(t *testing.T) {
 		t.Errorf("expected name 'json', got %q", jsonCodec.Name())
 	}
 
-	yamlCodec := Get("yaml")
+	yamlCodec := codec.Get("yaml")
 	if yamlCodec == nil {
 		t.Error("expected yaml codec to be registered")
 	}
 
-	tomlCodec := Get("toml")
+	tomlCodec := codec.Get("toml")
 	if tomlCodec == nil {
 		t.Error("expected toml codec to be registered")
 	}
 
 	// Test Get returns nil for unknown codec
-	if Get("unknown") != nil {
+	if codec.Get("unknown") != nil {
 		t.Error("expected nil for unknown codec")
 	}
 }
 
 func TestDefault(t *testing.T) {
-	def := Default()
+	def := codec.Default()
 	if def == nil {
 		t.Fatal("expected default codec to not be nil")
 	}
@@ -43,7 +48,7 @@ func TestDefault(t *testing.T) {
 }
 
 func TestNames(t *testing.T) {
-	names := Names()
+	names := codec.Names()
 	if len(names) < 3 {
 		t.Errorf("expected at least 3 codecs, got %d", len(names))
 	}
@@ -61,14 +66,10 @@ func TestNames(t *testing.T) {
 	}
 }
 
-func TestRegisterPanics(t *testing.T) {
-	// Test nil codec panic
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for nil codec")
-		}
-	}()
-	Register(nil)
+func TestRegisterNilReturnsError(t *testing.T) {
+	if err := codec.Register(nil); err == nil {
+		t.Error("expected error for nil codec")
+	}
 }
 
 type emptyNameCodec struct{}
@@ -77,17 +78,14 @@ func (e emptyNameCodec) Name() string                    { return "" }
 func (e emptyNameCodec) Encode(v any) ([]byte, error)    { return nil, nil }
 func (e emptyNameCodec) Decode(data []byte, v any) error { return nil }
 
-func TestRegisterEmptyNamePanics(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for empty name codec")
-		}
-	}()
-	Register(emptyNameCodec{})
+func TestRegisterEmptyNameReturnsError(t *testing.T) {
+	if err := codec.Register(emptyNameCodec{}); err == nil {
+		t.Error("expected error for empty name codec")
+	}
 }
 
 func TestJSONCodec(t *testing.T) {
-	c := Get("json")
+	c := codec.Get("json")
 	if c == nil {
 		t.Fatal("json codec not found")
 	}
@@ -110,7 +108,7 @@ func TestJSONCodec(t *testing.T) {
 }
 
 func TestYAMLCodec(t *testing.T) {
-	c := Get("yaml")
+	c := codec.Get("yaml")
 	if c == nil {
 		t.Fatal("yaml codec not found")
 	}
@@ -133,7 +131,7 @@ func TestYAMLCodec(t *testing.T) {
 }
 
 func TestTOMLCodec(t *testing.T) {
-	c := Get("toml")
+	c := codec.Get("toml")
 	if c == nil {
 		t.Fatal("toml codec not found")
 	}
@@ -172,7 +170,7 @@ func TestCodecRoundTrip(t *testing.T) {
 
 	for _, name := range []string{"json", "yaml", "toml"} {
 		t.Run(name, func(t *testing.T) {
-			c := Get(name)
+			c := codec.Get(name)
 			if c == nil {
 				t.Skipf("%s codec not available", name)
 			}

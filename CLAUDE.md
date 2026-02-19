@@ -31,10 +31,10 @@ config/
 ├── errors.go         # Error types and helpers
 │
 ├── codec/            # Encoding/decoding
-│   ├── codec.go      # Codec interface and registry
-│   ├── json.go       # JSON codec
-│   ├── yaml.go       # YAML codec
-│   └── toml.go       # TOML codec
+│   ├── codec.go      # Codec interface and registry (no implementations)
+│   ├── json/json.go  # JSON codec (sub-package, auto-registers via init)
+│   ├── yaml/yaml.go  # YAML codec (sub-package, auto-registers via init)
+│   └── toml/toml.go  # TOML codec (sub-package, auto-registers via init)
 │
 ├── memory/           # In-memory store
 │   └── store.go
@@ -43,7 +43,13 @@ config/
 │   └── store.go
 │
 ├── mongodb/          # MongoDB store (change streams)
-│   └── store.go
+│   ├── store.go      # Store implementation with interface-based BSON dispatch
+│   ├── codec.go      # BSONValueCodec interface + stringBSONAdapter
+│   ├── bson_codec.go  # BSON codec (implements Codec + BSONValueCodec)
+│   ├── json_codec.go  # JSON→BSON adapter (BSON string storage)
+│   ├── yaml_codec.go  # YAML→BSON adapter (BSON string storage)
+│   ├── toml_codec.go  # TOML→BSON adapter (BSON string storage)
+│   └── migrate.go    # Legacy BinData → native BSON migration
 │
 ├── file/             # File-based store (fsnotify)
 │   ├── store.go
@@ -200,16 +206,26 @@ store, _ := otel.WrapStore(baseStore,
 
 ### Adding a New Codec
 
-1. Add file to `codec/` package
-2. Implement `Codec` interface:
+1. Create a sub-package under `codec/` (e.g., `codec/myformat/`)
+2. Implement `Codec` interface with `New()` factory and `init()` registration:
    ```go
-   type Codec interface {
-       Name() string
-       Encode(v any) ([]byte, error)
-       Decode(data []byte, v any) error
-   }
+   package myformat
+   import "github.com/rbaliyan/config/codec"
+   func init() { _ = codec.Register(&myCodec{}) }
+   type myCodec struct{}
+   func (c *myCodec) Name() string { return "myformat" }
+   func (c *myCodec) Encode(v any) ([]byte, error) { ... }
+   func (c *myCodec) Decode(data []byte, v any) error { ... }
+   func New() codec.Codec { return &myCodec{} }
    ```
-3. Register in `init()`: `Register(&myCodec{})`
+3. For MongoDB-native storage, create a BSON adapter in `mongodb/` that implements
+   `BSONValueCodec` and re-registers via `init()`, overriding the base codec with
+   a BSON-aware version. Embed `stringBSONAdapter` for text-based codecs.
+
+**Note:** Importing the `mongodb` package upgrades the global codec registry with
+BSON-aware versions of json, yaml, and toml codecs. These produce identical
+`Encode`/`Decode` output but additionally implement `BSONValueCodec` for native
+BSON storage. Codecs that do not implement `BSONValueCodec` are stored as BinData.
 
 ### Working with Values
 

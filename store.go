@@ -134,6 +134,12 @@ type StoreStats struct {
 	EntriesByNamespace map[string]int64 `json:"entries_by_namespace"`
 }
 
+// CodecValidator is an optional interface for stores that restrict supported codecs.
+// Stores that do not implement this accept all codecs (backward compatible).
+type CodecValidator interface {
+	SupportsCodec(codecName string) bool
+}
+
 // BulkStore is an optional interface for stores that support batch operations.
 // Implementing this interface allows efficient bulk reads and writes.
 type BulkStore interface {

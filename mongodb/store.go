@@ -17,6 +17,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/rbaliyan/config"
+	"github.com/rbaliyan/config/codec"
 )
 
 // Store is a MongoDB configuration store implementation.
@@ -127,7 +128,7 @@ type mongoEntry struct {
 	ID        bson.ObjectID `bson:"_id,omitempty"`
 	Key       string        `bson:"key"`
 	Namespace string        `bson:"namespace"`
-	Value     []byte        `bson:"value"`
+	Value     bson.RawValue `bson:"value"`
 	Codec     string        `bson:"codec"`
 	Type      config.Type   `bson:"type"`
 	Version   int64         `bson:"version"`
@@ -136,13 +137,51 @@ type mongoEntry struct {
 }
 
 func (e *mongoEntry) toValue() (config.Value, error) {
+	c := codec.Get(e.Codec)
+	if c == nil {
+		return nil, fmt.Errorf("read value for key %q: codec %q not registered", e.Key, e.Codec)
+	}
+	data, err := fromBSONValue(c, e.Value)
+	if err != nil {
+		return nil, fmt.Errorf("read value for key %q: %w", e.Key, err)
+	}
 	return config.NewValueFromBytes(
-		e.Value,
+		data,
 		e.Codec,
 		config.WithValueType(e.Type),
 		config.WithValueMetadata(e.Version, e.CreatedAt, e.UpdatedAt),
 		config.WithValueEntryID(e.ID.Hex()),
 	)
+}
+
+// toBSONValue converts codec-encoded bytes to a bson.RawValue for native MongoDB storage.
+// If the codec implements BSONValueCodec, it controls the BSON representation.
+// Otherwise, data is stored as BinData (binary fallback).
+func toBSONValue(c codec.Codec, data []byte) (bson.RawValue, error) {
+	if bc, ok := c.(BSONValueCodec); ok {
+		return bc.ToBSON(data)
+	}
+	// Fallback: store as BinData
+	t, val, err := bson.MarshalValue(data)
+	if err != nil {
+		return bson.RawValue{}, fmt.Errorf("marshal to BSON binary: %w", err)
+	}
+	return bson.RawValue{Type: t, Value: val}, nil
+}
+
+// fromBSONValue converts a bson.RawValue back to codec-encoded bytes.
+// If the codec implements BSONValueCodec, it controls deserialization.
+// Otherwise, data is unmarshalled as binary (BinData fallback).
+func fromBSONValue(c codec.Codec, rv bson.RawValue) ([]byte, error) {
+	if bc, ok := c.(BSONValueCodec); ok {
+		return bc.FromBSON(rv)
+	}
+	// Fallback: unmarshal as binary
+	var data []byte
+	if err := rv.Unmarshal(&data); err != nil {
+		return nil, fmt.Errorf("unmarshal binary from BSON: %w", err)
+	}
+	return data, nil
 }
 
 // Option configures the MongoDB store.
@@ -277,11 +316,19 @@ func NewStore(client *mongo.Client, opts ...Option) *Store {
 
 // Compile-time interface checks
 var (
-	_ config.Store         = (*Store)(nil)
-	_ config.HealthChecker = (*Store)(nil)
-	_ config.StatsProvider = (*Store)(nil)
-	_ config.BulkStore     = (*Store)(nil)
+	_ config.Store          = (*Store)(nil)
+	_ config.HealthChecker  = (*Store)(nil)
+	_ config.StatsProvider  = (*Store)(nil)
+	_ config.BulkStore      = (*Store)(nil)
+	_ config.CodecValidator = (*Store)(nil)
 )
+
+// SupportsCodec reports whether the MongoDB store supports the given codec.
+// Any registered codec is supported. BSONValueCodec-aware codecs get native
+// storage; others fall back to BinData.
+func (s *Store) SupportsCodec(codecName string) bool {
+	return codec.Get(codecName) != nil
+}
 
 // Connect initializes the store (optionally creates collection/indexes and starts change stream listener).
 // The MongoDB client must already be connected.
@@ -536,7 +583,7 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 
 	var doc mongoEntry
 	err := s.collection.FindOne(ctx, filter).Decode(&doc)
-	if err == mongo.ErrNoDocuments {
+	if errors.Is(err, mongo.ErrNoDocuments) {
 		return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
 	}
 	if err != nil {
@@ -565,6 +612,14 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		return nil, config.WrapStoreError("marshal", "mongodb", key, err)
 	}
 
+	c := codec.Get(value.Codec())
+	if c == nil {
+		return nil, config.WrapStoreError("set", "mongodb", key, fmt.Errorf("codec %q not registered", value.Codec()))
+	}
+	bsonVal, err := toBSONValue(c, data)
+	if err != nil {
+		return nil, config.WrapStoreError("set", "mongodb", key, err)
+	}
 	now := time.Now().UTC()
 
 	writeMode := config.GetWriteMode(value)
@@ -574,7 +629,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		doc := mongoEntry{
 			Key:       key,
 			Namespace: namespace,
-			Value:     data,
+			Value:     bsonVal,
 			Codec:     value.Codec(),
 			Type:      value.Type(),
 			Version:   1,
@@ -605,7 +660,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		}
 		update := bson.M{
 			"$set": bson.M{
-				"value":      data,
+				"value":      bsonVal,
 				"codec":      value.Codec(),
 				"type":       value.Type(),
 				"updated_at": now,
@@ -620,7 +675,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		var doc mongoEntry
 		err = s.collection.FindOneAndUpdate(ctx, filter, update, opts).Decode(&doc)
 		if err != nil {
-			if err == mongo.ErrNoDocuments {
+			if errors.Is(err, mongo.ErrNoDocuments) {
 				return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
 			}
 			return nil, config.WrapStoreError("set", "mongodb", key, err)
@@ -637,7 +692,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 			"$set": bson.M{
 				"key":        key,
 				"namespace":  namespace,
-				"value":      data,
+				"value":      bsonVal,
 				"codec":      value.Codec(),
 				"type":       value.Type(),
 				"updated_at": now,
@@ -965,6 +1020,17 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			continue
 		}
 
+		c := codec.Get(value.Codec())
+		if c == nil {
+			keyErrors[key] = config.WrapStoreError("set_many", "mongodb", key, fmt.Errorf("codec %q not registered", value.Codec()))
+			continue
+		}
+		bsonVal, err := toBSONValue(c, data)
+		if err != nil {
+			keyErrors[key] = config.WrapStoreError("set_many", "mongodb", key, err)
+			continue
+		}
+
 		filter := bson.M{
 			"namespace": namespace,
 			"key":       key,
@@ -973,7 +1039,7 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			"$set": bson.M{
 				"key":        key,
 				"namespace":  namespace,
-				"value":      data,
+				"value":      bsonVal,
 				"codec":      value.Codec(),
 				"type":       value.Type(),
 				"updated_at": now,
@@ -1065,7 +1131,14 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 func (s *Store) watchChangeStream() {
 	defer s.watchWg.Done()
 
-	pipeline := mongo.Pipeline{}
+	// Filter the change stream server-side to only the operation types we handle.
+	// Without this, MongoDB sends all event types (drop, rename, invalidate, etc.)
+	// which we'd decode and discard in Go — wasted network I/O and CPU.
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{
+			"operationType": bson.M{"$in": bson.A{"insert", "update", "replace", "delete"}},
+		}}},
+	}
 	opts := options.ChangeStream().SetFullDocument(options.UpdateLookup)
 
 	// Request pre-images for delete events if enabled
