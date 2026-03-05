@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/rbaliyan/config"
-	"github.com/rbaliyan/config/codec"
 )
 
 // entry is the internal storage representation.
@@ -21,35 +20,55 @@ type entry struct {
 	id        string // Unique ID for pagination
 	key       string
 	namespace string
-	value     []byte
-	codec     string
-	valueType config.Type
+	value     config.Value
 	version   int64
 	createdAt time.Time
 	updatedAt time.Time
 }
 
-func (e *entry) clone() *entry {
-	if e == nil {
-		return nil
+// toValue returns the stored Value wrapped with the entry's current metadata.
+func (e *entry) toValue() config.Value {
+	return &metadataValue{
+		Value:     e.value,
+		version:   e.version,
+		createdAt: e.createdAt,
+		updatedAt: e.updatedAt,
+		entryID:   e.id,
 	}
-	clone := *e
-	if e.value != nil {
-		clone.value = make([]byte, len(e.value))
-		copy(clone.value, e.value)
-	}
-	return &clone
 }
 
-func (e *entry) toValue() (config.Value, error) {
-	return config.NewValueFromBytes(
-		e.value,
-		e.codec,
-		config.WithValueType(e.valueType),
-		config.WithValueMetadata(e.version, e.createdAt, e.updatedAt),
-		config.WithValueEntryID(e.id),
-	)
+// metadataValue wraps a config.Value with store-level metadata (version, timestamps, ID).
+type metadataValue struct {
+	config.Value
+	version   int64
+	createdAt time.Time
+	updatedAt time.Time
+	entryID   string
 }
+
+func (v *metadataValue) Metadata() config.Metadata {
+	return &entryMetadata{
+		version:   v.version,
+		createdAt: v.createdAt,
+		updatedAt: v.updatedAt,
+		entryID:   v.entryID,
+	}
+}
+
+// entryMetadata implements config.Metadata and the EntryID() method used by
+// store internals via structural type assertion.
+type entryMetadata struct {
+	version   int64
+	createdAt time.Time
+	updatedAt time.Time
+	entryID   string
+}
+
+func (m *entryMetadata) Version() int64       { return m.version }
+func (m *entryMetadata) CreatedAt() time.Time { return m.createdAt }
+func (m *entryMetadata) UpdatedAt() time.Time { return m.updatedAt }
+func (m *entryMetadata) IsStale() bool        { return false }
+func (m *entryMetadata) EntryID() string      { return m.entryID }
 
 // Store is an in-memory configuration store implementation.
 // Suitable for testing and single-instance deployments.
@@ -66,7 +85,6 @@ type Store struct {
 	droppedEvents atomic.Int64 // Counter for dropped events due to full channels
 
 	bufferSize int
-	codec      codec.Codec
 	onDropped  func(event config.ChangeEvent) // Optional callback when event is dropped
 }
 
@@ -92,15 +110,6 @@ func WithWatchBufferSize(size int) Option {
 	}
 }
 
-// WithCodec sets the codec for encoding values.
-func WithCodec(c codec.Codec) Option {
-	return func(s *Store) {
-		if c != nil {
-			s.codec = c
-		}
-	}
-}
-
 // WithOnDropped sets a callback that is invoked when a watch event is dropped
 // due to a full channel buffer. This can be used for logging or metrics.
 // The callback is invoked synchronously, so it should be fast.
@@ -117,7 +126,6 @@ func NewStore(opts ...Option) *Store {
 		watchers:   make(map[*watchEntry]struct{}),
 		stopChan:   make(chan struct{}),
 		bufferSize: 100,
-		codec:      codec.Default(),
 	}
 
 	for _, opt := range opts {
@@ -198,7 +206,7 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 		return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
 	}
 
-	return e.clone().toValue()
+	return e.toValue(), nil
 }
 
 // Set creates or updates a configuration value.
@@ -214,9 +222,8 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		return nil, err
 	}
 
-	// Marshal the value
-	data, err := value.Marshal()
-	if err != nil {
+	// Validate that the value can be marshaled (same as real stores).
+	if _, err := value.Marshal(); err != nil {
 		return nil, config.WrapStoreError("marshal", "memory", key, err)
 	}
 
@@ -243,9 +250,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	newEntry := &entry{
 		key:       key,
 		namespace: namespace,
-		value:     data,
-		codec:     value.Codec(),
-		valueType: value.Type(),
+		value:     value,
 	}
 
 	if exists {
@@ -266,10 +271,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	s.entries[ek] = newEntry
 
 	// Build Value for return and notification
-	newValue, err := newEntry.clone().toValue()
-	if err != nil {
-		return nil, config.WrapStoreError("toValue", "memory", key, err)
-	}
+	newValue := newEntry.toValue()
 
 	// Notify watchers asynchronously
 	event := config.ChangeEvent{
@@ -334,9 +336,7 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 	if keys := filter.Keys(); len(keys) > 0 {
 		for _, key := range keys {
 			if e, ok := s.entries[s.entryKey(namespace, key)]; ok {
-				if val, err := e.clone().toValue(); err == nil {
-					results[key] = val
-				}
+				results[key] = e.toValue()
 			}
 		}
 		return config.NewPage(results, "", 0), nil
@@ -385,10 +385,8 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 	// Build results map
 	var lastID string
 	for _, m := range matching {
-		if val, err := m.e.clone().toValue(); err == nil {
-			results[m.e.key] = val
-			lastID = m.e.id
-		}
+		results[m.e.key] = m.e.toValue()
+		lastID = m.e.id
 	}
 
 	return config.NewPage(results, lastID, limit), nil
@@ -461,7 +459,7 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	}
 
 	for _, e := range s.entries {
-		stats.EntriesByType[e.valueType]++
+		stats.EntriesByType[e.value.Type()]++
 		stats.EntriesByNamespace[e.namespace]++
 	}
 
@@ -558,9 +556,7 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 	results := make(map[string]config.Value, len(keys))
 	for _, key := range keys {
 		if e, ok := s.entries[s.entryKey(namespace, key)]; ok {
-			if val, err := e.clone().toValue(); err == nil {
-				results[key] = val
-			}
+			results[key] = e.toValue()
 		}
 	}
 
@@ -592,8 +588,8 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			continue
 		}
 
-		data, err := value.Marshal()
-		if err != nil {
+		// Validate that the value can be marshaled.
+		if _, err := value.Marshal(); err != nil {
 			keyErrors[key] = config.WrapStoreError("marshal", "memory", key, err)
 			continue
 		}
@@ -604,9 +600,7 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 		newEntry := &entry{
 			key:       key,
 			namespace: namespace,
-			value:     data,
-			codec:     value.Codec(),
-			valueType: value.Type(),
+			value:     value,
 		}
 
 		if exists {
@@ -625,7 +619,7 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 		s.entries[ek] = newEntry
 		succeeded = append(succeeded, key)
 
-		newValue, _ := newEntry.clone().toValue()
+		newValue := newEntry.toValue()
 		event := config.ChangeEvent{
 			Type:      config.ChangeTypeSet,
 			Namespace: namespace,

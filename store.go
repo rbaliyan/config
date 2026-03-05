@@ -11,10 +11,10 @@ import (
 // Use this when you don't need namespace separation.
 const DefaultNamespace = ""
 
-// validNamespace matches valid namespace names: alphanumeric, underscore, dash.
+// validNamespace matches valid namespace names: alphanumeric, underscore, dash, dot, colon.
 // Empty namespace is allowed (represents default namespace).
 // Non-empty namespaces must start with an alphanumeric character.
-var validNamespace = regexp.MustCompile(`^([a-zA-Z0-9][a-zA-Z0-9_-]*)?$`)
+var validNamespace = regexp.MustCompile(`^([a-zA-Z0-9][a-zA-Z0-9_.\-:]*)?$`)
 
 // validKey matches valid key characters: alphanumeric, underscore, dash, dot, slash.
 // Keys must not be empty and must not contain path traversal sequences.

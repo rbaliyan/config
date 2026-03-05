@@ -1209,9 +1209,8 @@ func TestStore_FindWithKeysEmptySlice(t *testing.T) {
 	}
 }
 
-func TestStore_WithCodecOption(t *testing.T) {
-	// Verify WithCodec option applies correctly
-	store := NewStore(WithCodec(nil)) // nil should be ignored
+func TestStore_DefaultOptions(t *testing.T) {
+	store := NewStore()
 	if store == nil {
 		t.Fatal("NewStore returned nil")
 	}
@@ -1220,7 +1219,7 @@ func TestStore_WithCodecOption(t *testing.T) {
 	_ = store.Connect(ctx)
 	defer store.Close(ctx)
 
-	// Basic operations should still work
+	// Basic operations should work
 	_, err := store.Set(ctx, "ns", "key", config.NewValue("val"))
 	if err != nil {
 		t.Fatalf("Set failed: %v", err)
