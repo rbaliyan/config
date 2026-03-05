@@ -168,6 +168,41 @@ func WithValueWriteMode(mode WriteMode) ValueOption {
 	}
 }
 
+// rawCodec is a codec placeholder for values whose encoding is managed
+// externally (e.g., client-side encryption). It preserves the codec name
+// but refuses to encode or decode — the server treats the bytes as opaque.
+type rawCodec struct {
+	name string
+}
+
+func (r *rawCodec) Name() string { return r.name }
+func (r *rawCodec) Encode(any) ([]byte, error) {
+	return nil, fmt.Errorf("rawCodec %q: encode not supported", r.name)
+}
+func (r *rawCodec) Decode([]byte, any) error {
+	return fmt.Errorf("rawCodec %q: decode not supported", r.name)
+}
+
+// Compile-time interface check for rawCodec.
+var _ codec.Codec = (*rawCodec)(nil)
+
+// NewRawValue creates a Value holding pre-marshaled bytes without decoding.
+// The bytes are stored as-is and returned verbatim by Marshal().
+// This is used when the server does not have the codec registered (e.g.,
+// client-side encrypted data) and should pass the bytes through opaquely.
+func NewRawValue(data []byte, codecName string, opts ...ValueOption) Value {
+	v := &val{
+		raw:      data, // non-nil so Marshal returns v.data
+		data:     data,
+		dataType: TypeCustom,
+		codec:    &rawCodec{name: codecName},
+	}
+	for _, opt := range opts {
+		opt(v)
+	}
+	return v
+}
+
 // NewValue creates a Value from any data with optional configuration.
 func NewValue(data any, opts ...ValueOption) Value {
 	v := &val{
@@ -184,9 +219,14 @@ func NewValue(data any, opts ...ValueOption) Value {
 }
 
 // NewValueFromBytes creates a Value from encoded bytes.
+// If the named codec is not registered and differs from the default codec,
+// the bytes are stored as a raw pass-through value (see NewRawValue).
 func NewValueFromBytes(data []byte, codecName string, opts ...ValueOption) (Value, error) {
 	c := codec.Get(codecName)
 	if c == nil {
+		if codecName != "" && codecName != codec.Default().Name() {
+			return NewRawValue(data, codecName, opts...), nil
+		}
 		c = codec.Default()
 	}
 

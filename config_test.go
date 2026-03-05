@@ -1292,19 +1292,73 @@ func TestManagerConnectTwice(t *testing.T) {
 }
 
 func TestNewValueFromBytesError(t *testing.T) {
-	// Invalid codec name falls back to default
+	// Unknown codec name returns a raw pass-through value.
 	val, err := config.NewValueFromBytes([]byte(`"hello"`), "nonexistent")
 	if err != nil {
-		t.Fatalf("NewValueFromBytes with unknown codec should fallback, got: %v", err)
+		t.Fatalf("NewValueFromBytes with unknown codec should return raw value, got: %v", err)
 	}
 	if val == nil {
 		t.Error("Expected non-nil value")
 	}
+	if val.Codec() != "nonexistent" {
+		t.Errorf("Codec() = %q, want %q", val.Codec(), "nonexistent")
+	}
 
-	// Invalid bytes should error
+	// Empty codec name falls back to default.
+	val2, err := config.NewValueFromBytes([]byte(`"hello"`), "")
+	if err != nil {
+		t.Fatalf("NewValueFromBytes with empty codec: %v", err)
+	}
+	if val2.Codec() != "json" {
+		t.Errorf("Codec() = %q, want %q", val2.Codec(), "json")
+	}
+
+	// Invalid bytes with a known codec should error.
 	_, err = config.NewValueFromBytes([]byte("not-json"), "json")
 	if err == nil {
 		t.Error("Expected error for invalid JSON bytes")
+	}
+}
+
+func TestNewRawValue(t *testing.T) {
+	raw := []byte{0xDE, 0xAD, 0xBE, 0xEF} // arbitrary binary data
+
+	v := config.NewRawValue(raw, "client:encrypted:json")
+
+	// Codec name is preserved.
+	if v.Codec() != "client:encrypted:json" {
+		t.Errorf("Codec() = %q, want %q", v.Codec(), "client:encrypted:json")
+	}
+
+	// Type is TypeCustom.
+	if v.Type() != config.TypeCustom {
+		t.Errorf("Type() = %v, want TypeCustom", v.Type())
+	}
+
+	// Marshal returns the exact bytes.
+	data, err := v.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if string(data) != string(raw) {
+		t.Errorf("Marshal() = %x, want %x", data, raw)
+	}
+
+	// Unmarshal should fail because rawCodec.Decode is unsupported.
+	var s string
+	if err := v.Unmarshal(&s); err == nil {
+		t.Error("expected error from Unmarshal on raw value")
+	}
+
+	// Metadata defaults are accessible.
+	if v.Metadata() == nil {
+		t.Error("expected non-nil Metadata")
+	}
+
+	// ValueOptions are applied.
+	v2 := config.NewRawValue(raw, "opaque", config.WithValueWriteMode(config.WriteModeCreate))
+	if wm, ok := v2.(config.WriteModer); !ok || wm.WriteMode() != config.WriteModeCreate {
+		t.Error("WithValueWriteMode option not applied to NewRawValue")
 	}
 }
 
