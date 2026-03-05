@@ -1,0 +1,6 @@
+#!/bin/bash -eu
+compile_native_go_fuzzer github.com/rbaliyan/config/codec/json FuzzJSONCodecDecode fuzz_json_codec_decode
+compile_native_go_fuzzer github.com/rbaliyan/config/codec/yaml FuzzYAMLCodecDecode fuzz_yaml_codec_decode
+compile_native_go_fuzzer github.com/rbaliyan/config/codec/toml FuzzTOMLCodecDecode fuzz_toml_codec_decode
+compile_native_go_fuzzer github.com/rbaliyan/config FuzzValidateKey fuzz_validate_key
+compile_native_go_fuzzer github.com/rbaliyan/config FuzzValidateNamespace fuzz_validate_namespace
