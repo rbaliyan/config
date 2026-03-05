@@ -17,6 +17,19 @@ type Codec interface {
 	Decode(data []byte, v any) error
 }
 
+// Transformer defines a reversible byte-level transformation such as
+// encryption or compression. Transformers compose via NewChain.
+type Transformer interface {
+	// Name returns a short identifier for the transformation (e.g., "encrypted", "gzip").
+	Name() string
+
+	// Transform applies the forward transformation to data.
+	Transform(data []byte) ([]byte, error)
+
+	// Reverse undoes the transformation, recovering the original data.
+	Reverse(data []byte) ([]byte, error)
+}
+
 var (
 	registryMu sync.RWMutex
 	registry   = make(map[string]Codec)

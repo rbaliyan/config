@@ -258,6 +258,19 @@ devCfg.Set(ctx, "timeout", 5)
 defaultCfg := mgr.Namespace("")
 ```
 
+Namespace names may contain alphanumeric characters, underscores, dashes, dots, and colons (e.g. `org.example:env.prod`).
+
+### System Namespaces
+
+The `internal:` prefix is reserved for system namespaces used by infrastructure components such as key rotation and service discovery. Use `IsSystemNamespace()` to check whether a namespace is reserved:
+
+```go
+config.IsSystemNamespace("internal:config:crypto") // true
+config.IsSystemNamespace("production")              // false
+```
+
+Server-side authorizers can use this to block client writes to system namespaces while allowing infrastructure components to manage them.
+
 ## Context Helpers
 
 Access configuration from context without explicit dependency injection.
