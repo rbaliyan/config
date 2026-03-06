@@ -30,9 +30,14 @@ func NewChain(base Codec, transformers ...Transformer) Codec {
 		return base
 	}
 
-	// Defensive copy.
+	// Defensive copy and nil check.
 	ts := make([]Transformer, len(transformers))
 	copy(ts, transformers)
+	for i, t := range ts {
+		if t == nil {
+			panic(fmt.Sprintf("codec: NewChain transformer[%d] is nil", i))
+		}
+	}
 
 	// Build name: prepend each transformer name from 0..n-1.
 	name := base.Name()
