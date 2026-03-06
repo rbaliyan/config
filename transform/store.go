@@ -22,7 +22,6 @@ var (
 	_ config.HealthChecker = (*transformStore)(nil)
 	_ config.StatsProvider = (*transformStore)(nil)
 	_ config.CodecValidator = (*transformStore)(nil)
-	_ config.BulkStore     = (*transformStore)(nil)
 )
 
 // WrapStore creates a store decorator that applies transformer to all stored values.
@@ -114,6 +113,9 @@ func (s *transformStore) Watch(ctx context.Context, filter config.WatchFilter) (
 	innerCh, err := s.store.Watch(ctx, filter)
 	if err != nil {
 		return nil, err
+	}
+	if innerCh == nil {
+		return nil, nil
 	}
 
 	outCh := make(chan config.ChangeEvent, s.opts.watchBufferSize)
