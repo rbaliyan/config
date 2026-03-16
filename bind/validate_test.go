@@ -654,13 +654,16 @@ func TestValidationErrorValue(t *testing.T) {
 func TestValidationErrorUnwrap(t *testing.T) {
 	underlying := fmt.Errorf("custom error")
 	err := &ValidationError{Err: underlying}
-	if err.Unwrap() != underlying {
-		t.Error("expected Unwrap to return underlying error")
+	if !errors.Is(err, underlying) {
+		t.Error("expected errors.Is to find underlying error")
+	}
+	if !errors.Is(err, ErrValidationFailed) {
+		t.Error("expected errors.Is to find ErrValidationFailed even when Err is set")
 	}
 
 	err2 := &ValidationError{Reason: "test"}
-	if err2.Unwrap() != ErrValidationFailed {
-		t.Error("expected Unwrap to return ErrValidationFailed when Err is nil")
+	if !errors.Is(err2, ErrValidationFailed) {
+		t.Error("expected errors.Is to find ErrValidationFailed when Err is nil")
 	}
 }
 
@@ -680,13 +683,16 @@ func TestBindErrorFormatting(t *testing.T) {
 func TestBindErrorUnwrap(t *testing.T) {
 	underlying := fmt.Errorf("inner error")
 	err := &BindError{Key: "k", Op: "op", Err: underlying}
-	if err.Unwrap() != underlying {
-		t.Error("expected Unwrap to return underlying error")
+	if !errors.Is(err, underlying) {
+		t.Error("expected errors.Is to find underlying error")
+	}
+	if !errors.Is(err, ErrBindingFailed) {
+		t.Error("expected errors.Is to find ErrBindingFailed even when Err is set")
 	}
 
 	err2 := &BindError{Key: "k", Op: "op"}
-	if err2.Unwrap() != ErrBindingFailed {
-		t.Error("expected Unwrap to return ErrBindingFailed when Err is nil")
+	if !errors.Is(err2, ErrBindingFailed) {
+		t.Error("expected errors.Is to find ErrBindingFailed when Err is nil")
 	}
 }
 
