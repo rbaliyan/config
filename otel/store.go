@@ -28,7 +28,6 @@ var (
 	_ config.Store         = (*InstrumentedStore)(nil)
 	_ config.HealthChecker = (*InstrumentedStore)(nil)
 	_ config.StatsProvider = (*InstrumentedStore)(nil)
-	_ config.BulkStore     = (*InstrumentedStore)(nil)
 )
 
 // WrapStore wraps a Store with OpenTelemetry instrumentation.
@@ -332,6 +331,8 @@ func (s *InstrumentedStore) Stats(ctx context.Context) (*config.StoreStats, erro
 }
 
 // GetMany retrieves multiple values in a single operation.
+// If the underlying store does not implement BulkStore, individual Get calls are used as fallback.
+// Non-NotFound errors from individual gets are returned immediately.
 func (s *InstrumentedStore) GetMany(ctx context.Context, namespace string, keys []string) (map[string]config.Value, error) {
 	bulk, ok := s.store.(config.BulkStore)
 	if !ok {
@@ -341,6 +342,8 @@ func (s *InstrumentedStore) GetMany(ctx context.Context, namespace string, keys 
 			value, err := s.Get(ctx, namespace, key)
 			if err == nil {
 				results[key] = value
+			} else if !config.IsNotFound(err) {
+				return nil, err
 			}
 		}
 		return results, nil

@@ -26,7 +26,7 @@ var (
 
 // WrapStore creates a store decorator that applies transformer to all stored values.
 // Transform is applied on Set (before writing) and Reverse on Get (after reading).
-func WrapStore(store config.Store, transformer codec.Transformer, opts ...Option) (*transformStore, error) {
+func WrapStore(store config.Store, transformer codec.Transformer, opts ...Option) (config.Store, error) {
 	if store == nil {
 		return nil, fmt.Errorf("transform: store must not be nil")
 	}

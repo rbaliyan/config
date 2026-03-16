@@ -376,13 +376,21 @@ func (ms *Store) GetMany(ctx context.Context, namespace string, keys []string) (
 				continue
 			}
 		} else {
-			// Fallback to individual gets
+			// Fallback to individual gets; non-NotFound errors are treated as store failures.
 			results = make(map[string]config.Value, len(keys))
+			var fallbackErr error
 			for _, key := range keys {
 				val, err := s.Get(ctx, namespace, key)
 				if err == nil {
 					results[key] = val
+				} else if !config.IsNotFound(err) {
+					fallbackErr = err
+					break
 				}
+			}
+			if fallbackErr != nil {
+				lastErr = fallbackErr
+				continue
 			}
 		}
 

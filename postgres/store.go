@@ -697,7 +697,9 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	// Count by type
 	typeQuery := fmt.Sprintf(`SELECT type, COUNT(*) FROM %s GROUP BY type`, s.cfg.Table)
 	typeRows, err := s.db.QueryContext(ctx, typeQuery)
-	if err == nil {
+	if err != nil {
+		s.logger.WarnContext(ctx, "stats: failed to query entries by type", "error", err)
+	} else {
 		defer func() { _ = typeRows.Close() }()
 		for typeRows.Next() {
 			var t config.Type
@@ -711,7 +713,9 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	// Count by namespace
 	nsQuery := fmt.Sprintf(`SELECT namespace, COUNT(*) FROM %s GROUP BY namespace`, s.cfg.Table)
 	nsRows, err := s.db.QueryContext(ctx, nsQuery)
-	if err == nil {
+	if err != nil {
+		s.logger.WarnContext(ctx, "stats: failed to query entries by namespace", "error", err)
+	} else {
 		defer func() { _ = nsRows.Close() }()
 		for nsRows.Next() {
 			var ns string

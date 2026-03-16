@@ -825,6 +825,22 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 		args[i+1] = key
 	}
 
+	// Find which keys actually exist before deleting, so we only notify for those.
+	// This avoids spurious delete notifications for keys that were never stored.
+	existQuery := fmt.Sprintf(`SELECT key FROM %s WHERE namespace = ? AND key IN (%s)`,
+		s.cfg.Table, strings.Join(placeholders, ","))
+	existRows, err := s.db.QueryContext(ctx, existQuery, args...)
+	var existingKeys []string
+	if err == nil {
+		for existRows.Next() {
+			var k string
+			if scanErr := existRows.Scan(&k); scanErr == nil {
+				existingKeys = append(existingKeys, k)
+			}
+		}
+		_ = existRows.Close()
+	}
+
 	query := fmt.Sprintf(`DELETE FROM %s WHERE namespace = ? AND key IN (%s)`,
 		s.cfg.Table, strings.Join(placeholders, ","))
 
@@ -838,11 +854,11 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 		return 0, config.WrapStoreError("delete_many", "sqlite", "", err)
 	}
 
-	// Notify watchers for deleted keys
-	if deleted > 0 {
+	// Notify watchers only for keys that were confirmed to exist before deletion.
+	if deleted > 0 && len(existingKeys) > 0 {
 		now := time.Now().UTC()
-		events := make([]config.ChangeEvent, 0, len(keys))
-		for _, key := range keys {
+		events := make([]config.ChangeEvent, 0, len(existingKeys))
+		for _, key := range existingKeys {
 			events = append(events, config.ChangeEvent{
 				Type:      config.ChangeTypeDelete,
 				Namespace: namespace,
