@@ -516,7 +516,6 @@ func (s *Store) DroppedEvents() int64 {
 	return s.droppedEvents.Load()
 }
 
-
 // GetMany retrieves multiple values in a single operation.
 func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (map[string]config.Value, error) {
 	if s.closed.Load() {
