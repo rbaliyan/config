@@ -1390,7 +1390,9 @@ func TestMultiStore_GetMany_ReadThrough_NonBulkCachePopulated(t *testing.T) {
 	}
 }
 
-func TestMultiStore_GetMany_NonBulkStoreReturnsEmpty(t *testing.T) {
+func TestMultiStore_GetMany_NonBulkStoreFallsThrough(t *testing.T) {
+	// A non-BulkStore that returns a non-NotFound error is treated as a
+	// store-level failure; GetMany falls through to the next store.
 	f1 := &failStore{getErr: config.ErrStoreNotConnected}
 	backend := memory.NewStore()
 
@@ -1404,8 +1406,8 @@ func TestMultiStore_GetMany_NonBulkStoreReturnsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMany failed: %v", err)
 	}
-	if len(results) != 0 {
-		t.Errorf("Expected 0 results (non-bulk store returns empty on Get errors), got %d", len(results))
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result from fallback store, got %d", len(results))
 	}
 }
 

@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -375,7 +376,7 @@ func (m *manager) watchChanges(ctx context.Context) {
 		m.lastWatchTime.Store(time.Now().Unix())
 		changes, err := m.store.Watch(ctx, WatchFilter{})
 		if err != nil {
-			if err == ErrWatchNotSupported {
+			if errors.Is(err, ErrWatchNotSupported) {
 				// Store doesn't support watching, exit without retry
 				m.logger.Debug("store does not support watching")
 				return
@@ -449,17 +450,6 @@ func (m *manager) processWatchEvents(ctx context.Context, changes <-chan ChangeE
 // are protected by the cache's internal lock, and we gracefully handle
 // the case where the manager is closing.
 func (m *manager) handleChange(ctx context.Context, change ChangeEvent) {
-	// Use defer/recover to handle any panics during shutdown gracefully.
-	// This protects against edge cases in the race between handleChange and Close().
-	defer func() {
-		if r := recover(); r != nil {
-			// Only log if not during shutdown
-			if m.isConnected() {
-				m.logger.Error("panic in handleChange", "recover", r)
-			}
-		}
-	}()
-
 	// Early return if manager is closing or closed
 	if !m.isConnected() {
 		return

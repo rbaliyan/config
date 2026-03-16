@@ -32,10 +32,11 @@ func (x *xorTransformer) Reverse(data []byte) ([]byte, error) {
 func newTestStore(t *testing.T) (*transformStore, *memory.Store) {
 	t.Helper()
 	inner := memory.NewStore()
-	ts, err := WrapStore(inner, &xorTransformer{key: 0x42})
+	s, err := WrapStore(inner, &xorTransformer{key: 0x42})
 	if err != nil {
 		t.Fatalf("WrapStore: %v", err)
 	}
+	ts := s.(*transformStore)
 	if err := ts.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -59,11 +60,11 @@ func TestWrapStore_NilTransformer(t *testing.T) {
 
 func TestUnwrap(t *testing.T) {
 	inner := memory.NewStore()
-	ts, err := WrapStore(inner, &xorTransformer{key: 0x42})
+	s, err := WrapStore(inner, &xorTransformer{key: 0x42})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ts.Unwrap() != inner {
+	if s.(*transformStore).Unwrap() != inner {
 		t.Fatal("Unwrap did not return inner store")
 	}
 }
@@ -359,11 +360,11 @@ func TestOptionalInterfaces(t *testing.T) {
 
 func TestWithWatchBufferSize(t *testing.T) {
 	inner := memory.NewStore()
-	ts, err := WrapStore(inner, &xorTransformer{key: 0x42}, WithWatchBufferSize(10))
+	s, err := WrapStore(inner, &xorTransformer{key: 0x42}, WithWatchBufferSize(10))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ts.opts.watchBufferSize != 10 {
-		t.Errorf("watchBufferSize = %d, want 10", ts.opts.watchBufferSize)
+	if s.(*transformStore).opts.watchBufferSize != 10 {
+		t.Errorf("watchBufferSize = %d, want 10", s.(*transformStore).opts.watchBufferSize)
 	}
 }

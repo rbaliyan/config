@@ -4,6 +4,7 @@ package bind
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -159,11 +160,17 @@ func (bc *boundConfig) GetStructDigest(ctx context.Context, key string, target a
 		data[entryKey] = value
 	}
 
-	// Compute FNV-64a digest from sorted keys for deterministic ordering
+	// Compute FNV-64a digest from sorted keys for deterministic ordering.
+	// Use JSON marshaling for canonical value representation to avoid false
+	// positives from fmt.Fprint's %v formatting (e.g. nil vs "<nil>").
 	h := fnv.New64a()
 	for _, k := range slices.Sorted(maps.Keys(data)) {
 		_, _ = io.WriteString(h, k)
-		_, _ = fmt.Fprint(h, data[k])
+		if b, err := json.Marshal(data[k]); err == nil {
+			_, _ = h.Write(b)
+		} else {
+			_, _ = fmt.Fprint(h, data[k])
+		}
 	}
 	digest := h.Sum64()
 
