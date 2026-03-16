@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -136,6 +135,7 @@ func NewStore(db *sql.DB, opts ...Option) *Store {
 	s := &Store{
 		db:       db,
 		cfg:      DefaultConfig(),
+		logger:   slog.Default(),
 		watchers: make(map[*watchEntry]struct{}),
 		stopChan: make(chan struct{}),
 	}
@@ -908,7 +908,7 @@ func (s *Store) notifyWatchers(event config.ChangeEvent) {
 	s.watchMu.RUnlock()
 
 	for _, we := range watchers {
-		if s.matchesFilter(event, we.filter) {
+		if config.MatchesWatchFilter(event, we.filter) {
 			s.sendToWatcher(we, event)
 		}
 	}
@@ -948,23 +948,3 @@ func (s *Store) log() *slog.Logger {
 	return slog.Default()
 }
 
-func (s *Store) matchesFilter(event config.ChangeEvent, filter config.WatchFilter) bool {
-	if len(filter.Namespaces) > 0 && !slices.Contains(filter.Namespaces, event.Namespace) {
-		return false
-	}
-
-	if len(filter.Prefixes) > 0 {
-		found := false
-		for _, prefix := range filter.Prefixes {
-			if strings.HasPrefix(event.Key, prefix) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-
-	return true
-}

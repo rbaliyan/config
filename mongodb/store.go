@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1297,7 +1296,7 @@ func (s *Store) dispatchEvent(event config.ChangeEvent) {
 	s.watchMu.RUnlock()
 
 	for _, entry := range entries {
-		if s.matchesFilter(event, entry.filter) {
+		if config.MatchesWatchFilter(event, entry.filter) {
 			s.sendToWatcher(entry, event)
 		}
 	}
@@ -1330,28 +1329,6 @@ func (s *Store) DroppedEvents() int64 {
 	return s.droppedEvents.Load()
 }
 
-func (s *Store) matchesFilter(event config.ChangeEvent, filter config.WatchFilter) bool {
-	// Check namespace filter
-	if len(filter.Namespaces) > 0 && !slices.Contains(filter.Namespaces, event.Namespace) {
-		return false
-	}
-
-	// Check prefix filter
-	if len(filter.Prefixes) > 0 {
-		found := false
-		for _, prefix := range filter.Prefixes {
-			if strings.HasPrefix(event.Key, prefix) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-
-	return true
-}
 
 func escapeRegex(s string) string {
 	// Escape special regex characters

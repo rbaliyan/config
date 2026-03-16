@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -148,6 +149,9 @@ type BulkStore interface {
 	GetMany(ctx context.Context, namespace string, keys []string) (map[string]Value, error)
 
 	// SetMany creates or updates multiple values in a single operation.
+	// SetMany always uses upsert semantics regardless of any WriteMode set on
+	// individual values. Use individual Set calls for conditional (create-only
+	// or update-only) writes.
 	SetMany(ctx context.Context, namespace string, values map[string]Value) error
 
 	// DeleteMany removes multiple values in a single operation.
@@ -355,4 +359,25 @@ func (c ChangeType) String() string {
 	default:
 		return "unknown"
 	}
+}
+
+// MatchesWatchFilter reports whether event satisfies filter.
+// Store implementations use this to decide which watchers receive an event.
+func MatchesWatchFilter(event ChangeEvent, filter WatchFilter) bool {
+	if len(filter.Namespaces) > 0 && !slices.Contains(filter.Namespaces, event.Namespace) {
+		return false
+	}
+	if len(filter.Prefixes) > 0 {
+		found := false
+		for _, prefix := range filter.Prefixes {
+			if strings.HasPrefix(event.Key, prefix) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }

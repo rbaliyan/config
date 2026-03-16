@@ -2,6 +2,7 @@ package bind
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/rbaliyan/config"
@@ -438,15 +439,15 @@ func TestValidationError(t *testing.T) {
 		t.Errorf("unexpected error message: %q", err.Error())
 	}
 
-	// Test Unwrap
-	if err.Unwrap() != ErrValidationFailed {
-		t.Error("expected Unwrap to return ErrValidationFailed")
+	// Test errors.Is always finds ErrValidationFailed
+	if !errors.Is(err, ErrValidationFailed) {
+		t.Error("expected errors.Is to find ErrValidationFailed")
 	}
 
-	// Test Unwrap with nil Err
+	// Test errors.Is with nil Err
 	err = &ValidationError{Reason: "test"}
-	if err.Unwrap() != ErrValidationFailed {
-		t.Error("expected Unwrap to return ErrValidationFailed when Err is nil")
+	if !errors.Is(err, ErrValidationFailed) {
+		t.Error("expected errors.Is to find ErrValidationFailed when Err is nil")
 	}
 }
 
@@ -463,14 +464,14 @@ func TestBindError(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, err.Error())
 	}
 
-	if err.Unwrap() != underlyingErr {
-		t.Error("expected Unwrap to return underlying error")
+	if !errors.Is(err, underlyingErr) {
+		t.Error("expected errors.Is to find underlying error")
 	}
 
-	// Test Unwrap with nil Err
+	// Test errors.Is with nil Err
 	err = &BindError{Key: "key", Op: "op"}
-	if err.Unwrap() != ErrBindingFailed {
-		t.Error("expected Unwrap to return ErrBindingFailed when Err is nil")
+	if !errors.Is(err, ErrBindingFailed) {
+		t.Error("expected errors.Is to find ErrBindingFailed when Err is nil")
 	}
 }
 

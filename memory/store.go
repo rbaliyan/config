@@ -4,7 +4,6 @@ package memory
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -483,7 +482,7 @@ func (s *Store) notifyWatchers(event config.ChangeEvent) {
 	s.watchMu.RUnlock()
 
 	for _, we := range watchers {
-		if s.matchesFilter(event, we.filter) {
+		if config.MatchesWatchFilter(event, we.filter) {
 			s.sendToWatcher(we, event)
 		}
 	}
@@ -517,29 +516,6 @@ func (s *Store) DroppedEvents() int64 {
 	return s.droppedEvents.Load()
 }
 
-// matchesFilter checks if an event matches a watch filter.
-func (s *Store) matchesFilter(event config.ChangeEvent, filter config.WatchFilter) bool {
-	// Check namespace filter
-	if len(filter.Namespaces) > 0 && !slices.Contains(filter.Namespaces, event.Namespace) {
-		return false
-	}
-
-	// Check prefix filter
-	if len(filter.Prefixes) > 0 {
-		found := false
-		for _, prefix := range filter.Prefixes {
-			if strings.HasPrefix(event.Key, prefix) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-
-	return true
-}
 
 // GetMany retrieves multiple values in a single operation.
 func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (map[string]config.Value, error) {

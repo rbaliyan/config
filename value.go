@@ -503,6 +503,13 @@ func (v *val) Bool() (bool, error) {
 // detectType maps a Go value to its config Type.
 // It handles JSON-decoded numbers (float64 that are actually integers,
 // json.Number) and unsigned integer types.
+//
+// Note: whole float64 values (e.g. 42.0) are classified as TypeInt because
+// JSON decodes all numbers as float64. As a result, a float64 that is a whole
+// number will have TypeInt, which can cause the detected type to change across
+// a JSON round-trip (a TypeFloat 42.0 stored and retrieved via a JSON codec
+// may come back as TypeInt). Callers that need TypeFloat should set the type
+// explicitly with WithValueType(TypeFloat).
 func detectType(data any) Type {
 	switch val := data.(type) {
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:

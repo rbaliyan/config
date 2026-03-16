@@ -8,6 +8,13 @@ import (
 	"github.com/rbaliyan/config/codec"
 )
 
+// Store is the interface returned by WrapStore. It extends config.Store with
+// Unwrap to allow callers to retrieve the underlying store in a decorator chain.
+type Store interface {
+	config.Store
+	Unwrap() config.Store
+}
+
 // transformStore wraps a config.Store and applies a codec.Transformer to all
 // values at the Set/Get boundary.
 type transformStore struct {
@@ -26,7 +33,8 @@ var (
 
 // WrapStore creates a store decorator that applies transformer to all stored values.
 // Transform is applied on Set (before writing) and Reverse on Get (after reading).
-func WrapStore(store config.Store, transformer codec.Transformer, opts ...Option) (config.Store, error) {
+// The returned Store includes an Unwrap method for accessing the underlying store.
+func WrapStore(store config.Store, transformer codec.Transformer, opts ...Option) (Store, error) {
 	if store == nil {
 		return nil, fmt.Errorf("transform: store must not be nil")
 	}

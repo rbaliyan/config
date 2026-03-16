@@ -40,11 +40,13 @@ func (e *ValidationError) reason() string {
 	return "unknown error"
 }
 
-func (e *ValidationError) Unwrap() error {
+// Unwrap returns all errors in the chain so that both errors.Is(err, ErrValidationFailed)
+// and errors.Is(err, underlyingErr) work regardless of whether Err is set.
+func (e *ValidationError) Unwrap() []error {
 	if e.Err != nil {
-		return e.Err
+		return []error{ErrValidationFailed, e.Err}
 	}
-	return ErrValidationFailed
+	return []error{ErrValidationFailed}
 }
 
 // BindError represents a binding/unmarshaling failure.
@@ -58,11 +60,13 @@ func (e *BindError) Error() string {
 	return fmt.Sprintf("binding failed for %q during %s: %v", e.Key, e.Op, e.Err)
 }
 
-func (e *BindError) Unwrap() error {
+// Unwrap returns all errors in the chain so that both errors.Is(err, ErrBindingFailed)
+// and errors.Is(err, underlyingErr) work regardless of whether Err is set.
+func (e *BindError) Unwrap() []error {
 	if e.Err != nil {
-		return e.Err
+		return []error{ErrBindingFailed, e.Err}
 	}
-	return ErrBindingFailed
+	return []error{ErrBindingFailed}
 }
 
 // IsValidationError returns true if err is a ValidationError.
