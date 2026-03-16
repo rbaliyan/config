@@ -470,16 +470,24 @@ func (ms *Store) DeleteMany(ctx context.Context, namespace string, keys []string
 				}
 			}
 		} else {
-			// Fallback to individual deletes
+			// Fallback to individual deletes; non-NotFound errors abort this store.
 			var deleted int64
+			var fallbackErr error
 			for _, key := range keys {
 				if err := s.Delete(ctx, namespace, key); err == nil {
 					deleted++
+				} else if !config.IsNotFound(err) {
+					fallbackErr = err
+					break
 				}
 			}
-			succeeded = true
-			if deleted > maxDeleted {
-				maxDeleted = deleted
+			if fallbackErr != nil {
+				errs = append(errs, fallbackErr)
+			} else {
+				succeeded = true
+				if deleted > maxDeleted {
+					maxDeleted = deleted
+				}
 			}
 		}
 	}

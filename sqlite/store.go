@@ -4,6 +4,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -277,7 +278,7 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 		&id, &k, &ns, &value, &codecName, &valueType, &version, &createdAtStr, &updatedAtStr,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
 	}
 	if err != nil {
@@ -825,11 +826,23 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 		args[i+1] = key
 	}
 
+	// Wrap SELECT + DELETE in a transaction so we get a consistent view of
+	// which keys exist — preventing TOCTOU between the existence check and delete.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, config.WrapStoreError("delete_many", "sqlite", "", err)
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
 	// Find which keys actually exist before deleting, so we only notify for those.
 	// This avoids spurious delete notifications for keys that were never stored.
 	existQuery := fmt.Sprintf(`SELECT key FROM %s WHERE namespace = ? AND key IN (%s)`,
 		s.cfg.Table, strings.Join(placeholders, ","))
-	existRows, err := s.db.QueryContext(ctx, existQuery, args...)
+	existRows, err := tx.QueryContext(ctx, existQuery, args...)
 	var existingKeys []string
 	if err == nil {
 		for existRows.Next() {
@@ -844,7 +857,7 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 	query := fmt.Sprintf(`DELETE FROM %s WHERE namespace = ? AND key IN (%s)`,
 		s.cfg.Table, strings.Join(placeholders, ","))
 
-	result, err := s.db.ExecContext(ctx, query, args...)
+	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, config.WrapStoreError("delete_many", "sqlite", "", err)
 	}
@@ -853,6 +866,11 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 	if err != nil {
 		return 0, config.WrapStoreError("delete_many", "sqlite", "", err)
 	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, config.WrapStoreError("delete_many", "sqlite", "", err)
+	}
+	tx = nil // prevent deferred rollback
 
 	// Notify watchers only for keys that were confirmed to exist before deletion.
 	if deleted > 0 && len(existingKeys) > 0 {
