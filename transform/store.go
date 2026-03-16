@@ -192,12 +192,14 @@ func (s *transformStore) GetMany(ctx context.Context, namespace string, keys []s
 		return reversed, nil
 	}
 
-	// Fallback to individual gets.
+	// Fallback to individual gets; non-NotFound errors are returned immediately.
 	results := make(map[string]config.Value, len(keys))
 	for _, key := range keys {
 		v, err := s.Get(ctx, namespace, key)
 		if err == nil {
 			results[key] = v
+		} else if !config.IsNotFound(err) {
+			return nil, err
 		}
 	}
 	return results, nil
