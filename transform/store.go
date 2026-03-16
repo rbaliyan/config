@@ -235,11 +235,13 @@ func (s *transformStore) DeleteMany(ctx context.Context, namespace string, keys 
 		return bulk.DeleteMany(ctx, namespace, keys)
 	}
 
-	// Fallback to individual deletes.
+	// Fallback to individual deletes; non-NotFound errors are returned immediately.
 	var deleted int64
 	for _, key := range keys {
 		if err := s.store.Delete(ctx, namespace, key); err == nil {
 			deleted++
+		} else if !config.IsNotFound(err) {
+			return deleted, err
 		}
 	}
 	return deleted, nil

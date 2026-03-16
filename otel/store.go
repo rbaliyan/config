@@ -28,6 +28,7 @@ var (
 	_ config.Store         = (*InstrumentedStore)(nil)
 	_ config.HealthChecker = (*InstrumentedStore)(nil)
 	_ config.StatsProvider = (*InstrumentedStore)(nil)
+	_ config.BulkStore     = (*InstrumentedStore)(nil)
 )
 
 // WrapStore wraps a Store with OpenTelemetry instrumentation.
@@ -425,11 +426,13 @@ func (s *InstrumentedStore) SetMany(ctx context.Context, namespace string, value
 func (s *InstrumentedStore) DeleteMany(ctx context.Context, namespace string, keys []string) (int64, error) {
 	bulk, ok := s.store.(config.BulkStore)
 	if !ok {
-		// Fallback to individual deletes
+		// Fallback to individual deletes; non-NotFound errors are returned immediately.
 		var deleted int64
 		for _, key := range keys {
 			if err := s.Delete(ctx, namespace, key); err == nil {
 				deleted++
+			} else if !config.IsNotFound(err) {
+				return deleted, err
 			}
 		}
 		return deleted, nil

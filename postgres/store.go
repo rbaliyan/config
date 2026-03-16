@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -347,7 +348,7 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 		&id, &k, &ns, &value, &codecName, &valueType, &version, &createdAt, &updatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
 	}
 	if err != nil {
