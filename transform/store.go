@@ -29,6 +29,8 @@ var (
 	_ config.HealthChecker = (*transformStore)(nil)
 	_ config.StatsProvider = (*transformStore)(nil)
 	_ config.CodecValidator = (*transformStore)(nil)
+	_ config.BulkStore     = (*transformStore)(nil)
+	_ Store                = (*transformStore)(nil)
 )
 
 // WrapStore creates a store decorator that applies transformer to all stored values.

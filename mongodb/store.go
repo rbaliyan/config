@@ -1329,7 +1329,6 @@ func (s *Store) DroppedEvents() int64 {
 	return s.droppedEvents.Load()
 }
 
-
 func escapeRegex(s string) string {
 	// Escape special regex characters
 	special := []string{".", "+", "*", "?", "^", "$", "(", ")", "[", "]", "{", "}", "|", "\\"}
