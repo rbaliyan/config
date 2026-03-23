@@ -237,6 +237,9 @@ func (s *InstrumentedStore) Delete(ctx context.Context, namespace, key string) e
 
 // Find returns all keys and values matching the filter within a namespace.
 func (s *InstrumentedStore) Find(ctx context.Context, namespace string, filter config.Filter) (config.Page, error) {
+	if filter == nil {
+		filter = config.NewFilter().Build()
+	}
 	if !s.opts.enableTraces {
 		start := time.Now()
 		page, err := s.store.Find(ctx, namespace, filter)
