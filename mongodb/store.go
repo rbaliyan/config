@@ -749,6 +749,9 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 	if err := config.ValidateNamespace(namespace); err != nil {
 		return nil, err
 	}
+	if filter == nil {
+		filter = config.NewFilter().Build()
+	}
 
 	limit := filter.Limit()
 	mongoFilter := bson.M{"namespace": namespace}

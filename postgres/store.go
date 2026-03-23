@@ -503,6 +503,9 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
 	}
+	if filter == nil {
+		filter = config.NewFilter().Build()
+	}
 	if err := config.ValidateNamespace(namespace); err != nil {
 		return nil, err
 	}
