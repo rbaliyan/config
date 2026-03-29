@@ -126,6 +126,8 @@ type manager struct {
 	// Config cache
 	configMu sync.RWMutex
 	configs  map[string]*nsConfig
+
+	maxKeysPerNS int // 0 = unlimited
 }
 
 // Compile-time interface checks
@@ -162,8 +164,9 @@ func New(opts ...Option) (Manager, error) {
 		codec:        o.codec,
 		logger:       o.logger.With("component", "config"),
 		watchBackoff: o.watchBackoff,
-		configs:      make(map[string]*nsConfig),
-		cache:        cache,
+		configs:        make(map[string]*nsConfig),
+		cache:          cache,
+		maxKeysPerNS:   o.maxKeysPerNS,
 	}
 
 	return m, nil

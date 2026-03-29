@@ -52,6 +52,9 @@ var (
 
 	// ErrVersioningNotSupported is returned when the store does not support versioning.
 	ErrVersioningNotSupported = errors.New("config: versioning not supported")
+
+	// ErrNamespaceFull is returned when a namespace has reached its maximum key count.
+	ErrNamespaceFull = errors.New("config: namespace key limit exceeded")
 )
 
 // KeyNotFoundError provides details about a missing key.
@@ -281,4 +284,23 @@ func IsVersionNotFound(err error) bool {
 // IsVersioningNotSupported checks if an error indicates versioning is not supported.
 func IsVersioningNotSupported(err error) bool {
 	return errors.Is(err, ErrVersioningNotSupported)
+}
+
+// NamespaceFullError provides details about a namespace that has reached its key limit.
+type NamespaceFullError struct {
+	Namespace string
+	Limit     int
+}
+
+func (e *NamespaceFullError) Error() string {
+	return fmt.Sprintf("config: namespace %q has reached its key limit of %d", e.Namespace, e.Limit)
+}
+
+func (e *NamespaceFullError) Unwrap() error {
+	return ErrNamespaceFull
+}
+
+// IsNamespaceFull checks if an error indicates a namespace has reached its key limit.
+func IsNamespaceFull(err error) bool {
+	return errors.Is(err, ErrNamespaceFull)
 }

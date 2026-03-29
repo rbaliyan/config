@@ -2575,3 +2575,73 @@ func TestDetectTypeFloat64Special(t *testing.T) {
 		t.Errorf("NaN type = %v, want TypeFloat", val.Type())
 	}
 }
+
+func TestMaxKeysPerNamespace(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(
+		config.WithStore(memory.NewStore()),
+		config.WithMaxKeysPerNamespace(3),
+	)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	cfg := mgr.Namespace("test")
+
+	// Create 3 keys (at limit)
+	for i := 1; i <= 3; i++ {
+		if err := cfg.Set(ctx, fmt.Sprintf("key%d", i), i); err != nil {
+			t.Fatalf("Set key%d failed: %v", i, err)
+		}
+	}
+
+	// 4th key should fail
+	err = cfg.Set(ctx, "key4", 4)
+	if !config.IsNamespaceFull(err) {
+		t.Fatalf("expected ErrNamespaceFull, got: %v", err)
+	}
+
+	// Updating existing key should still work
+	if err := cfg.Set(ctx, "key1", 100); err != nil {
+		t.Fatalf("Update existing key failed: %v", err)
+	}
+
+	// WithIfExists (update mode) should bypass the check
+	if err := cfg.Set(ctx, "key2", 200, config.WithIfExists()); err != nil {
+		t.Fatalf("Update with WithIfExists failed: %v", err)
+	}
+
+	// Different namespace has its own limit
+	cfg2 := mgr.Namespace("other")
+	if err := cfg2.Set(ctx, "key1", 1); err != nil {
+		t.Fatalf("Set in other namespace failed: %v", err)
+	}
+}
+
+func TestMaxKeysPerNamespace_Unlimited(t *testing.T) {
+	ctx := context.Background()
+
+	// Default (0) means unlimited
+	mgr, err := config.New(config.WithStore(memory.NewStore()))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	cfg := mgr.Namespace("test")
+
+	// Should be able to create many keys
+	for i := 1; i <= 100; i++ {
+		if err := cfg.Set(ctx, fmt.Sprintf("key%d", i), i); err != nil {
+			t.Fatalf("Set key%d failed: %v", i, err)
+		}
+	}
+}

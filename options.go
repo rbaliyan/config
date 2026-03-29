@@ -16,10 +16,11 @@ type watchBackoffConfig struct {
 
 // managerOptions holds configuration for the Manager (unexported).
 type managerOptions struct {
-	store        Store
-	codec        codec.Codec
-	logger       *slog.Logger
-	watchBackoff watchBackoffConfig
+	store              Store
+	codec              codec.Codec
+	logger             *slog.Logger
+	watchBackoff       watchBackoffConfig
+	maxKeysPerNS       int // 0 = unlimited
 }
 
 // Option configures the Manager.
@@ -63,6 +64,17 @@ func WithLogger(logger *slog.Logger) Option {
 	return func(o *managerOptions) {
 		if logger != nil {
 			o.logger = logger
+		}
+	}
+}
+
+// WithMaxKeysPerNamespace sets the maximum number of keys allowed per namespace.
+// Set operations that would exceed this limit return ErrNamespaceFull.
+// Only enforced on creates (not updates to existing keys). 0 means unlimited (default).
+func WithMaxKeysPerNamespace(n int) Option {
+	return func(o *managerOptions) {
+		if n >= 0 {
+			o.maxKeysPerNS = n
 		}
 	}
 }
