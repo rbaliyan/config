@@ -11,7 +11,8 @@ A type-safe, namespace-aware configuration library for Go with support for multi
 
 ## Features
 
-- **Multiple Storage Backends**: Memory, PostgreSQL, MongoDB
+- **Multiple Storage Backends**: Memory, PostgreSQL, MongoDB, SQLite, File
+- **Version History**: Retrieve and paginate historical versions of any config key
 - **Multi-Store**: Combine stores for caching, fallback, or replication patterns
 - **Namespace Isolation**: Organize configuration by environment, tenant, or service
 - **Built-in Resilience**: Internal cache ensures app works during backend outages
@@ -54,9 +55,12 @@ func main() {
     ctx := context.Background()
 
     // Create manager with memory store
-    mgr := config.New(
+    mgr, err := config.New(
         config.WithStore(memory.NewStore()),
     )
+    if err != nil {
+        log.Fatal(err)
+    }
 
     // Connect to backend
     if err := mgr.Connect(ctx); err != nil {
@@ -136,6 +140,30 @@ client, _ := mongo.Connect(options.Client().ApplyURI("mongodb://localhost:27017"
 store := mongodb.NewStore(client,
     mongodb.WithDatabase("config"),
     mongodb.WithCollection("entries"),
+)
+```
+
+### SQLite Store
+
+Lightweight persistent storage with no external dependencies.
+
+```go
+import "github.com/rbaliyan/config/sqlite"
+
+store := sqlite.NewStore("config.db",
+    sqlite.WithTable("config_entries"),
+)
+```
+
+### File Store (Read-Only)
+
+Load configuration from files on disk with automatic reload via fsnotify.
+
+```go
+import "github.com/rbaliyan/config/file"
+
+store := file.NewStore("config/",
+    file.WithCodec("yaml"),
 )
 ```
 
@@ -241,6 +269,44 @@ if len(page.Results()) == page.Limit() {
 }
 ```
 
+### Version History
+
+Stores that implement `VersionedStore` retain historical versions of config entries. Use `GetVersions` to retrieve them:
+
+```go
+// Check if versioning is available
+if vr, ok := cfg.(config.VersionedReader); ok {
+    // Get a specific version
+    page, err := vr.GetVersions(ctx, "app/timeout",
+        config.NewVersionFilter().WithVersion(2).Build())
+
+    // List all versions (newest first) with pagination
+    page, err := vr.GetVersions(ctx, "app/timeout",
+        config.NewVersionFilter().WithLimit(10).Build())
+
+    for _, v := range page.Versions() {
+        fmt.Printf("v%d: %v (updated %s)\n",
+            v.Metadata().Version(), v, v.Metadata().UpdatedAt())
+    }
+
+    // Paginate through all versions
+    if len(page.Versions()) == page.Limit() {
+        nextPage, _ := vr.GetVersions(ctx, "app/timeout",
+            config.NewVersionFilter().
+                WithLimit(10).
+                WithCursor(page.NextCursor()).
+                Build())
+        // ...
+    }
+}
+```
+
+The memory store supports versioning with an optional history cap:
+
+```go
+store := memory.NewStore(memory.WithMaxHistory(100)) // Keep up to 100 versions per key
+```
+
 ## Namespaces
 
 Namespaces provide isolation between different environments or tenants.
@@ -308,7 +374,7 @@ store := multi.NewStoreWithOptions(
     []multi.Option{multi.WithStrategy(multi.StrategyFallback)},
 )
 
-mgr := config.New(config.WithStore(store))
+mgr, _ := config.New(config.WithStore(store))
 ```
 
 Strategies:
@@ -352,7 +418,7 @@ instrumentedStore, _ := otel.WrapStore(store,
     otel.WithMetricsEnabled(true),  // Opt-in, disabled by default
 )
 
-mgr := config.New(config.WithStore(instrumentedStore))
+mgr, _ := config.New(config.WithStore(instrumentedStore))
 ```
 
 Metrics exported:
@@ -479,7 +545,7 @@ yamlCodec := codec.Get("yaml")
 tomlCodec := codec.Get("toml")
 
 // Use with manager
-mgr := config.New(
+mgr, _ := config.New(
     config.WithStore(store),
     config.WithCodec(yamlCodec),
 )
@@ -526,7 +592,7 @@ if err != nil {
 ## Manager Options
 
 ```go
-mgr := config.New(
+mgr, err := config.New(
     config.WithStore(store),           // Required: storage backend
     config.WithCodec(yamlCodec),       // Optional: default codec (default: JSON)
     config.WithLogger(slogLogger),     // Optional: custom logger
