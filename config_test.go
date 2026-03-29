@@ -2623,6 +2623,48 @@ func TestMaxKeysPerNamespace(t *testing.T) {
 	}
 }
 
+func TestMaxKeysPerNamespace_DeleteAndReAdd(t *testing.T) {
+	ctx := context.Background()
+
+	mgr, err := config.New(
+		config.WithStore(memory.NewStore()),
+		config.WithMaxKeysPerNamespace(2),
+	)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer mgr.Close(ctx)
+
+	cfg := mgr.Namespace("test")
+
+	// Fill to limit
+	if err := cfg.Set(ctx, "key1", 1); err != nil {
+		t.Fatalf("Set key1 failed: %v", err)
+	}
+	if err := cfg.Set(ctx, "key2", 2); err != nil {
+		t.Fatalf("Set key2 failed: %v", err)
+	}
+
+	// At limit — new key should fail
+	err = cfg.Set(ctx, "key3", 3)
+	if !config.IsNamespaceFull(err) {
+		t.Fatalf("expected ErrNamespaceFull, got: %v", err)
+	}
+
+	// Delete one key
+	if err := cfg.Delete(ctx, "key1"); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	// Now adding a new key should succeed
+	if err := cfg.Set(ctx, "key3", 3); err != nil {
+		t.Fatalf("Set key3 after delete failed: %v", err)
+	}
+}
+
 func TestMaxKeysPerNamespace_Unlimited(t *testing.T) {
 	ctx := context.Background()
 

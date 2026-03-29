@@ -164,9 +164,9 @@ func New(opts ...Option) (Manager, error) {
 		codec:        o.codec,
 		logger:       o.logger.With("component", "config"),
 		watchBackoff: o.watchBackoff,
-		configs:        make(map[string]*nsConfig),
-		cache:          cache,
-		maxKeysPerNS:   o.maxKeysPerNS,
+		configs:      make(map[string]*nsConfig),
+		cache:        cache,
+		maxKeysPerNS: o.maxKeysPerNS,
 	}
 
 	return m, nil

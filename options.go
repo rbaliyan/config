@@ -16,11 +16,11 @@ type watchBackoffConfig struct {
 
 // managerOptions holds configuration for the Manager (unexported).
 type managerOptions struct {
-	store              Store
-	codec              codec.Codec
-	logger             *slog.Logger
-	watchBackoff       watchBackoffConfig
-	maxKeysPerNS       int // 0 = unlimited
+	store        Store
+	codec        codec.Codec
+	logger       *slog.Logger
+	watchBackoff watchBackoffConfig
+	maxKeysPerNS int // 0 = unlimited
 }
 
 // Option configures the Manager.
