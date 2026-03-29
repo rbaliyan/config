@@ -172,6 +172,13 @@ func (c *nsConfig) Set(ctx context.Context, key string, value any, opts ...SetOp
 		WithValueWriteMode(setOpts.writeMode),
 	)
 
+	// Enforce max keys per namespace on creates (skip for update-only mode)
+	if limit := c.manager.maxKeysPerNS; limit > 0 && setOpts.writeMode != WriteModeUpdate {
+		if err := c.checkNamespaceLimit(ctx, key, limit); err != nil {
+			return err
+		}
+	}
+
 	// Set in store - returns the stored value with updated metadata
 	newValue, err := c.manager.store.Set(ctx, c.namespace, key, val)
 	if err != nil {
@@ -231,4 +238,24 @@ func (c *nsConfig) GetVersions(ctx context.Context, key string, filter VersionFi
 	}
 
 	return vs.GetVersions(ctx, c.namespace, key, filter)
+}
+
+// checkNamespaceLimit verifies the namespace has not exceeded its key limit.
+// Only checks when the key does not already exist (updates are always allowed).
+func (c *nsConfig) checkNamespaceLimit(ctx context.Context, key string, limit int) error {
+	// If the key already exists, this is an update -- no limit check needed
+	if _, err := c.manager.store.Get(ctx, c.namespace, key); err == nil {
+		return nil
+	}
+
+	// Count existing keys via Find with limit+1 to check if we're at capacity
+	page, err := c.manager.store.Find(ctx, c.namespace, NewFilter().WithPrefix("").WithLimit(limit+1).Build())
+	if err != nil {
+		return err
+	}
+
+	if len(page.Results()) >= limit {
+		return &NamespaceFullError{Namespace: c.namespace, Limit: limit}
+	}
+	return nil
 }
