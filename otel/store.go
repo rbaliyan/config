@@ -25,10 +25,11 @@ type InstrumentedStore struct {
 
 // Compile-time interface checks
 var (
-	_ config.Store         = (*InstrumentedStore)(nil)
-	_ config.HealthChecker = (*InstrumentedStore)(nil)
-	_ config.StatsProvider = (*InstrumentedStore)(nil)
-	_ config.BulkStore     = (*InstrumentedStore)(nil)
+	_ config.Store          = (*InstrumentedStore)(nil)
+	_ config.HealthChecker  = (*InstrumentedStore)(nil)
+	_ config.StatsProvider  = (*InstrumentedStore)(nil)
+	_ config.BulkStore      = (*InstrumentedStore)(nil)
+	_ config.VersionedStore = (*InstrumentedStore)(nil)
 )
 
 // WrapStore wraps a Store with OpenTelemetry instrumentation.
@@ -505,6 +506,48 @@ func (s *InstrumentedStore) recordOperation(ctx context.Context, op, namespace, 
 		errorAttrs := append(attrs, attribute.String("error_type", errorType(err)))
 		s.metrics.errorCount.Add(ctx, 1, metric.WithAttributes(errorAttrs...))
 	}
+}
+
+// GetVersions retrieves version history with optional tracing and metrics.
+// If the underlying store does not implement VersionedStore, returns ErrVersioningNotSupported.
+func (s *InstrumentedStore) GetVersions(ctx context.Context, namespace, key string, filter config.VersionFilter) (config.VersionPage, error) {
+	vs, ok := s.store.(config.VersionedStore)
+	if !ok {
+		return nil, config.ErrVersioningNotSupported
+	}
+
+	if !s.opts.enableTraces {
+		start := time.Now()
+		page, err := vs.GetVersions(ctx, namespace, key, filter)
+		s.recordOperation(ctx, "get_versions", namespace, key, start, err)
+		return page, err
+	}
+
+	attrs := append(s.commonAttributes(),
+		attribute.String("config.namespace", namespace),
+		attribute.String("config.key", key),
+	)
+	if filter != nil && filter.Version() > 0 {
+		attrs = append(attrs, attribute.Int64("config.version", filter.Version()))
+	}
+
+	ctx, span := s.tracer.Start(ctx, "config.GetVersions",
+		trace.WithAttributes(attrs...))
+	defer span.End()
+
+	start := time.Now()
+	page, err := vs.GetVersions(ctx, namespace, key, filter)
+	s.recordOperation(ctx, "get_versions", namespace, key, start, err)
+
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	} else {
+		span.SetStatus(codes.Ok, "")
+		span.SetAttributes(attribute.Int("config.result_count", len(page.Versions())))
+	}
+
+	return page, err
 }
 
 // SupportsCodec delegates codec validation to the underlying store.

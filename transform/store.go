@@ -29,8 +29,9 @@ var (
 	_ config.HealthChecker = (*transformStore)(nil)
 	_ config.StatsProvider = (*transformStore)(nil)
 	_ config.CodecValidator = (*transformStore)(nil)
-	_ config.BulkStore     = (*transformStore)(nil)
-	_ Store                = (*transformStore)(nil)
+	_ config.BulkStore      = (*transformStore)(nil)
+	_ config.VersionedStore = (*transformStore)(nil)
+	_ Store                 = (*transformStore)(nil)
 )
 
 // WrapStore creates a store decorator that applies transformer to all stored values.
@@ -255,6 +256,33 @@ func (s *transformStore) DeleteMany(ctx context.Context, namespace string, keys 
 		}
 	}
 	return deleted, nil
+}
+
+// GetVersions retrieves version history, applying reverse transformation to each value.
+// If the underlying store does not implement VersionedStore, returns ErrVersioningNotSupported.
+func (s *transformStore) GetVersions(ctx context.Context, namespace, key string, filter config.VersionFilter) (config.VersionPage, error) {
+	vs, ok := s.store.(config.VersionedStore)
+	if !ok {
+		return nil, config.ErrVersioningNotSupported
+	}
+
+	page, err := vs.GetVersions(ctx, namespace, key, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reverse-transform each version
+	versions := page.Versions()
+	reversed := make([]config.Value, len(versions))
+	for i, v := range versions {
+		rv, err := s.reverseValue(v)
+		if err != nil {
+			return nil, fmt.Errorf("transform: get_versions reverse version %d: %w", v.Metadata().Version(), err)
+		}
+		reversed[i] = rv
+	}
+
+	return config.NewVersionPage(reversed, page.NextCursor(), page.Limit()), nil
 }
 
 // transformValue applies the forward transformation for Set operations.

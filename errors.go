@@ -46,6 +46,12 @@ var (
 
 	// ErrUnsupportedCodec is returned when a store does not support the requested codec.
 	ErrUnsupportedCodec = errors.New("config: unsupported codec")
+
+	// ErrVersionNotFound is returned when a specific version of a key does not exist.
+	ErrVersionNotFound = errors.New("config: version not found")
+
+	// ErrVersioningNotSupported is returned when the store does not support versioning.
+	ErrVersioningNotSupported = errors.New("config: versioning not supported")
 )
 
 // KeyNotFoundError provides details about a missing key.
@@ -247,4 +253,32 @@ func (e *BulkWriteError) FailedKeys() []string {
 // Use errors.As() to get the BulkWriteError for details about which keys failed.
 func IsBulkWritePartial(err error) bool {
 	return errors.Is(err, ErrBulkWritePartial)
+}
+
+// VersionNotFoundError provides details about a missing version.
+type VersionNotFoundError struct {
+	Key       string
+	Namespace string
+	Version   int64
+}
+
+func (e *VersionNotFoundError) Error() string {
+	if e.Namespace != "" {
+		return fmt.Sprintf("config: version %d of key %q not found in namespace %q", e.Version, e.Key, e.Namespace)
+	}
+	return fmt.Sprintf("config: version %d of key %q not found", e.Version, e.Key)
+}
+
+func (e *VersionNotFoundError) Unwrap() error {
+	return ErrVersionNotFound
+}
+
+// IsVersionNotFound checks if an error indicates a missing version.
+func IsVersionNotFound(err error) bool {
+	return errors.Is(err, ErrVersionNotFound)
+}
+
+// IsVersioningNotSupported checks if an error indicates versioning is not supported.
+func IsVersioningNotSupported(err error) bool {
+	return errors.Is(err, ErrVersioningNotSupported)
 }

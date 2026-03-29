@@ -141,6 +141,32 @@ type CodecValidator interface {
 	SupportsCodec(codecName string) bool
 }
 
+// VersionedStore is an optional interface for stores that support version history.
+// Stores that implement this interface retain all historical versions of config entries.
+// Use type assertion to check if a store supports versioning:
+//
+//	if vs, ok := store.(config.VersionedStore); ok {
+//	    // Get a specific version
+//	    page, _ := vs.GetVersions(ctx, ns, key, config.NewVersionFilter().WithVersion(3).Build())
+//	    // List all versions with pagination
+//	    page, _ := vs.GetVersions(ctx, ns, key, config.NewVersionFilter().WithLimit(10).Build())
+//	}
+type VersionedStore interface {
+	// GetVersions retrieves version history for a configuration key.
+	//
+	// When VersionFilter.Version() is set (> 0), returns a page containing only
+	// that specific version. Returns ErrVersionNotFound if the version does not exist.
+	//
+	// When VersionFilter.Version() is 0, returns a paginated list of all versions
+	// ordered by version descending (newest first). Use Limit() and Cursor() for pagination.
+	//
+	// Returns ErrNotFound if the key has never existed or was deleted.
+	// Note: deleting a key may also remove its version history depending on the
+	// store implementation. Database-backed stores (postgres, mongodb) retain
+	// history in a separate table/collection; the memory store discards it.
+	GetVersions(ctx context.Context, namespace, key string, filter VersionFilter) (VersionPage, error)
+}
+
 // BulkStore is an optional interface for stores that support batch operations.
 // Implementing this interface allows efficient bulk reads and writes.
 type BulkStore interface {
@@ -310,6 +336,108 @@ func (f *filter) Keys() []string { return f.keys }
 func (f *filter) Prefix() string { return f.prefix }
 func (f *filter) Limit() int     { return f.limit }
 func (f *filter) Cursor() string { return f.cursor }
+
+// VersionFilter defines criteria for retrieving version history.
+// Use NewVersionFilter() to create a VersionFilterBuilder.
+//
+// Two modes of operation:
+//   - Specific version: set Version() > 0 to retrieve a single version
+//   - List all versions: leave Version() as 0 and use Limit()/Cursor() for pagination
+type VersionFilter interface {
+	// Version returns the specific version to retrieve (0 = all versions).
+	Version() int64
+
+	// Limit returns the maximum number of versions to return (0 = no limit).
+	Limit() int
+
+	// Cursor returns the pagination cursor for continuing from a previous result.
+	Cursor() string
+}
+
+// VersionPage represents a page of version history results.
+type VersionPage interface {
+	// Versions returns the values in this page, ordered by version descending.
+	Versions() []Value
+
+	// NextCursor returns the cursor for fetching the next page.
+	NextCursor() string
+
+	// Limit returns the actual limit used.
+	Limit() int
+}
+
+// versionFilter implements VersionFilter.
+type versionFilter struct {
+	version int64
+	limit   int
+	cursor  string
+}
+
+func (f *versionFilter) Version() int64 { return f.version }
+func (f *versionFilter) Limit() int     { return f.limit }
+func (f *versionFilter) Cursor() string { return f.cursor }
+
+// versionPage implements VersionPage.
+type versionPage struct {
+	versions   []Value
+	nextCursor string
+	limit      int
+}
+
+func (p *versionPage) Versions() []Value  { return p.versions }
+func (p *versionPage) NextCursor() string { return p.nextCursor }
+func (p *versionPage) Limit() int         { return p.limit }
+
+// NewVersionPage creates a new VersionPage with the given versions and pagination info.
+// This is used by Store implementations to create VersionPage results.
+func NewVersionPage(versions []Value, nextCursor string, limit int) VersionPage {
+	return &versionPage{
+		versions:   versions,
+		nextCursor: nextCursor,
+		limit:      limit,
+	}
+}
+
+// VersionFilterBuilder builds VersionFilter instances using a fluent API.
+type VersionFilterBuilder struct {
+	version int64
+	limit   int
+	cursor  string
+}
+
+// NewVersionFilter creates a new VersionFilterBuilder.
+func NewVersionFilter() *VersionFilterBuilder {
+	return &VersionFilterBuilder{}
+}
+
+// WithVersion sets a specific version to retrieve.
+// When set (> 0), GetVersions returns only that version.
+// When 0 (default), GetVersions returns all versions with pagination.
+func (b *VersionFilterBuilder) WithVersion(version int64) *VersionFilterBuilder {
+	b.version = version
+	return b
+}
+
+// WithLimit sets the maximum number of versions to return.
+func (b *VersionFilterBuilder) WithLimit(limit int) *VersionFilterBuilder {
+	b.limit = limit
+	return b
+}
+
+// WithCursor sets the pagination cursor for continuing from a previous result.
+func (b *VersionFilterBuilder) WithCursor(cursor string) *VersionFilterBuilder {
+	b.cursor = cursor
+	return b
+}
+
+// Build creates the VersionFilter.
+func (b *VersionFilterBuilder) Build() VersionFilter {
+	return &versionFilter{
+		version: b.version,
+		limit:   b.limit,
+		cursor:  b.cursor,
+	}
+}
 
 // WatchFilter specifies criteria for watching changes.
 type WatchFilter struct {

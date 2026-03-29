@@ -14,6 +14,13 @@ import (
 	"github.com/rbaliyan/config"
 )
 
+// historyEntry stores a snapshot of a value at a specific version.
+type historyEntry struct {
+	value     config.Value
+	version   int64
+	updatedAt time.Time
+}
+
 // entry is the internal storage representation.
 type entry struct {
 	id        string // Unique ID for pagination
@@ -23,6 +30,7 @@ type entry struct {
 	version   int64
 	createdAt time.Time
 	updatedAt time.Time
+	history   []historyEntry // all versions ordered by version ascending
 }
 
 // toValue returns the stored Value wrapped with the entry's current metadata.
@@ -84,6 +92,7 @@ type Store struct {
 	droppedEvents atomic.Int64 // Counter for dropped events due to full channels
 
 	bufferSize int
+	maxHistory int                             // Max historical versions per key (0 = unlimited)
 	onDropped  func(event config.ChangeEvent) // Optional callback when event is dropped
 }
 
@@ -118,6 +127,16 @@ func WithOnDropped(fn func(event config.ChangeEvent)) Option {
 	}
 }
 
+// WithMaxHistory sets the maximum number of historical versions to retain per key.
+// When exceeded, the oldest versions are discarded. 0 means unlimited (default).
+func WithMaxHistory(n int) Option {
+	return func(s *Store) {
+		if n >= 0 {
+			s.maxHistory = n
+		}
+	}
+}
+
 // NewStore creates a new in-memory store.
 func NewStore(opts ...Option) *Store {
 	s := &Store{
@@ -136,10 +155,11 @@ func NewStore(opts ...Option) *Store {
 
 // Compile-time interface checks
 var (
-	_ config.Store         = (*Store)(nil)
-	_ config.HealthChecker = (*Store)(nil)
-	_ config.StatsProvider = (*Store)(nil)
-	_ config.BulkStore     = (*Store)(nil)
+	_ config.Store          = (*Store)(nil)
+	_ config.HealthChecker  = (*Store)(nil)
+	_ config.StatsProvider  = (*Store)(nil)
+	_ config.BulkStore      = (*Store)(nil)
+	_ config.VersionedStore = (*Store)(nil)
 )
 
 // keySeparator uses null byte to avoid collisions.
@@ -253,11 +273,21 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	}
 
 	if exists {
-		// Update: increment version, preserve created_at and ID
+		// Update: preserve history, increment version, preserve created_at and ID
 		newEntry.id = existing.id
 		newEntry.version = existing.version + 1
 		newEntry.createdAt = existing.createdAt
 		newEntry.updatedAt = now
+		// Copy existing history and append the previous current version.
+		// We copy to avoid aliasing the old entry's backing array.
+		newEntry.history = make([]historyEntry, len(existing.history), len(existing.history)+1)
+		copy(newEntry.history, existing.history)
+		newEntry.history = append(newEntry.history, historyEntry{
+			value:     existing.value,
+			version:   existing.version,
+			updatedAt: existing.updatedAt,
+		})
+		s.trimHistory(newEntry)
 	} else {
 		// Create: initialize version, timestamps, and generate ID
 		s.nextID++
@@ -286,6 +316,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 }
 
 // Delete removes a configuration value by namespace and key.
+// Note: deleting a key also removes all version history for that key.
 func (s *Store) Delete(ctx context.Context, namespace, key string) error {
 	if s.closed.Load() {
 		return config.ErrStoreClosed
@@ -586,6 +617,14 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			newEntry.version = existing.version + 1
 			newEntry.createdAt = existing.createdAt
 			newEntry.updatedAt = now
+			newEntry.history = make([]historyEntry, len(existing.history), len(existing.history)+1)
+			copy(newEntry.history, existing.history)
+			newEntry.history = append(newEntry.history, historyEntry{
+				value:     existing.value,
+				version:   existing.version,
+				updatedAt: existing.updatedAt,
+			})
+			s.trimHistory(newEntry)
 		} else {
 			s.nextID++
 			newEntry.id = fmt.Sprintf("%d", s.nextID)
@@ -664,4 +703,106 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 	}()
 
 	return deleted, nil
+}
+
+// GetVersions retrieves version history for a configuration key.
+func (s *Store) GetVersions(ctx context.Context, namespace, key string, filter config.VersionFilter) (config.VersionPage, error) {
+	if s.closed.Load() {
+		return nil, config.ErrStoreClosed
+	}
+	if err := config.ValidateNamespace(namespace); err != nil {
+		return nil, err
+	}
+	if err := config.ValidateKey(key); err != nil {
+		return nil, err
+	}
+	if filter == nil {
+		filter = config.NewVersionFilter().Build()
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	e, ok := s.entries[s.entryKey(namespace, key)]
+	if !ok {
+		return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
+	}
+
+	// Specific version requested
+	if filter.Version() > 0 {
+		v := s.findVersion(e, filter.Version())
+		if v == nil {
+			return nil, &config.VersionNotFoundError{Key: key, Namespace: namespace, Version: filter.Version()}
+		}
+		return config.NewVersionPage([]config.Value{v}, "", 1), nil
+	}
+
+	// Build all versions descending (current first, then history reversed)
+	all := make([]config.Value, 0, len(e.history)+1)
+	all = append(all, e.toValue()) // current version is newest
+	for i := len(e.history) - 1; i >= 0; i-- {
+		h := e.history[i]
+		all = append(all, s.historyToValue(e, h))
+	}
+
+	// Apply cursor (cursor is a version number string; skip until we pass it)
+	if filter.Cursor() != "" {
+		cursorVer, err := strconv.ParseInt(filter.Cursor(), 10, 64)
+		if err != nil {
+			return nil, config.WrapStoreError("get_versions", "memory", key, fmt.Errorf("invalid cursor %q: %w", filter.Cursor(), err))
+		}
+		idx := 0
+		for idx < len(all) && all[idx].Metadata().Version() >= cursorVer {
+			idx++
+		}
+		all = all[idx:]
+	}
+
+	// Apply limit
+	limit := filter.Limit()
+	var nextCursor string
+	if limit > 0 && len(all) > limit {
+		nextCursor = strconv.FormatInt(all[limit-1].Metadata().Version(), 10)
+		all = all[:limit]
+	}
+
+	return config.NewVersionPage(all, nextCursor, limit), nil
+}
+
+// findVersion returns the Value for a specific version, or nil if not found.
+func (s *Store) findVersion(e *entry, version int64) config.Value {
+	// Check current version
+	if e.version == version {
+		return e.toValue()
+	}
+	// Search history
+	for _, h := range e.history {
+		if h.version == version {
+			return s.historyToValue(e, h)
+		}
+	}
+	return nil
+}
+
+// trimHistory enforces the maxHistory limit by discarding the oldest entries.
+// It copies the retained entries into a new slice to avoid pinning the old
+// backing array in memory.
+func (s *Store) trimHistory(e *entry) {
+	if s.maxHistory > 0 && len(e.history) > s.maxHistory {
+		keep := e.history[len(e.history)-s.maxHistory:]
+		trimmed := make([]historyEntry, len(keep))
+		copy(trimmed, keep)
+		e.history = trimmed
+	}
+}
+
+// historyToValue converts a historyEntry to a config.Value with metadata.
+func (s *Store) historyToValue(e *entry, h historyEntry) config.Value {
+	return &metadataValue{
+		Value:     h.value,
+		version:   h.version,
+		createdAt: e.createdAt,
+		updatedAt: h.updatedAt,
+		entryID:   e.id,
+	}
 }

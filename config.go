@@ -47,14 +47,33 @@ type Config interface {
 	Namespace() string
 }
 
+// VersionedReader provides access to version history for a namespace.
+// Obtained via type assertion on Config:
+//
+//	if vr, ok := cfg.(config.VersionedReader); ok {
+//	    // Get specific version
+//	    page, _ := vr.GetVersions(ctx, "key", config.NewVersionFilter().WithVersion(3).Build())
+//	    // List all versions
+//	    page, _ := vr.GetVersions(ctx, "key", config.NewVersionFilter().WithLimit(10).Build())
+//	}
+type VersionedReader interface {
+	// GetVersions retrieves version history for a configuration key.
+	// See VersionedStore.GetVersions for full semantics.
+	// Returns ErrVersioningNotSupported if the underlying store does not support versioning.
+	GetVersions(ctx context.Context, key string, filter VersionFilter) (VersionPage, error)
+}
+
 // nsConfig is the default Config implementation for a specific namespace.
 type nsConfig struct {
 	namespace string
 	manager   *manager
 }
 
-// Compile-time interface check
-var _ Config = (*nsConfig)(nil)
+// Compile-time interface checks
+var (
+	_ Config          = (*nsConfig)(nil)
+	_ VersionedReader = (*nsConfig)(nil)
+)
 
 // Namespace returns the namespace name.
 func (c *nsConfig) Namespace() string {
@@ -190,4 +209,26 @@ func (c *nsConfig) Delete(ctx context.Context, key string) error {
 	}
 
 	return nil
+}
+
+// GetVersions retrieves version history for a configuration key.
+// Returns ErrVersioningNotSupported if the underlying store does not support versioning.
+func (c *nsConfig) GetVersions(ctx context.Context, key string, filter VersionFilter) (VersionPage, error) {
+	if !c.manager.isConnected() {
+		return nil, ErrManagerClosed
+	}
+	if err := ValidateKey(key); err != nil {
+		return nil, err
+	}
+
+	vs, ok := c.manager.store.(VersionedStore)
+	if !ok {
+		return nil, ErrVersioningNotSupported
+	}
+
+	if filter == nil {
+		filter = NewVersionFilter().Build()
+	}
+
+	return vs.GetVersions(ctx, c.namespace, key, filter)
 }

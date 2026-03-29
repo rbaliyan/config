@@ -498,6 +498,24 @@ func (ms *Store) DeleteMany(ctx context.Context, namespace string, keys []string
 	return maxDeleted, nil
 }
 
+// GetVersions retrieves version history by delegating to the first underlying
+// store that implements VersionedStore.
+func (ms *Store) GetVersions(ctx context.Context, namespace, key string, filter config.VersionFilter) (config.VersionPage, error) {
+	if len(ms.stores) == 0 {
+		return nil, config.ErrStoreNotConnected
+	}
+
+	for _, s := range ms.stores {
+		vs, ok := s.(config.VersionedStore)
+		if !ok {
+			continue
+		}
+		return vs.GetVersions(ctx, namespace, key, filter)
+	}
+
+	return nil, config.ErrVersioningNotSupported
+}
+
 // SupportsCodec checks all underlying stores for codec support.
 // Returns false if any store rejects the codec.
 // Returns true if no stores implement CodecValidator.
@@ -518,4 +536,5 @@ var (
 	_ config.StatsProvider  = (*Store)(nil)
 	_ config.BulkStore      = (*Store)(nil)
 	_ config.CodecValidator = (*Store)(nil)
+	_ config.VersionedStore = (*Store)(nil)
 )
