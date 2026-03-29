@@ -1392,3 +1392,364 @@ func TestStore_BulkWriteErrorDetails(t *testing.T) {
 		}
 	}
 }
+
+func TestStore_GetVersions_SpecificVersion(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	defer store.Close(ctx)
+
+	// Create 3 versions
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("v1"))
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("v2"))
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("v3"))
+
+	// Get version 2
+	page, err := store.GetVersions(ctx, "ns", "key", config.NewVersionFilter().WithVersion(2).Build())
+	if err != nil {
+		t.Fatalf("GetVersions failed: %v", err)
+	}
+
+	versions := page.Versions()
+	if len(versions) != 1 {
+		t.Fatalf("Expected 1 version, got %d", len(versions))
+	}
+
+	if versions[0].Metadata().Version() != 2 {
+		t.Errorf("Expected version 2, got %d", versions[0].Metadata().Version())
+	}
+
+	str, _ := versions[0].String()
+	if str != "v2" {
+		t.Errorf("Expected value %q, got %q", "v2", str)
+	}
+}
+
+func TestStore_GetVersions_VersionNotFound(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	defer store.Close(ctx)
+
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("v1"))
+
+	_, err := store.GetVersions(ctx, "ns", "key", config.NewVersionFilter().WithVersion(99).Build())
+	if !config.IsVersionNotFound(err) {
+		t.Errorf("Expected ErrVersionNotFound, got: %v", err)
+	}
+}
+
+func TestStore_GetVersions_KeyNotFound(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	defer store.Close(ctx)
+
+	_, err := store.GetVersions(ctx, "ns", "nonexistent", config.NewVersionFilter().Build())
+	if !config.IsNotFound(err) {
+		t.Errorf("Expected ErrNotFound, got: %v", err)
+	}
+}
+
+func TestStore_GetVersions_ListAll(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	defer store.Close(ctx)
+
+	// Create 5 versions
+	for i := 1; i <= 5; i++ {
+		_, _ = store.Set(ctx, "ns", "key", config.NewValue(i))
+	}
+
+	// List all versions (no limit)
+	page, err := store.GetVersions(ctx, "ns", "key", config.NewVersionFilter().Build())
+	if err != nil {
+		t.Fatalf("GetVersions failed: %v", err)
+	}
+
+	versions := page.Versions()
+	if len(versions) != 5 {
+		t.Fatalf("Expected 5 versions, got %d", len(versions))
+	}
+
+	// Should be ordered newest first (descending)
+	for i, v := range versions {
+		expectedVersion := int64(5 - i)
+		if v.Metadata().Version() != expectedVersion {
+			t.Errorf("versions[%d]: expected version %d, got %d", i, expectedVersion, v.Metadata().Version())
+		}
+	}
+}
+
+func TestStore_GetVersions_Pagination(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	defer store.Close(ctx)
+
+	// Create 5 versions
+	for i := 1; i <= 5; i++ {
+		_, _ = store.Set(ctx, "ns", "key", config.NewValue(i))
+	}
+
+	// Page 1: limit 2
+	page1, err := store.GetVersions(ctx, "ns", "key", config.NewVersionFilter().WithLimit(2).Build())
+	if err != nil {
+		t.Fatalf("GetVersions page 1 failed: %v", err)
+	}
+	if len(page1.Versions()) != 2 {
+		t.Fatalf("Page 1: expected 2 versions, got %d", len(page1.Versions()))
+	}
+	if page1.Versions()[0].Metadata().Version() != 5 {
+		t.Errorf("Page 1 first: expected version 5, got %d", page1.Versions()[0].Metadata().Version())
+	}
+	if page1.Versions()[1].Metadata().Version() != 4 {
+		t.Errorf("Page 1 second: expected version 4, got %d", page1.Versions()[1].Metadata().Version())
+	}
+	if page1.NextCursor() == "" {
+		t.Fatal("Expected non-empty cursor after page 1")
+	}
+
+	// Page 2: use cursor
+	page2, err := store.GetVersions(ctx, "ns", "key",
+		config.NewVersionFilter().WithLimit(2).WithCursor(page1.NextCursor()).Build())
+	if err != nil {
+		t.Fatalf("GetVersions page 2 failed: %v", err)
+	}
+	if len(page2.Versions()) != 2 {
+		t.Fatalf("Page 2: expected 2 versions, got %d", len(page2.Versions()))
+	}
+	if page2.Versions()[0].Metadata().Version() != 3 {
+		t.Errorf("Page 2 first: expected version 3, got %d", page2.Versions()[0].Metadata().Version())
+	}
+	if page2.Versions()[1].Metadata().Version() != 2 {
+		t.Errorf("Page 2 second: expected version 2, got %d", page2.Versions()[1].Metadata().Version())
+	}
+
+	// Page 3: last page
+	page3, err := store.GetVersions(ctx, "ns", "key",
+		config.NewVersionFilter().WithLimit(2).WithCursor(page2.NextCursor()).Build())
+	if err != nil {
+		t.Fatalf("GetVersions page 3 failed: %v", err)
+	}
+	if len(page3.Versions()) != 1 {
+		t.Fatalf("Page 3: expected 1 version, got %d", len(page3.Versions()))
+	}
+	if page3.Versions()[0].Metadata().Version() != 1 {
+		t.Errorf("Page 3: expected version 1, got %d", page3.Versions()[0].Metadata().Version())
+	}
+}
+
+func TestStore_GetVersions_SingleVersion(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	defer store.Close(ctx)
+
+	// Only one version exists
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("only"))
+
+	page, err := store.GetVersions(ctx, "ns", "key", config.NewVersionFilter().Build())
+	if err != nil {
+		t.Fatalf("GetVersions failed: %v", err)
+	}
+
+	if len(page.Versions()) != 1 {
+		t.Fatalf("Expected 1 version, got %d", len(page.Versions()))
+	}
+	if page.Versions()[0].Metadata().Version() != 1 {
+		t.Errorf("Expected version 1, got %d", page.Versions()[0].Metadata().Version())
+	}
+}
+
+func TestStore_GetVersions_ClosedStore(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	_ = store.Close(ctx)
+
+	_, err := store.GetVersions(ctx, "ns", "key", config.NewVersionFilter().Build())
+	if !errors.Is(err, config.ErrStoreClosed) {
+		t.Errorf("Expected ErrStoreClosed, got: %v", err)
+	}
+}
+
+func TestStore_GetVersions_InvalidNamespace(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	defer store.Close(ctx)
+
+	_, err := store.GetVersions(ctx, "!bad!", "key", config.NewVersionFilter().Build())
+	if !errors.Is(err, config.ErrInvalidNamespace) {
+		t.Errorf("Expected ErrInvalidNamespace, got: %v", err)
+	}
+}
+
+func TestStore_GetVersions_InvalidKey(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	defer store.Close(ctx)
+
+	_, err := store.GetVersions(ctx, "ns", "", config.NewVersionFilter().Build())
+	if !config.IsInvalidKey(err) {
+		t.Errorf("Expected invalid key error, got: %v", err)
+	}
+}
+
+func TestStore_GetVersions_NilFilter(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	defer store.Close(ctx)
+
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("v1"))
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("v2"))
+
+	// nil filter should list all versions
+	page, err := store.GetVersions(ctx, "ns", "key", nil)
+	if err != nil {
+		t.Fatalf("GetVersions with nil filter failed: %v", err)
+	}
+
+	if len(page.Versions()) != 2 {
+		t.Errorf("Expected 2 versions, got %d", len(page.Versions()))
+	}
+}
+
+func TestStore_GetVersions_InvalidCursor(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	defer store.Close(ctx)
+
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("v1"))
+
+	_, err := store.GetVersions(ctx, "ns", "key",
+		config.NewVersionFilter().WithCursor("not-a-number").Build())
+	if err == nil {
+		t.Fatal("Expected error for invalid cursor")
+	}
+}
+
+func TestStore_GetVersions_MaxHistory(t *testing.T) {
+	store := NewStore(WithMaxHistory(3))
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	defer store.Close(ctx)
+
+	// Create 6 versions
+	for i := 1; i <= 6; i++ {
+		_, _ = store.Set(ctx, "ns", "key", config.NewValue(i))
+	}
+
+	// Should only retain 3 history entries + current = 4 total versions
+	page, err := store.GetVersions(ctx, "ns", "key", config.NewVersionFilter().Build())
+	if err != nil {
+		t.Fatalf("GetVersions failed: %v", err)
+	}
+
+	if len(page.Versions()) != 4 {
+		t.Fatalf("Expected 4 versions (max 3 history + current), got %d", len(page.Versions()))
+	}
+
+	// Newest should be version 6, oldest retained should be version 3
+	if page.Versions()[0].Metadata().Version() != 6 {
+		t.Errorf("Newest: expected version 6, got %d", page.Versions()[0].Metadata().Version())
+	}
+	if page.Versions()[3].Metadata().Version() != 3 {
+		t.Errorf("Oldest: expected version 3, got %d", page.Versions()[3].Metadata().Version())
+	}
+}
+
+func TestStore_GetVersions_SetManyPreservesHistory(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	defer store.Close(ctx)
+
+	// Create v1 via Set
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("v1"))
+
+	// Update via SetMany to create v2
+	_ = store.SetMany(ctx, "ns", map[string]config.Value{
+		"key": config.NewValue("v2"),
+	})
+
+	// Should have 2 versions
+	page, err := store.GetVersions(ctx, "ns", "key", config.NewVersionFilter().Build())
+	if err != nil {
+		t.Fatalf("GetVersions failed: %v", err)
+	}
+
+	if len(page.Versions()) != 2 {
+		t.Fatalf("Expected 2 versions, got %d", len(page.Versions()))
+	}
+
+	// v2 first (newest), then v1
+	str, _ := page.Versions()[0].String()
+	if str != "v2" {
+		t.Errorf("Latest version: expected %q, got %q", "v2", str)
+	}
+
+	str, _ = page.Versions()[1].String()
+	if str != "v1" {
+		t.Errorf("Oldest version: expected %q, got %q", "v1", str)
+	}
+}
+
+func TestStore_GetVersions_DeleteDiscardsHistory(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	defer store.Close(ctx)
+
+	// Create 3 versions
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("v1"))
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("v2"))
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("v3"))
+
+	// Delete the key — history should be discarded
+	_ = store.Delete(ctx, "ns", "key")
+	_, err := store.GetVersions(ctx, "ns", "key", config.NewVersionFilter().Build())
+	if !config.IsNotFound(err) {
+		t.Fatalf("Expected ErrNotFound after delete, got: %v", err)
+	}
+
+	// Recreate the key — version should start at 1
+	_, _ = store.Set(ctx, "ns", "key", config.NewValue("new"))
+	page, err := store.GetVersions(ctx, "ns", "key", config.NewVersionFilter().Build())
+	if err != nil {
+		t.Fatalf("GetVersions after recreate failed: %v", err)
+	}
+	if len(page.Versions()) != 1 {
+		t.Fatalf("Expected 1 version after recreate, got %d", len(page.Versions()))
+	}
+	if page.Versions()[0].Metadata().Version() != 1 {
+		t.Errorf("Expected version 1 after recreate, got %d", page.Versions()[0].Metadata().Version())
+	}
+}
+
+func TestStore_GetVersions_DeleteManyDiscardsHistory(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	defer store.Close(ctx)
+
+	_, _ = store.Set(ctx, "ns", "a", config.NewValue("a1"))
+	_, _ = store.Set(ctx, "ns", "a", config.NewValue("a2"))
+	_, _ = store.Set(ctx, "ns", "b", config.NewValue("b1"))
+
+	_, _ = store.DeleteMany(ctx, "ns", []string{"a", "b"})
+
+	_, err := store.GetVersions(ctx, "ns", "a", config.NewVersionFilter().Build())
+	if !config.IsNotFound(err) {
+		t.Errorf("Expected ErrNotFound for key 'a' after DeleteMany, got: %v", err)
+	}
+	_, err = store.GetVersions(ctx, "ns", "b", config.NewVersionFilter().Build())
+	if !config.IsNotFound(err) {
+		t.Errorf("Expected ErrNotFound for key 'b' after DeleteMany, got: %v", err)
+	}
+}
