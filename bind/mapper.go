@@ -4,6 +4,7 @@ package bind
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"sort"
 	"strings"
@@ -512,14 +513,22 @@ func setNumericValue(fieldVal reflect.Value, valueVal reflect.Value) error {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 			fieldVal.SetInt(valueVal.Int())
 		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			fieldVal.SetInt(int64(valueVal.Uint()))
+			u := valueVal.Uint()
+			if u > math.MaxInt64 {
+				return fmt.Errorf("value %d overflows int64", u)
+			}
+			fieldVal.SetInt(int64(u))
 		}
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		switch valueVal.Kind() {
 		case reflect.Float32, reflect.Float64:
 			fieldVal.SetUint(uint64(valueVal.Float()))
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			fieldVal.SetUint(uint64(valueVal.Int()))
+			v := valueVal.Int()
+			if v < 0 {
+				return fmt.Errorf("negative value %d cannot be converted to uint64", v)
+			}
+			fieldVal.SetUint(uint64(v))
 		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 			fieldVal.SetUint(valueVal.Uint())
 		}

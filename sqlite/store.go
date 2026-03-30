@@ -263,7 +263,7 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 	query := fmt.Sprintf(`
 		SELECT id, key, namespace, value, codec, type, version, created_at, updated_at
 		FROM %s WHERE namespace = ? AND key = ?
-	`, s.cfg.Table)
+	`, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 
 	var (
 		id                         int64
@@ -403,7 +403,7 @@ func (s *Store) Delete(ctx context.Context, namespace, key string) error {
 		return err
 	}
 
-	query := fmt.Sprintf(`DELETE FROM %s WHERE namespace = ? AND key = ?`, s.cfg.Table)
+	query := fmt.Sprintf(`DELETE FROM %s WHERE namespace = ? AND key = ?`, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 	result, err := s.db.ExecContext(ctx, query, namespace, key)
 	if err != nil {
 		return config.WrapStoreError("delete", "sqlite", key, err)
@@ -628,13 +628,13 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	}
 
 	// Count total entries
-	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, s.cfg.Table)
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 	if err := s.db.QueryRowContext(ctx, countQuery).Scan(&stats.TotalEntries); err != nil {
 		return nil, config.WrapStoreError("stats", "sqlite", "", err)
 	}
 
 	// Count by type
-	typeQuery := fmt.Sprintf(`SELECT type, COUNT(*) FROM %s GROUP BY type`, s.cfg.Table)
+	typeQuery := fmt.Sprintf(`SELECT type, COUNT(*) FROM %s GROUP BY type`, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 	typeRows, err := s.db.QueryContext(ctx, typeQuery)
 	if err == nil {
 		defer func() { _ = typeRows.Close() }()
@@ -648,7 +648,7 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	}
 
 	// Count by namespace
-	nsQuery := fmt.Sprintf(`SELECT namespace, COUNT(*) FROM %s GROUP BY namespace`, s.cfg.Table)
+	nsQuery := fmt.Sprintf(`SELECT namespace, COUNT(*) FROM %s GROUP BY namespace`, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 	nsRows, err := s.db.QueryContext(ctx, nsQuery)
 	if err == nil {
 		defer func() { _ = nsRows.Close() }()
@@ -687,7 +687,7 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 	query := fmt.Sprintf(`
 		SELECT id, key, namespace, value, codec, type, version, created_at, updated_at
 		FROM %s WHERE namespace = ? AND key IN (%s)
-	`, s.cfg.Table, strings.Join(placeholders, ","))
+	`, s.cfg.Table, strings.Join(placeholders, ",")) // #nosec G201 -- table name is from configuration, not user input
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -762,7 +762,7 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			type = excluded.type,
 			version = %s.version + 1,
 			updated_at = datetime('now')
-	`, s.cfg.Table, s.cfg.Table)
+	`, s.cfg.Table, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 
 	for key, value := range values {
 		if key == "" {
@@ -843,7 +843,7 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 
 	// Find which keys actually exist before deleting, so we only notify for those.
 	// This avoids spurious delete notifications for keys that were never stored.
-	existQuery := fmt.Sprintf(`SELECT key FROM %s WHERE namespace = ? AND key IN (%s)`,
+	existQuery := fmt.Sprintf(`SELECT key FROM %s WHERE namespace = ? AND key IN (%s)`, // #nosec G201 -- table name is from configuration, not user input
 		s.cfg.Table, strings.Join(placeholders, ","))
 	existRows, err := tx.QueryContext(ctx, existQuery, args...)
 	var existingKeys []string
@@ -857,7 +857,7 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 		_ = existRows.Close()
 	}
 
-	query := fmt.Sprintf(`DELETE FROM %s WHERE namespace = ? AND key IN (%s)`,
+	query := fmt.Sprintf(`DELETE FROM %s WHERE namespace = ? AND key IN (%s)`, // #nosec G201 -- table name is from configuration, not user input
 		s.cfg.Table, strings.Join(placeholders, ","))
 
 	result, err := tx.ExecContext(ctx, query, args...)

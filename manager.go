@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -487,5 +487,5 @@ func (m *manager) handleChange(ctx context.Context, change ChangeEvent) {
 // jitteredBackoff adds jitter to a backoff duration.
 // Returns a duration in the range [0.5*d, 1.5*d).
 func jitteredBackoff(d time.Duration) time.Duration {
-	return time.Duration(float64(d) * (0.5 + rand.Float64()))
+	return time.Duration(float64(d) * (0.5 + rand.Float64())) // #nosec G404 -- jitter does not require cryptographic randomness
 }
