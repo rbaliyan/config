@@ -105,7 +105,7 @@ func (s *Store) Migrate(ctx context.Context, opts ...MigrateOption) (*MigrateRes
 		batchSize = math.MaxInt32
 	}
 	findOpts := options.Find().
-		SetBatchSize(int32(batchSize)).
+		SetBatchSize(int32(batchSize)). // #nosec G115 -- clamped to MaxInt32 above
 		SetSort(bson.D{{Key: "_id", Value: 1}})
 
 	cursor, err := s.collection.Find(ctx, filter, findOpts)
