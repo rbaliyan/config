@@ -288,7 +288,7 @@ func (s *Store) createSchema(ctx context.Context) error {
 		CREATE TRIGGER %s_notify
 			AFTER INSERT OR UPDATE OR DELETE ON %s
 			FOR EACH ROW EXECUTE FUNCTION notify_%s_changes();
-	`, s.cfg.Table, s.cfg.Table, s.cfg.Table, s.cfg.Table, s.cfg.Table)
+	`, s.cfg.Table, s.cfg.Table, s.cfg.Table, s.cfg.Table, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 
 	_, err := s.db.ExecContext(ctx, trigger)
 	return err
@@ -333,7 +333,7 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 	query := fmt.Sprintf(`
 		SELECT id, key, namespace, value, codec, type, version, created_at, updated_at
 		FROM %s WHERE namespace = $1 AND key = $2
-	`, s.cfg.Table)
+	`, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 
 	var (
 		id                   int64
@@ -480,7 +480,7 @@ func (s *Store) Delete(ctx context.Context, namespace, key string) error {
 		return err
 	}
 
-	query := fmt.Sprintf(`DELETE FROM %s WHERE namespace = $1 AND key = $2`, s.cfg.Table)
+	query := fmt.Sprintf(`DELETE FROM %s WHERE namespace = $1 AND key = $2`, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 	result, err := s.db.ExecContext(ctx, query, namespace, key)
 	if err != nil {
 		return config.WrapStoreError("delete", "postgres", key, err)
@@ -693,13 +693,13 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	}
 
 	// Count total entries
-	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, s.cfg.Table)
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 	if err := s.db.QueryRowContext(ctx, countQuery).Scan(&stats.TotalEntries); err != nil {
 		return nil, config.WrapStoreError("stats", "postgres", "", err)
 	}
 
 	// Count by type
-	typeQuery := fmt.Sprintf(`SELECT type, COUNT(*) FROM %s GROUP BY type`, s.cfg.Table)
+	typeQuery := fmt.Sprintf(`SELECT type, COUNT(*) FROM %s GROUP BY type`, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 	typeRows, err := s.db.QueryContext(ctx, typeQuery)
 	if err != nil {
 		s.log().WarnContext(ctx, "stats: failed to query entries by type", "error", err)
@@ -715,7 +715,7 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	}
 
 	// Count by namespace
-	nsQuery := fmt.Sprintf(`SELECT namespace, COUNT(*) FROM %s GROUP BY namespace`, s.cfg.Table)
+	nsQuery := fmt.Sprintf(`SELECT namespace, COUNT(*) FROM %s GROUP BY namespace`, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 	nsRows, err := s.db.QueryContext(ctx, nsQuery)
 	if err != nil {
 		s.log().WarnContext(ctx, "stats: failed to query entries by namespace", "error", err)
@@ -757,7 +757,7 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 	query := fmt.Sprintf(`
 		SELECT id, key, namespace, value, codec, type, version, created_at, updated_at
 		FROM %s WHERE namespace = $1 AND key IN (%s)
-	`, s.cfg.Table, strings.Join(placeholders, ","))
+	`, s.cfg.Table, strings.Join(placeholders, ",")) // #nosec G201 -- table name is from configuration, not user input
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -831,7 +831,7 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			type = EXCLUDED.type,
 			version = %s.version + 1,
 			updated_at = NOW()
-	`, s.cfg.Table, s.cfg.Table)
+	`, s.cfg.Table, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 
 	for key, value := range values {
 		if key == "" {
@@ -884,7 +884,7 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 		args[i+1] = key
 	}
 
-	query := fmt.Sprintf(`DELETE FROM %s WHERE namespace = $1 AND key IN (%s)`,
+	query := fmt.Sprintf(`DELETE FROM %s WHERE namespace = $1 AND key IN (%s)`, // #nosec G201 -- table name is from configuration, not user input
 		s.cfg.Table, strings.Join(placeholders, ","))
 
 	result, err := s.db.ExecContext(ctx, query, args...)

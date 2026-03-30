@@ -363,7 +363,7 @@ func (s *Store) Connect(ctx context.Context) error {
 
 	// Start change stream listener
 	s.watchWg.Add(1)
-	go s.watchChangeStream()
+	go s.watchChangeStream() // #nosec G118 -- intentional: watch loop must outlive request context
 
 	s.logger().Info("mongodb store connected",
 		"database", s.cfg.Database,

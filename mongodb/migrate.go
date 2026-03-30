@@ -3,6 +3,7 @@ package mongodb
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -99,8 +100,12 @@ func (s *Store) Migrate(ctx context.Context, opts ...MigrateOption) (*MigrateRes
 		filter["key"] = bson.M{"$regex": bson.Regex{Pattern: "^" + escapeRegex(o.prefix)}}
 	}
 
+	batchSize := o.batchSize
+	if batchSize > math.MaxInt32 {
+		batchSize = math.MaxInt32
+	}
 	findOpts := options.Find().
-		SetBatchSize(int32(o.batchSize)).
+		SetBatchSize(int32(batchSize)).
 		SetSort(bson.D{{Key: "_id", Value: 1}})
 
 	cursor, err := s.collection.Find(ctx, filter, findOpts)
