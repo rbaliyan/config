@@ -167,6 +167,45 @@ type VersionedStore interface {
 	GetVersions(ctx context.Context, namespace, key string, filter VersionFilter) (VersionPage, error)
 }
 
+// AliasStore is an optional interface for stores that support persistent key aliases.
+//
+// Aliases provide transparent key migration by mapping old key names to new
+// canonical keys. They occupy the same key space as configuration entries: a
+// key that exists as a config entry cannot be used as an alias, and vice versa.
+//
+// Alias values reuse the [Value] interface, where the underlying data is the
+// target key name (a string). The returned Value carries metadata such as
+// version and timestamps.
+//
+// Stores that implement AliasStore emit [ChangeTypeAliasSet] and
+// [ChangeTypeAliasDelete] events through the Watch channel so that all
+// connected Manager instances stay in sync.
+//
+// Use type assertion to check if a store supports aliases:
+//
+//	if as, ok := store.(config.AliasStore); ok {
+//	    val, err := as.SetAlias(ctx, "db.host", "database/host")
+//	}
+type AliasStore interface {
+	// SetAlias creates a new alias mapping from alias to target.
+	// Returns the stored Value (target key name with metadata).
+	// Returns [ErrAliasExists] if the alias key is already registered as an
+	// alias or already exists as a configuration entry in any namespace.
+	SetAlias(ctx context.Context, alias, target string) (Value, error)
+
+	// DeleteAlias removes an alias.
+	// Returns [ErrNotFound] if the alias does not exist.
+	DeleteAlias(ctx context.Context, alias string) error
+
+	// GetAlias retrieves the target for a specific alias.
+	// Returns [ErrNotFound] if the alias does not exist.
+	GetAlias(ctx context.Context, alias string) (Value, error)
+
+	// ListAliases returns all registered aliases as a map of alias → Value.
+	// The Value for each entry contains the target key name as a string.
+	ListAliases(ctx context.Context) (map[string]Value, error)
+}
+
 // BulkStore is an optional interface for stores that support batch operations.
 // Implementing this interface allows efficient bulk reads and writes.
 type BulkStore interface {
@@ -475,6 +514,12 @@ const (
 
 	// ChangeTypeDelete indicates a delete operation.
 	ChangeTypeDelete
+
+	// ChangeTypeAliasSet indicates an alias was created.
+	ChangeTypeAliasSet
+
+	// ChangeTypeAliasDelete indicates an alias was removed.
+	ChangeTypeAliasDelete
 )
 
 // String returns the string representation of the change type.
@@ -484,14 +529,29 @@ func (c ChangeType) String() string {
 		return "set"
 	case ChangeTypeDelete:
 		return "delete"
+	case ChangeTypeAliasSet:
+		return "alias_set"
+	case ChangeTypeAliasDelete:
+		return "alias_delete"
 	default:
 		return "unknown"
 	}
 }
 
+// IsAliasChange reports whether the change type is an alias event.
+func (c ChangeType) IsAliasChange() bool {
+	return c == ChangeTypeAliasSet || c == ChangeTypeAliasDelete
+}
+
 // MatchesWatchFilter reports whether event satisfies filter.
 // Store implementations use this to decide which watchers receive an event.
+// Alias change events always match (they are global and affect all namespaces).
 func MatchesWatchFilter(event ChangeEvent, filter WatchFilter) bool {
+	// Alias events are global — always deliver them.
+	if event.Type.IsAliasChange() {
+		return true
+	}
+
 	if len(filter.Namespaces) > 0 && !slices.Contains(filter.Namespaces, event.Namespace) {
 		return false
 	}

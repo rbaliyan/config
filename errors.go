@@ -55,6 +55,17 @@ var (
 
 	// ErrNamespaceFull is returned when a namespace has reached its maximum key count.
 	ErrNamespaceFull = errors.New("config: namespace key limit exceeded")
+
+	// ErrAliasExists is returned when creating an alias that conflicts with an
+	// existing alias or an existing configuration key.
+	ErrAliasExists = errors.New("config: alias already exists")
+
+	// ErrAliasSelf is returned when an alias points to itself.
+	ErrAliasSelf = errors.New("config: alias cannot reference itself")
+
+	// ErrAliasChain is returned when an alias target is itself an alias,
+	// which would create a chain. Aliases are single-hop only.
+	ErrAliasChain = errors.New("config: alias chain not allowed")
 )
 
 // KeyNotFoundError provides details about a missing key.
@@ -303,4 +314,26 @@ func (e *NamespaceFullError) Unwrap() error {
 // IsNamespaceFull checks if an error indicates a namespace has reached its key limit.
 func IsNamespaceFull(err error) bool {
 	return errors.Is(err, ErrNamespaceFull)
+}
+
+// AliasExistsError provides details about an alias that already exists.
+type AliasExistsError struct {
+	Alias  string
+	Reason string // e.g. "alias already registered" or "key exists in namespace \"prod\""
+}
+
+func (e *AliasExistsError) Error() string {
+	if e.Reason != "" {
+		return fmt.Sprintf("config: alias %q already exists: %s", e.Alias, e.Reason)
+	}
+	return fmt.Sprintf("config: alias %q already exists", e.Alias)
+}
+
+func (e *AliasExistsError) Unwrap() error {
+	return ErrAliasExists
+}
+
+// IsAliasExists checks if an error indicates an alias already exists.
+func IsAliasExists(err error) bool {
+	return errors.Is(err, ErrAliasExists)
 }

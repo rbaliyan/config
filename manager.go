@@ -113,6 +113,11 @@ type manager struct {
 	cache     cache // internal cache for resilience
 	codec     codec.Codec
 	logger    *slog.Logger
+	aliases   *aliasResolver
+
+	// Seed aliases provided via WithAlias/WithAliases options.
+	// Persisted to the store on Connect if the store implements AliasStore.
+	seedAliases map[string]string
 
 	watchCancel context.CancelFunc
 	watchWg     sync.WaitGroup
@@ -134,6 +139,7 @@ type manager struct {
 var (
 	_ Manager         = (*manager)(nil)
 	_ ManagerObserver = (*manager)(nil)
+	_ AliasManager    = (*manager)(nil)
 )
 
 // New creates a new configuration Manager.
@@ -164,6 +170,8 @@ func New(opts ...Option) (Manager, error) {
 		codec:        o.codec,
 		logger:       o.logger.With("component", "config"),
 		watchBackoff: o.watchBackoff,
+		aliases:        newAliasResolver(),
+		seedAliases:    o.aliases,
 		configs:        make(map[string]*nsConfig),
 		cache:          cache,
 		maxKeysPerNS:   o.maxKeysPerNS,
@@ -204,6 +212,9 @@ func (m *manager) Connect(ctx context.Context) error {
 
 	// Mark as connected only after store.Connect succeeds
 	atomic.StoreInt32(&m.status, 1)
+
+	// Load and persist aliases
+	m.initAliases(ctx)
 
 	// Start watching for changes (for internal cache invalidation)
 	// Uses independent context - watch should run until Close(), not until Connect's context expires
@@ -279,10 +290,14 @@ func (m *manager) Namespace(name string) Config {
 
 // Refresh forces a cache refresh for a specific key.
 // It fetches the latest value from the store and updates the cache.
+// If the key is an alias, the canonical target key is refreshed.
 func (m *manager) Refresh(ctx context.Context, namespace, key string) error {
 	if !m.isConnected() {
 		return ErrManagerClosed
 	}
+
+	// Resolve alias
+	key = m.aliases.resolve(key)
 
 	// Fetch fresh data from store
 	value, err := m.store.Get(ctx, namespace, key)
@@ -302,6 +317,116 @@ func (m *manager) Refresh(ctx context.Context, namespace, key string) error {
 	}
 
 	return nil
+}
+
+// initAliases loads persisted aliases from the store and persists seed aliases.
+// Called during Connect after the store is connected.
+func (m *manager) initAliases(ctx context.Context) {
+	as, ok := m.store.(AliasStore)
+	if !ok {
+		// Store doesn't support persistent aliases — load seeds into memory only.
+		for alias, target := range m.seedAliases {
+			if err := m.aliases.set(alias, target); err != nil {
+				m.logger.Warn("invalid seed alias", "alias", alias, "target", target, "error", err)
+			}
+		}
+		return
+	}
+
+	// Load persisted aliases from store.
+	persisted, err := as.ListAliases(ctx)
+	if err != nil {
+		m.logger.Warn("failed to load persisted aliases", "error", err)
+	} else {
+		for alias, val := range persisted {
+			target, strErr := val.String()
+			if strErr != nil {
+				m.logger.Warn("invalid persisted alias value", "alias", alias, "error", strErr)
+				continue
+			}
+			m.aliases.setUnchecked(alias, target)
+		}
+	}
+
+	// Persist seed aliases (create-only — skip if already in store).
+	for alias, target := range m.seedAliases {
+		if m.aliases.has(alias) {
+			continue // Already loaded from store
+		}
+		if _, setErr := as.SetAlias(ctx, alias, target); setErr != nil {
+			if !IsAliasExists(setErr) {
+				m.logger.Warn("failed to persist seed alias", "alias", alias, "target", target, "error", setErr)
+			}
+			continue
+		}
+		m.aliases.setUnchecked(alias, target)
+	}
+}
+
+// SetAlias creates a new alias mapping. If the store implements [AliasStore],
+// the alias is persisted and propagated to other instances.
+func (m *manager) SetAlias(ctx context.Context, alias, target string) error {
+	if err := ValidateKey(alias); err != nil {
+		return err
+	}
+	if err := ValidateKey(target); err != nil {
+		return err
+	}
+
+	// Validate in-memory constraints (self-reference, chains).
+	if err := m.aliases.set(alias, target); err != nil {
+		return err
+	}
+
+	// Persist to store if supported.
+	if as, ok := m.store.(AliasStore); ok {
+		if _, err := as.SetAlias(ctx, alias, target); err != nil {
+			// Rollback in-memory change on store failure.
+			m.aliases.remove(alias)
+			return err
+		}
+	}
+	return nil
+}
+
+// RemoveAlias removes an alias. If the store implements [AliasStore],
+// the deletion is persisted.
+func (m *manager) RemoveAlias(ctx context.Context, alias string) error {
+	if as, ok := m.store.(AliasStore); ok {
+		if err := as.DeleteAlias(ctx, alias); err != nil {
+			return err
+		}
+	}
+	m.aliases.remove(alias)
+	return nil
+}
+
+// ResolveAlias returns the canonical key for the given key.
+// If the key is not an alias, it is returned unchanged.
+func (m *manager) ResolveAlias(key string) string {
+	return m.aliases.resolve(key)
+}
+
+// Aliases returns a snapshot of all registered aliases.
+func (m *manager) Aliases() map[string]string {
+	return m.aliases.all()
+}
+
+// handleAliasChange processes an alias change event from the Watch stream.
+func (m *manager) handleAliasChange(change ChangeEvent) {
+	switch change.Type {
+	case ChangeTypeAliasSet:
+		if change.Value != nil {
+			target, err := change.Value.String()
+			if err != nil {
+				m.logger.Warn("invalid alias value from watch", "alias", change.Key, "error", err)
+				return
+			}
+			m.aliases.setUnchecked(change.Key, target)
+		}
+	case ChangeTypeAliasDelete:
+		m.aliases.remove(change.Key)
+	}
 }
 
 // Health performs a health check on the manager and underlying store.
@@ -448,13 +573,19 @@ func (m *manager) processWatchEvents(ctx context.Context, changes <-chan ChangeE
 	}
 }
 
-// handleChange processes a change event and updates the cache.
+// handleChange processes a change event and updates the cache or alias resolver.
 // This function is safe to call even during shutdown - cache operations
 // are protected by the cache's internal lock, and we gracefully handle
 // the case where the manager is closing.
 func (m *manager) handleChange(ctx context.Context, change ChangeEvent) {
 	// Early return if manager is closing or closed
 	if !m.isConnected() {
+		return
+	}
+
+	// Route alias events to the alias resolver.
+	if change.Type.IsAliasChange() {
+		m.handleAliasChange(change)
 		return
 	}
 

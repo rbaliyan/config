@@ -21,6 +21,7 @@ type managerOptions struct {
 	logger             *slog.Logger
 	watchBackoff       watchBackoffConfig
 	maxKeysPerNS       int // 0 = unlimited
+	aliases            map[string]string // alias key → target key
 }
 
 // Option configures the Manager.
@@ -105,6 +106,50 @@ func WithWatchBackoffFactor(f float64) Option {
 	return func(o *managerOptions) {
 		if f > 0 {
 			o.watchBackoff.backoffFactor = f
+		}
+	}
+}
+
+// WithAlias registers a key alias that maps alias to target.
+// When any operation (Get, Set, Delete) uses the alias key, it is transparently
+// resolved to the target key. This enables key migration without changing
+// application code that references old key names.
+//
+// Aliases are global (not per-namespace) and single-hop.
+// Returns an error from New() if the alias is invalid.
+//
+// Example:
+//
+//	mgr, err := config.New(
+//	    config.WithStore(store),
+//	    config.WithAlias("db.host", "database/host"),
+//	)
+func WithAlias(alias, target string) Option {
+	return func(o *managerOptions) {
+		if o.aliases == nil {
+			o.aliases = make(map[string]string)
+		}
+		o.aliases[alias] = target
+	}
+}
+
+// WithAliases maps one or more alias keys to a single canonical target key.
+// This is convenient when migrating multiple old key names to one new key.
+// See WithAlias for details.
+//
+// Example:
+//
+//	mgr, err := config.New(
+//	    config.WithStore(store),
+//	    config.WithAliases("database/host", "db.host", "db-host", "legacy/db/host"),
+//	)
+func WithAliases(target string, aliases ...string) Option {
+	return func(o *managerOptions) {
+		if o.aliases == nil {
+			o.aliases = make(map[string]string, len(aliases))
+		}
+		for _, alias := range aliases {
+			o.aliases[alias] = target
 		}
 	}
 }
