@@ -81,10 +81,14 @@ func (m *entryMetadata) EntryID() string      { return m.entryID }
 // Suitable for testing and single-instance deployments.
 type Store struct {
 	mu       sync.RWMutex
-	entries  map[string]*entry // key format: "namespace:key"
+	entries  map[string]*entry // key format: "namespace\x00key"
 	nextID   int64             // Auto-increment ID for pagination
 	closed   atomic.Bool
 	stopChan chan struct{}
+
+	// Alias management
+	aliasMu sync.RWMutex
+	aliases map[string]*aliasEntry // alias key → alias entry
 
 	// Watch management
 	watchMu       sync.RWMutex
@@ -94,6 +98,25 @@ type Store struct {
 	bufferSize int
 	maxHistory int                             // Max historical versions per key (0 = unlimited)
 	onDropped  func(event config.ChangeEvent) // Optional callback when event is dropped
+}
+
+// aliasEntry is the internal storage representation for an alias.
+type aliasEntry struct {
+	alias     string
+	target    string
+	version   int64
+	createdAt time.Time
+}
+
+// toValue returns the alias target wrapped as a config.Value with metadata.
+func (e *aliasEntry) toValue() config.Value {
+	return &metadataValue{
+		Value:     config.NewValue(e.target),
+		version:   e.version,
+		createdAt: e.createdAt,
+		updatedAt: e.createdAt,
+		entryID:   "alias:" + e.alias,
+	}
 }
 
 type watchEntry struct {
@@ -141,6 +164,7 @@ func WithMaxHistory(n int) Option {
 func NewStore(opts ...Option) *Store {
 	s := &Store{
 		entries:    make(map[string]*entry),
+		aliases:    make(map[string]*aliasEntry),
 		watchers:   make(map[*watchEntry]struct{}),
 		stopChan:   make(chan struct{}),
 		bufferSize: 100,
@@ -160,6 +184,7 @@ var (
 	_ config.StatsProvider  = (*Store)(nil)
 	_ config.BulkStore      = (*Store)(nil)
 	_ config.VersionedStore = (*Store)(nil)
+	_ config.AliasStore     = (*Store)(nil)
 )
 
 // keySeparator uses null byte to avoid collisions.
@@ -805,4 +830,120 @@ func (s *Store) historyToValue(e *entry, h historyEntry) config.Value {
 		updatedAt: h.updatedAt,
 		entryID:   e.id,
 	}
+}
+
+// SetAlias creates a new alias mapping from alias to target.
+// Returns ErrAliasExists if the alias is already registered or if the alias key
+// already exists as a configuration entry in any namespace.
+func (s *Store) SetAlias(ctx context.Context, alias, target string) (config.Value, error) {
+	if s.closed.Load() {
+		return nil, config.ErrStoreClosed
+	}
+	if err := config.ValidateKey(alias); err != nil {
+		return nil, err
+	}
+	if err := config.ValidateKey(target); err != nil {
+		return nil, err
+	}
+
+	// Lock both aliases and entries to enforce uniqueness across key spaces.
+	s.aliasMu.Lock()
+	defer s.aliasMu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Check alias doesn't already exist as an alias.
+	if _, exists := s.aliases[alias]; exists {
+		return nil, &config.AliasExistsError{Alias: alias, Reason: "alias already registered"}
+	}
+
+	// Check alias key doesn't exist as a config entry in any namespace.
+	for _, e := range s.entries {
+		if e.key == alias {
+			return nil, &config.AliasExistsError{
+				Alias:  alias,
+				Reason: fmt.Sprintf("key exists in namespace %q", e.namespace),
+			}
+		}
+	}
+
+	now := time.Now().UTC()
+	ae := &aliasEntry{
+		alias:     alias,
+		target:    target,
+		version:   1,
+		createdAt: now,
+	}
+	s.aliases[alias] = ae
+
+	val := ae.toValue()
+	event := config.ChangeEvent{
+		Type:      config.ChangeTypeAliasSet,
+		Key:       alias,
+		Value:     val,
+		Timestamp: now,
+	}
+	go s.notifyWatchers(event)
+
+	return val, nil
+}
+
+// DeleteAlias removes an alias.
+// Returns ErrNotFound if the alias does not exist.
+func (s *Store) DeleteAlias(ctx context.Context, alias string) error {
+	if s.closed.Load() {
+		return config.ErrStoreClosed
+	}
+
+	s.aliasMu.Lock()
+	defer s.aliasMu.Unlock()
+
+	if _, exists := s.aliases[alias]; !exists {
+		return &config.KeyNotFoundError{Key: alias}
+	}
+
+	delete(s.aliases, alias)
+
+	event := config.ChangeEvent{
+		Type:      config.ChangeTypeAliasDelete,
+		Key:       alias,
+		Timestamp: time.Now().UTC(),
+	}
+	go s.notifyWatchers(event)
+
+	return nil
+}
+
+// GetAlias retrieves the target for a specific alias.
+// Returns ErrNotFound if the alias does not exist.
+func (s *Store) GetAlias(ctx context.Context, alias string) (config.Value, error) {
+	if s.closed.Load() {
+		return nil, config.ErrStoreClosed
+	}
+
+	s.aliasMu.RLock()
+	defer s.aliasMu.RUnlock()
+
+	ae, exists := s.aliases[alias]
+	if !exists {
+		return nil, &config.KeyNotFoundError{Key: alias}
+	}
+
+	return ae.toValue(), nil
+}
+
+// ListAliases returns all registered aliases as a map of alias → Value.
+func (s *Store) ListAliases(ctx context.Context) (map[string]config.Value, error) {
+	if s.closed.Load() {
+		return nil, config.ErrStoreClosed
+	}
+
+	s.aliasMu.RLock()
+	defer s.aliasMu.RUnlock()
+
+	result := make(map[string]config.Value, len(s.aliases))
+	for k, ae := range s.aliases {
+		result[k] = ae.toValue()
+	}
+	return result, nil
 }

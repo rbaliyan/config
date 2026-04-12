@@ -83,15 +83,19 @@ func (c *nsConfig) Namespace() string {
 // Get retrieves a configuration value by key.
 // It first attempts to fetch from the store. If the store is unavailable,
 // it falls back to cached values for resilience.
+// If the key is an alias, it is transparently resolved to the canonical key.
 func (c *nsConfig) Get(ctx context.Context, key string) (Value, error) {
 	if !c.manager.isConnected() {
 		return nil, ErrManagerClosed
 	}
 
-	// Validate key
+	// Validate key before alias resolution (alias itself must be a valid key)
 	if err := ValidateKey(key); err != nil {
 		return nil, err
 	}
+
+	// Resolve alias to canonical key
+	key = c.manager.aliases.resolve(key)
 
 	// Try to fetch from store first
 	value, err := c.manager.store.Get(ctx, c.namespace, key)
@@ -127,15 +131,19 @@ func (c *nsConfig) Find(ctx context.Context, filter Filter) (Page, error) {
 }
 
 // Set creates or updates a configuration value.
+// If the key is an alias, the value is written to the canonical target key.
 func (c *nsConfig) Set(ctx context.Context, key string, value any, opts ...SetOption) error {
 	if !c.manager.isConnected() {
 		return ErrManagerClosed
 	}
 
-	// Validate key
+	// Validate key before alias resolution
 	if err := ValidateKey(key); err != nil {
 		return err
 	}
+
+	// Resolve alias to canonical key
+	key = c.manager.aliases.resolve(key)
 
 	// Apply options
 	setOpts := newSetOptions()
@@ -196,15 +204,19 @@ func (c *nsConfig) Set(ctx context.Context, key string, value any, opts ...SetOp
 }
 
 // Delete removes a configuration value by key.
+// If the key is an alias, the canonical target key is deleted.
 func (c *nsConfig) Delete(ctx context.Context, key string) error {
 	if !c.manager.isConnected() {
 		return ErrManagerClosed
 	}
 
-	// Validate key
+	// Validate key before alias resolution
 	if err := ValidateKey(key); err != nil {
 		return err
 	}
+
+	// Resolve alias to canonical key
+	key = c.manager.aliases.resolve(key)
 
 	if err := c.manager.store.Delete(ctx, c.namespace, key); err != nil {
 		return err
@@ -220,6 +232,7 @@ func (c *nsConfig) Delete(ctx context.Context, key string) error {
 
 // GetVersions retrieves version history for a configuration key.
 // Returns ErrVersioningNotSupported if the underlying store does not support versioning.
+// If the key is an alias, the version history of the canonical target key is returned.
 func (c *nsConfig) GetVersions(ctx context.Context, key string, filter VersionFilter) (VersionPage, error) {
 	if !c.manager.isConnected() {
 		return nil, ErrManagerClosed
@@ -227,6 +240,9 @@ func (c *nsConfig) GetVersions(ctx context.Context, key string, filter VersionFi
 	if err := ValidateKey(key); err != nil {
 		return nil, err
 	}
+
+	// Resolve alias to canonical key
+	key = c.manager.aliases.resolve(key)
 
 	vs, ok := c.manager.store.(VersionedStore)
 	if !ok {
