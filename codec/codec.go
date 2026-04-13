@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"context"
 	"fmt"
 	"sync"
 )
@@ -11,10 +12,10 @@ type Codec interface {
 	Name() string
 
 	// Encode serializes a value to bytes.
-	Encode(v any) ([]byte, error)
+	Encode(ctx context.Context, v any) ([]byte, error)
 
 	// Decode deserializes bytes into the target.
-	Decode(data []byte, v any) error
+	Decode(ctx context.Context, data []byte, v any) error
 }
 
 // Transformer defines a reversible byte-level transformation such as
@@ -24,10 +25,10 @@ type Transformer interface {
 	Name() string
 
 	// Transform applies the forward transformation to data.
-	Transform(data []byte) ([]byte, error)
+	Transform(ctx context.Context, data []byte) ([]byte, error)
 
 	// Reverse undoes the transformation, recovering the original data.
-	Reverse(data []byte) ([]byte, error)
+	Reverse(ctx context.Context, data []byte) ([]byte, error)
 }
 
 var (

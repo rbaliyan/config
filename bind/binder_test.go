@@ -197,7 +197,7 @@ func TestSetStruct(t *testing.T) {
 		t.Fatalf("Get error for app/name: %v", err)
 	}
 	var name string
-	if err := nameVal.Unmarshal(&name); err != nil {
+	if err := nameVal.Unmarshal(ctx, &name); err != nil {
 		t.Fatalf("Unmarshal error: %v", err)
 	}
 	if name != "myapp" {
@@ -209,7 +209,7 @@ func TestSetStruct(t *testing.T) {
 		t.Fatalf("Get error for app/version: %v", err)
 	}
 	var version string
-	if err := versionVal.Unmarshal(&version); err != nil {
+	if err := versionVal.Unmarshal(ctx, &version); err != nil {
 		t.Fatalf("Unmarshal error: %v", err)
 	}
 	if version != "1.0.0" {
@@ -249,7 +249,7 @@ func TestSetStructNested(t *testing.T) {
 		t.Fatalf("Get error for app/cache/ttl: %v", err)
 	}
 	var ttl int
-	if err := ttlVal.Unmarshal(&ttl); err != nil {
+	if err := ttlVal.Unmarshal(ctx, &ttl); err != nil {
 		t.Fatalf("Unmarshal error: %v", err)
 	}
 	if ttl != 300 {
@@ -261,7 +261,7 @@ func TestSetStructNested(t *testing.T) {
 		t.Fatalf("Get error for app/cache/enabled: %v", err)
 	}
 	var enabled bool
-	if err := enabledVal.Unmarshal(&enabled); err != nil {
+	if err := enabledVal.Unmarshal(ctx, &enabled); err != nil {
 		t.Fatalf("Unmarshal error: %v", err)
 	}
 	if !enabled {
@@ -337,7 +337,7 @@ func TestNonrecursiveTag(t *testing.T) {
 		t.Fatalf("Get error for app/name: %v", err)
 	}
 	var name string
-	if err := nameVal.Unmarshal(&name); err != nil {
+	if err := nameVal.Unmarshal(ctx, &name); err != nil {
 		t.Fatalf("Unmarshal error: %v", err)
 	}
 	if name != "myapp" {
@@ -350,7 +350,7 @@ func TestNonrecursiveTag(t *testing.T) {
 		t.Fatalf("Get error for app/creds: %v", err)
 	}
 	var creds Credentials
-	if err := credsVal.Unmarshal(&creds); err != nil {
+	if err := credsVal.Unmarshal(ctx, &creds); err != nil {
 		t.Fatalf("Unmarshal error for creds: %v", err)
 	}
 	if creds.Username != "admin" || creds.Password != "secret" {

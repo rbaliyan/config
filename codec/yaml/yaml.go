@@ -2,6 +2,8 @@
 package yaml
 
 import (
+	"context"
+
 	"github.com/rbaliyan/config/codec"
 	"gopkg.in/yaml.v3"
 )
@@ -22,12 +24,12 @@ func (c *yamlCodec) Name() string {
 }
 
 // Encode encodes a value to YAML bytes.
-func (c *yamlCodec) Encode(v any) ([]byte, error) {
+func (c *yamlCodec) Encode(_ context.Context, v any) ([]byte, error) {
 	return yaml.Marshal(v)
 }
 
 // Decode decodes YAML bytes into a value.
-func (c *yamlCodec) Decode(data []byte, v any) error {
+func (c *yamlCodec) Decode(_ context.Context, data []byte, v any) error {
 	return yaml.Unmarshal(data, v)
 }
 

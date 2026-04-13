@@ -1,6 +1,8 @@
 package mongodb
 
 import (
+	"context"
+
 	"github.com/rbaliyan/config/codec"
 	yamlcodec "github.com/rbaliyan/config/codec/yaml"
 )
@@ -19,6 +21,6 @@ var (
 	_ BSONValueCodec = (*yamlBSONCodec)(nil)
 )
 
-func (c *yamlBSONCodec) Name() string                    { return c.inner.Name() }
-func (c *yamlBSONCodec) Encode(v any) ([]byte, error)    { return c.inner.Encode(v) }
-func (c *yamlBSONCodec) Decode(data []byte, v any) error { return c.inner.Decode(data, v) }
+func (c *yamlBSONCodec) Name() string                                         { return c.inner.Name() }
+func (c *yamlBSONCodec) Encode(ctx context.Context, v any) ([]byte, error)    { return c.inner.Encode(ctx, v) }
+func (c *yamlBSONCodec) Decode(ctx context.Context, data []byte, v any) error { return c.inner.Decode(ctx, data, v) }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -15,10 +16,10 @@ import (
 // like WriteMode are accessed via the WriteModer interface.
 type Value interface {
 	// Marshal serializes the value to bytes using the configured codec.
-	Marshal() ([]byte, error)
+	Marshal(ctx context.Context) ([]byte, error)
 
 	// Unmarshal deserializes the value into the target.
-	Unmarshal(v any) error
+	Unmarshal(ctx context.Context, v any) error
 
 	// Type returns the detected type of the value.
 	Type() Type
@@ -176,10 +177,10 @@ type rawCodec struct {
 }
 
 func (r *rawCodec) Name() string { return r.name }
-func (r *rawCodec) Encode(any) ([]byte, error) {
+func (r *rawCodec) Encode(_ context.Context, _ any) ([]byte, error) {
 	return nil, fmt.Errorf("rawCodec %q: encode not supported", r.name)
 }
-func (r *rawCodec) Decode([]byte, any) error {
+func (r *rawCodec) Decode(_ context.Context, _ []byte, _ any) error {
 	return fmt.Errorf("rawCodec %q: decode not supported", r.name)
 }
 
@@ -221,7 +222,7 @@ func NewValue(data any, opts ...ValueOption) Value {
 // NewValueFromBytes creates a Value from encoded bytes.
 // If the named codec is not registered and differs from the default codec,
 // the bytes are stored as a raw pass-through value (see NewRawValue).
-func NewValueFromBytes(data []byte, codecName string, opts ...ValueOption) (Value, error) {
+func NewValueFromBytes(ctx context.Context, data []byte, codecName string, opts ...ValueOption) (Value, error) {
 	c := codec.Get(codecName)
 	if c == nil {
 		if codecName != "" && codecName != codec.Default().Name() {
@@ -231,7 +232,7 @@ func NewValueFromBytes(data []byte, codecName string, opts ...ValueOption) (Valu
 	}
 
 	var raw any
-	if err := c.Decode(data, &raw); err != nil {
+	if err := c.Decode(ctx, data, &raw); err != nil {
 		return nil, fmt.Errorf("decode value: %w", err)
 	}
 
@@ -308,7 +309,7 @@ func (w *staleMetadataWrapper) IsStale() bool {
 var _ Value = (*val)(nil)
 
 // Marshal serializes the value to bytes using the configured codec.
-func (v *val) Marshal() ([]byte, error) {
+func (v *val) Marshal(ctx context.Context) ([]byte, error) {
 	if v.raw == nil {
 		return nil, ErrInvalidValue
 	}
@@ -318,18 +319,18 @@ func (v *val) Marshal() ([]byte, error) {
 		return v.data, nil
 	}
 
-	return v.codec.Encode(v.raw)
+	return v.codec.Encode(ctx, v.raw)
 }
 
 // Unmarshal deserializes the value into the target.
-func (v *val) Unmarshal(target any) error {
+func (v *val) Unmarshal(ctx context.Context, target any) error {
 	if v.raw == nil {
 		return ErrInvalidValue
 	}
 
 	// If we have raw bytes, use the codec
 	if v.data != nil && v.codec != nil {
-		return v.codec.Decode(v.data, target)
+		return v.codec.Decode(ctx, v.data, target)
 	}
 
 	// Otherwise use JSON round-trip

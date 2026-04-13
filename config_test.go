@@ -1101,10 +1101,11 @@ func TestWatchStatus(t *testing.T) {
 }
 
 func TestValueUnmarshal(t *testing.T) {
+	ctx := context.Background()
 	val := config.NewValue(map[string]any{"name": "test", "count": float64(42)})
 
 	var result map[string]any
-	if err := val.Unmarshal(&result); err != nil {
+	if err := val.Unmarshal(ctx, &result); err != nil {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
 	if result["name"] != "test" {
@@ -1150,7 +1151,7 @@ func TestValueTypeConversionsExtended(t *testing.T) {
 
 func TestValueMarshal(t *testing.T) {
 	val := config.NewValue("hello")
-	data, err := val.Marshal()
+	data, err := val.Marshal(context.Background())
 	if err != nil {
 		t.Fatalf("Marshal failed: %v", err)
 	}
@@ -1295,8 +1296,9 @@ func TestManagerConnectTwice(t *testing.T) {
 }
 
 func TestNewValueFromBytesError(t *testing.T) {
+	ctx := context.Background()
 	// Unknown codec name returns a raw pass-through value.
-	val, err := config.NewValueFromBytes([]byte(`"hello"`), "nonexistent")
+	val, err := config.NewValueFromBytes(ctx, []byte(`"hello"`), "nonexistent")
 	if err != nil {
 		t.Fatalf("NewValueFromBytes with unknown codec should return raw value, got: %v", err)
 	}
@@ -1308,7 +1310,7 @@ func TestNewValueFromBytesError(t *testing.T) {
 	}
 
 	// Empty codec name falls back to default.
-	val2, err := config.NewValueFromBytes([]byte(`"hello"`), "")
+	val2, err := config.NewValueFromBytes(ctx, []byte(`"hello"`), "")
 	if err != nil {
 		t.Fatalf("NewValueFromBytes with empty codec: %v", err)
 	}
@@ -1317,7 +1319,7 @@ func TestNewValueFromBytesError(t *testing.T) {
 	}
 
 	// Invalid bytes with a known codec should error.
-	_, err = config.NewValueFromBytes([]byte("not-json"), "json")
+	_, err = config.NewValueFromBytes(ctx, []byte("not-json"), "json")
 	if err == nil {
 		t.Error("Expected error for invalid JSON bytes")
 	}
@@ -1338,8 +1340,9 @@ func TestNewRawValue(t *testing.T) {
 		t.Errorf("Type() = %v, want TypeCustom", v.Type())
 	}
 
+	ctx := context.Background()
 	// Marshal returns the exact bytes.
-	data, err := v.Marshal()
+	data, err := v.Marshal(ctx)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
@@ -1349,7 +1352,7 @@ func TestNewRawValue(t *testing.T) {
 
 	// Unmarshal should fail because rawCodec.Decode is unsupported.
 	var s string
-	if err := v.Unmarshal(&s); err == nil {
+	if err := v.Unmarshal(ctx, &s); err == nil {
 		t.Error("expected error from Unmarshal on raw value")
 	}
 
@@ -1517,8 +1520,8 @@ func (m *customMetadata) CreatedAt() time.Time { return time.Time{} }
 func (m *customMetadata) UpdatedAt() time.Time { return time.Time{} }
 func (m *customMetadata) IsStale() bool        { return false }
 
-func (v *customValue) Marshal() ([]byte, error) { return json.Marshal(v.raw) }
-func (v *customValue) Unmarshal(target any) error {
+func (v *customValue) Marshal(_ context.Context) ([]byte, error) { return json.Marshal(v.raw) }
+func (v *customValue) Unmarshal(_ context.Context, target any) error {
 	data, _ := json.Marshal(v.raw)
 	return json.Unmarshal(data, target)
 }
@@ -1855,7 +1858,7 @@ func TestValueStringEdgeCases(t *testing.T) {
 // TestValueMarshalNil tests Marshal with nil raw value.
 func TestValueMarshalNil(t *testing.T) {
 	val := config.NewValue(nil)
-	_, err := val.Marshal()
+	_, err := val.Marshal(context.Background())
 	if err == nil {
 		t.Error("Marshal() with nil should return error")
 	}
@@ -1868,7 +1871,7 @@ func TestValueMarshalNil(t *testing.T) {
 func TestValueUnmarshalNil(t *testing.T) {
 	val := config.NewValue(nil)
 	var target string
-	err := val.Unmarshal(&target)
+	err := val.Unmarshal(context.Background(), &target)
 	if err == nil {
 		t.Error("Unmarshal() with nil should return error")
 	}
@@ -1879,12 +1882,13 @@ func TestValueUnmarshalNil(t *testing.T) {
 
 // TestValueMarshalWithPreEncodedData tests Marshal when data is already encoded.
 func TestValueMarshalWithPreEncodedData(t *testing.T) {
-	val, err := config.NewValueFromBytes([]byte(`"hello"`), "json")
+	ctx := context.Background()
+	val, err := config.NewValueFromBytes(ctx, []byte(`"hello"`), "json")
 	if err != nil {
 		t.Fatalf("NewValueFromBytes failed: %v", err)
 	}
 
-	data, err := val.Marshal()
+	data, err := val.Marshal(ctx)
 	if err != nil {
 		t.Fatalf("Marshal failed: %v", err)
 	}
@@ -1895,13 +1899,14 @@ func TestValueMarshalWithPreEncodedData(t *testing.T) {
 
 // TestValueUnmarshalWithCodecData tests Unmarshal using codec path.
 func TestValueUnmarshalWithCodecData(t *testing.T) {
-	val, err := config.NewValueFromBytes([]byte(`{"name":"test"}`), "json")
+	ctx := context.Background()
+	val, err := config.NewValueFromBytes(ctx, []byte(`{"name":"test"}`), "json")
 	if err != nil {
 		t.Fatalf("NewValueFromBytes failed: %v", err)
 	}
 
 	var result map[string]any
-	if err := val.Unmarshal(&result); err != nil {
+	if err := val.Unmarshal(ctx, &result); err != nil {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
 	if result["name"] != "test" {
@@ -2096,7 +2101,7 @@ func TestValueMetadataNil(t *testing.T) {
 
 // TestNewValueFromBytesValid tests NewValueFromBytes with valid JSON.
 func TestNewValueFromBytesValid(t *testing.T) {
-	val, err := config.NewValueFromBytes([]byte(`42`), "json",
+	val, err := config.NewValueFromBytes(context.Background(), []byte(`42`), "json",
 		config.WithValueType(config.TypeInt),
 		config.WithValueMetadata(1, time.Now(), time.Now()),
 	)

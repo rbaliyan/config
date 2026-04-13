@@ -267,7 +267,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	}
 
 	// Validate that the value can be marshaled (same as real stores).
-	if _, err := value.Marshal(); err != nil {
+	if _, err := value.Marshal(ctx); err != nil {
 		return nil, config.WrapStoreError("marshal", "memory", key, err)
 	}
 
@@ -623,7 +623,7 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 		}
 
 		// Validate that the value can be marshaled.
-		if _, err := value.Marshal(); err != nil {
+		if _, err := value.Marshal(ctx); err != nil {
 			keyErrors[key] = config.WrapStoreError("marshal", "memory", key, err)
 			continue
 		}

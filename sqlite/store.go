@@ -289,7 +289,7 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 	updatedAt, _ := time.Parse(sqliteTimestampFormat, updatedAtStr)
 
 	return config.NewValueFromBytes(
-		value,
+		ctx, value,
 		codecName,
 		config.WithValueType(valueType),
 		config.WithValueMetadata(version, createdAt, updatedAt),
@@ -310,7 +310,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		return nil, err
 	}
 
-	data, err := value.Marshal()
+	data, err := value.Marshal(ctx)
 	if err != nil {
 		return nil, config.WrapStoreError("marshal", "sqlite", key, err)
 	}
@@ -537,7 +537,7 @@ func (s *Store) executeListQuery(ctx context.Context, query string, args []any) 
 		updatedAt, _ := time.Parse(sqliteTimestampFormat, updatedAtStr)
 
 		val, err := config.NewValueFromBytes(
-			value,
+			ctx, value,
 			codecName,
 			config.WithValueType(valueType),
 			config.WithValueMetadata(version, createdAt, updatedAt),
@@ -714,7 +714,7 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 		updatedAt, _ := time.Parse(sqliteTimestampFormat, updatedAtStr)
 
 		val, err := config.NewValueFromBytes(
-			value,
+			ctx, value,
 			codecName,
 			config.WithValueType(valueType),
 			config.WithValueMetadata(version, createdAt, updatedAt),
@@ -770,7 +770,7 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			continue
 		}
 
-		data, err := value.Marshal()
+		data, err := value.Marshal(ctx)
 		if err != nil {
 			keyErrors[key] = config.WrapStoreError("marshal", "sqlite", key, err)
 			continue

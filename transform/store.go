@@ -78,12 +78,12 @@ func (s *transformStore) Get(ctx context.Context, namespace, key string) (config
 	if err != nil {
 		return nil, err
 	}
-	return s.reverseValue(v)
+	return s.reverseValue(ctx, v)
 }
 
 // Set transforms the value before storing, then reverses the returned result.
 func (s *transformStore) Set(ctx context.Context, namespace, key string, value config.Value) (config.Value, error) {
-	tv, err := s.transformValue(value)
+	tv, err := s.transformValue(ctx, value)
 	if err != nil {
 		return nil, fmt.Errorf("transform: set transform: %w", err)
 	}
@@ -91,7 +91,7 @@ func (s *transformStore) Set(ctx context.Context, namespace, key string, value c
 	if err != nil {
 		return nil, err
 	}
-	return s.reverseValue(result)
+	return s.reverseValue(ctx, result)
 }
 
 // Delete delegates to the inner store.
@@ -109,7 +109,7 @@ func (s *transformStore) Find(ctx context.Context, namespace string, filter conf
 	results := page.Results()
 	reversed := make(map[string]config.Value, len(results))
 	for k, v := range results {
-		rv, err := s.reverseValue(v)
+		rv, err := s.reverseValue(ctx, v)
 		if err != nil {
 			return nil, fmt.Errorf("transform: find reverse key %q: %w", k, err)
 		}
@@ -141,7 +141,7 @@ func (s *transformStore) Watch(ctx context.Context, filter config.WatchFilter) (
 					return
 				}
 				if evt.Value != nil {
-					rv, err := s.reverseValue(evt.Value)
+					rv, err := s.reverseValue(ctx, evt.Value)
 					if err != nil {
 						// Skip events that fail to reverse — watch is for
 						// cache invalidation so we don't crash the loop.
@@ -194,7 +194,7 @@ func (s *transformStore) GetMany(ctx context.Context, namespace string, keys []s
 		}
 		reversed := make(map[string]config.Value, len(results))
 		for k, v := range results {
-			rv, err := s.reverseValue(v)
+			rv, err := s.reverseValue(ctx, v)
 			if err != nil {
 				return nil, fmt.Errorf("transform: get_many reverse key %q: %w", k, err)
 			}
@@ -220,7 +220,7 @@ func (s *transformStore) GetMany(ctx context.Context, namespace string, keys []s
 func (s *transformStore) SetMany(ctx context.Context, namespace string, values map[string]config.Value) error {
 	transformed := make(map[string]config.Value, len(values))
 	for k, v := range values {
-		tv, err := s.transformValue(v)
+		tv, err := s.transformValue(ctx, v)
 		if err != nil {
 			return fmt.Errorf("transform: set_many transform key %q: %w", k, err)
 		}
@@ -275,7 +275,7 @@ func (s *transformStore) GetVersions(ctx context.Context, namespace, key string,
 	versions := page.Versions()
 	reversed := make([]config.Value, len(versions))
 	for i, v := range versions {
-		rv, err := s.reverseValue(v)
+		rv, err := s.reverseValue(ctx, v)
 		if err != nil {
 			return nil, fmt.Errorf("transform: get_versions reverse version %d: %w", v.Metadata().Version(), err)
 		}
@@ -286,13 +286,13 @@ func (s *transformStore) GetVersions(ctx context.Context, namespace, key string,
 }
 
 // transformValue applies the forward transformation for Set operations.
-func (s *transformStore) transformValue(value config.Value) (config.Value, error) {
-	data, err := value.Marshal()
+func (s *transformStore) transformValue(ctx context.Context, value config.Value) (config.Value, error) {
+	data, err := value.Marshal(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("marshal: %w", err)
 	}
 
-	transformed, err := s.transformer.Transform(data)
+	transformed, err := s.transformer.Transform(ctx, data)
 	if err != nil {
 		return nil, fmt.Errorf("transform: %w", err)
 	}
@@ -302,19 +302,19 @@ func (s *transformStore) transformValue(value config.Value) (config.Value, error
 }
 
 // reverseValue applies the reverse transformation for Get operations.
-func (s *transformStore) reverseValue(value config.Value) (config.Value, error) {
-	data, err := value.Marshal()
+func (s *transformStore) reverseValue(ctx context.Context, value config.Value) (config.Value, error) {
+	data, err := value.Marshal(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("marshal: %w", err)
 	}
 
-	reversed, err := s.transformer.Reverse(data)
+	reversed, err := s.transformer.Reverse(ctx, data)
 	if err != nil {
 		return nil, fmt.Errorf("reverse: %w", err)
 	}
 
 	opts := valueOptions(value)
-	rv, err := config.NewValueFromBytes(reversed, value.Codec(), opts...)
+	rv, err := config.NewValueFromBytes(ctx, reversed, value.Codec(), opts...)
 	if err != nil {
 		return nil, fmt.Errorf("new value from bytes: %w", err)
 	}

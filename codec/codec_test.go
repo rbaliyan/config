@@ -1,6 +1,7 @@
 package codec_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/rbaliyan/config/codec"
@@ -74,9 +75,9 @@ func TestRegisterNilReturnsError(t *testing.T) {
 
 type emptyNameCodec struct{}
 
-func (e emptyNameCodec) Name() string                    { return "" }
-func (e emptyNameCodec) Encode(v any) ([]byte, error)    { return nil, nil }
-func (e emptyNameCodec) Decode(data []byte, v any) error { return nil }
+func (e emptyNameCodec) Name() string                                        { return "" }
+func (e emptyNameCodec) Encode(_ context.Context, _ any) ([]byte, error)     { return nil, nil }
+func (e emptyNameCodec) Decode(_ context.Context, _ []byte, _ any) error     { return nil }
 
 func TestRegisterEmptyNameReturnsError(t *testing.T) {
 	if err := codec.Register(emptyNameCodec{}); err == nil {
@@ -85,20 +86,21 @@ func TestRegisterEmptyNameReturnsError(t *testing.T) {
 }
 
 func TestJSONCodec(t *testing.T) {
+	ctx := context.Background()
 	c := codec.Get("json")
 	if c == nil {
 		t.Fatal("json codec not found")
 	}
 
 	// Test encoding
-	data, err := c.Encode(map[string]int{"a": 1, "b": 2})
+	data, err := c.Encode(ctx, map[string]int{"a": 1, "b": 2})
 	if err != nil {
 		t.Fatalf("encode error: %v", err)
 	}
 
 	// Test decoding
 	var result map[string]int
-	if err := c.Decode(data, &result); err != nil {
+	if err := c.Decode(ctx, data, &result); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
 
@@ -108,20 +110,21 @@ func TestJSONCodec(t *testing.T) {
 }
 
 func TestYAMLCodec(t *testing.T) {
+	ctx := context.Background()
 	c := codec.Get("yaml")
 	if c == nil {
 		t.Fatal("yaml codec not found")
 	}
 
 	// Test encoding
-	data, err := c.Encode(map[string]string{"name": "test"})
+	data, err := c.Encode(ctx, map[string]string{"name": "test"})
 	if err != nil {
 		t.Fatalf("encode error: %v", err)
 	}
 
 	// Test decoding
 	var result map[string]string
-	if err := c.Decode(data, &result); err != nil {
+	if err := c.Decode(ctx, data, &result); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
 
@@ -131,20 +134,21 @@ func TestYAMLCodec(t *testing.T) {
 }
 
 func TestTOMLCodec(t *testing.T) {
+	ctx := context.Background()
 	c := codec.Get("toml")
 	if c == nil {
 		t.Fatal("toml codec not found")
 	}
 
 	// Test encoding
-	data, err := c.Encode(map[string]any{"enabled": true, "count": 42})
+	data, err := c.Encode(ctx, map[string]any{"enabled": true, "count": 42})
 	if err != nil {
 		t.Fatalf("encode error: %v", err)
 	}
 
 	// Test decoding
 	var result map[string]any
-	if err := c.Decode(data, &result); err != nil {
+	if err := c.Decode(ctx, data, &result); err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
 
@@ -154,6 +158,8 @@ func TestTOMLCodec(t *testing.T) {
 }
 
 func TestCodecRoundTrip(t *testing.T) {
+	ctx := context.Background()
+
 	type Config struct {
 		Name    string   `json:"name" yaml:"name" toml:"name"`
 		Port    int      `json:"port" yaml:"port" toml:"port"`
@@ -176,14 +182,14 @@ func TestCodecRoundTrip(t *testing.T) {
 			}
 
 			// Encode
-			data, err := c.Encode(original)
+			data, err := c.Encode(ctx, original)
 			if err != nil {
 				t.Fatalf("encode error: %v", err)
 			}
 
 			// Decode
 			var result Config
-			if err := c.Decode(data, &result); err != nil {
+			if err := c.Decode(ctx, data, &result); err != nil {
 				t.Fatalf("decode error: %v", err)
 			}
 

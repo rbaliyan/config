@@ -1,6 +1,9 @@
 package toml
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func FuzzTOMLCodecDecode(f *testing.F) {
 	f.Add([]byte("key = \"value\"\nnum = 42"))
@@ -13,6 +16,6 @@ func FuzzTOMLCodecDecode(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		var v any
-		_ = New().Decode(data, &v)
+		_ = New().Decode(context.Background(), data, &v)
 	})
 }

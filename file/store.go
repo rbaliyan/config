@@ -54,8 +54,9 @@ type storeEntry struct {
 	updatedAt time.Time
 }
 
-func (e *storeEntry) toValue() (config.Value, error) {
+func (e *storeEntry) toValue(ctx context.Context) (config.Value, error) {
 	return config.NewValueFromBytes(
+		ctx,
 		e.value,
 		e.codec,
 		config.WithValueType(e.valueType),
@@ -164,7 +165,7 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 		return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
 	}
 
-	return e.toValue()
+	return e.toValue(ctx)
 }
 
 // Set is not supported for file-backed stores.
@@ -199,7 +200,7 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 	if keys := filter.Keys(); len(keys) > 0 {
 		for _, key := range keys {
 			if e, ok := nsEntries[key]; ok {
-				val, err := e.toValue()
+				val, err := e.toValue(ctx)
 				if err != nil {
 					return nil, fmt.Errorf("file: find key %q in %q: %w", key, namespace, err)
 				}
@@ -244,7 +245,7 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 
 	var lastID string
 	for _, m := range matching {
-		val, err := m.e.toValue()
+		val, err := m.e.toValue(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("file: find key %q in %q: %w", m.e.key, namespace, err)
 		}
@@ -341,7 +342,7 @@ func (s *Store) addEntryValidated(namespace, key string, value any, now time.Tim
 // addEntry creates a store entry for a single key-value pair.
 func (s *Store) addEntry(namespace, key string, value any, now time.Time) error {
 	c := codec.Default()
-	data, err := c.Encode(value)
+	data, err := c.Encode(context.Background(), value)
 	if err != nil {
 		return fmt.Errorf("encode %q/%q: %w", namespace, key, err)
 	}

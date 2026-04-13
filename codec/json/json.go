@@ -2,6 +2,7 @@
 package json
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/rbaliyan/config/codec"
@@ -21,11 +22,11 @@ func (c *jsonCodec) Name() string {
 	return "json"
 }
 
-func (c *jsonCodec) Encode(v any) ([]byte, error) {
+func (c *jsonCodec) Encode(_ context.Context, v any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
-func (c *jsonCodec) Decode(data []byte, v any) error {
+func (c *jsonCodec) Decode(_ context.Context, data []byte, v any) error {
 	return json.Unmarshal(data, v)
 }
 

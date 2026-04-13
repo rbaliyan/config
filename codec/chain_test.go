@@ -1,6 +1,7 @@
 package codec_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -16,7 +17,7 @@ type rot1 struct {
 
 func (r *rot1) Name() string { return r.name }
 
-func (r *rot1) Transform(data []byte) ([]byte, error) {
+func (r *rot1) Transform(_ context.Context, data []byte) ([]byte, error) {
 	out := make([]byte, len(data))
 	for i, b := range data {
 		out[i] = b + 1
@@ -24,7 +25,7 @@ func (r *rot1) Transform(data []byte) ([]byte, error) {
 	return out, nil
 }
 
-func (r *rot1) Reverse(data []byte) ([]byte, error) {
+func (r *rot1) Reverse(_ context.Context, data []byte) ([]byte, error) {
 	out := make([]byte, len(data))
 	for i, b := range data {
 		out[i] = b - 1
@@ -41,14 +42,14 @@ type fakeCodec struct {
 
 func (f *fakeCodec) Name() string { return f.name }
 
-func (f *fakeCodec) Encode(v any) ([]byte, error) {
+func (f *fakeCodec) Encode(_ context.Context, v any) ([]byte, error) {
 	if f.encodeErr != nil {
 		return nil, f.encodeErr
 	}
 	return []byte(v.(string)), nil
 }
 
-func (f *fakeCodec) Decode(data []byte, v any) error {
+func (f *fakeCodec) Decode(_ context.Context, data []byte, v any) error {
 	if f.decodeErr != nil {
 		return f.decodeErr
 	}
@@ -65,14 +66,14 @@ type failTransformer struct {
 
 func (f *failTransformer) Name() string { return f.name }
 
-func (f *failTransformer) Transform(data []byte) ([]byte, error) {
+func (f *failTransformer) Transform(_ context.Context, data []byte) ([]byte, error) {
 	if f.transformErr != nil {
 		return nil, f.transformErr
 	}
 	return data, nil
 }
 
-func (f *failTransformer) Reverse(data []byte) ([]byte, error) {
+func (f *failTransformer) Reverse(_ context.Context, data []byte) ([]byte, error) {
 	if f.reverseErr != nil {
 		return nil, f.reverseErr
 	}
@@ -98,6 +99,7 @@ func TestNewChainNilBasePanics(t *testing.T) {
 }
 
 func TestNewChainSingleTransformer(t *testing.T) {
+	ctx := context.Background()
 	base := &fakeCodec{name: "json"}
 	c := codec.NewChain(base, &rot1{name: "rot"})
 
@@ -105,13 +107,13 @@ func TestNewChainSingleTransformer(t *testing.T) {
 		t.Errorf("Name() = %q, want %q", c.Name(), "rot:json")
 	}
 
-	data, err := c.Encode("abc")
+	data, err := c.Encode(ctx, "abc")
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
 
 	var got string
-	if err := c.Decode(data, &got); err != nil {
+	if err := c.Decode(ctx, data, &got); err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
 	if got != "abc" {
@@ -120,6 +122,7 @@ func TestNewChainSingleTransformer(t *testing.T) {
 }
 
 func TestNewChainMultipleTransformers(t *testing.T) {
+	ctx := context.Background()
 	base := &fakeCodec{name: "json"}
 	c := codec.NewChain(base, &rot1{name: "encrypted"}, &rot1{name: "client"})
 
@@ -127,7 +130,7 @@ func TestNewChainMultipleTransformers(t *testing.T) {
 		t.Errorf("Name() = %q, want %q", c.Name(), "client:encrypted:json")
 	}
 
-	data, err := c.Encode("xyz")
+	data, err := c.Encode(ctx, "xyz")
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -140,7 +143,7 @@ func TestNewChainMultipleTransformers(t *testing.T) {
 	}
 
 	var got string
-	if err := c.Decode(data, &got); err != nil {
+	if err := c.Decode(ctx, data, &got); err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
 	if got != "xyz" {
@@ -149,10 +152,11 @@ func TestNewChainMultipleTransformers(t *testing.T) {
 }
 
 func TestNewChainBaseEncodeError(t *testing.T) {
+	ctx := context.Background()
 	base := &fakeCodec{name: "json", encodeErr: errors.New("encode boom")}
 	c := codec.NewChain(base, &rot1{name: "rot"})
 
-	_, err := c.Encode("x")
+	_, err := c.Encode(ctx, "x")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -162,13 +166,14 @@ func TestNewChainBaseEncodeError(t *testing.T) {
 }
 
 func TestNewChainTransformError(t *testing.T) {
+	ctx := context.Background()
 	base := &fakeCodec{name: "json"}
 	c := codec.NewChain(base,
 		&failTransformer{name: "ok"},
 		&failTransformer{name: "bad", transformErr: errors.New("transform boom")},
 	)
 
-	_, err := c.Encode("x")
+	_, err := c.Encode(ctx, "x")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -178,18 +183,19 @@ func TestNewChainTransformError(t *testing.T) {
 }
 
 func TestNewChainReverseError(t *testing.T) {
+	ctx := context.Background()
 	base := &fakeCodec{name: "json"}
 	c := codec.NewChain(base,
 		&failTransformer{name: "bad", reverseErr: errors.New("reverse boom")},
 	)
 
-	_, err := c.Encode("x")
+	_, err := c.Encode(ctx, "x")
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
 
 	var got string
-	err = c.Decode([]byte("x"), &got)
+	err = c.Decode(ctx, []byte("x"), &got)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -199,16 +205,17 @@ func TestNewChainReverseError(t *testing.T) {
 }
 
 func TestNewChainBaseDecodeError(t *testing.T) {
+	ctx := context.Background()
 	base := &fakeCodec{name: "json", decodeErr: errors.New("decode boom")}
 	c := codec.NewChain(base, &rot1{name: "rot"})
 
-	data, err := c.Encode("x")
+	data, err := c.Encode(ctx, "x")
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
 
 	var got string
-	err = c.Decode(data, &got)
+	err = c.Decode(ctx, data, &got)
 	if err == nil {
 		t.Fatal("expected error")
 	}

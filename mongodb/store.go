@@ -135,7 +135,7 @@ type mongoEntry struct {
 	UpdatedAt time.Time     `bson:"updated_at"`
 }
 
-func (e *mongoEntry) toValue() (config.Value, error) {
+func (e *mongoEntry) toValue(ctx context.Context) (config.Value, error) {
 	c := codec.Get(e.Codec)
 	if c == nil {
 		return nil, fmt.Errorf("read value for key %q: codec %q not registered", e.Key, e.Codec)
@@ -145,6 +145,7 @@ func (e *mongoEntry) toValue() (config.Value, error) {
 		return nil, fmt.Errorf("read value for key %q: %w", e.Key, err)
 	}
 	return config.NewValueFromBytes(
+		ctx,
 		data,
 		e.Codec,
 		config.WithValueType(e.Type),
@@ -589,7 +590,7 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 		return nil, config.WrapStoreError("get", "mongodb", key, err)
 	}
 
-	return doc.toValue()
+	return doc.toValue(ctx)
 }
 
 // Set creates or updates a configuration value.
@@ -606,7 +607,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	}
 
 	// Marshal the value
-	data, err := value.Marshal()
+	data, err := value.Marshal(ctx)
 	if err != nil {
 		return nil, config.WrapStoreError("marshal", "mongodb", key, err)
 	}
@@ -649,7 +650,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		if oid, ok := result.InsertedID.(bson.ObjectID); ok {
 			doc.ID = oid
 		}
-		return doc.toValue()
+		return doc.toValue(ctx)
 
 	case config.WriteModeUpdate:
 		// Update only - fail if document doesn't exist
@@ -679,7 +680,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 			}
 			return nil, config.WrapStoreError("set", "mongodb", key, err)
 		}
-		return doc.toValue()
+		return doc.toValue(ctx)
 
 	default:
 		// Upsert (default) - create or update
@@ -711,7 +712,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		if err != nil {
 			return nil, config.WrapStoreError("set", "mongodb", key, err)
 		}
-		return doc.toValue()
+		return doc.toValue(ctx)
 	}
 }
 
@@ -811,7 +812,7 @@ func (s *Store) executeListQuery(ctx context.Context, filter bson.M, opts *optio
 		if err := cursor.Decode(&doc); err != nil {
 			return nil, "", config.WrapStoreError("list", "mongodb", "", err)
 		}
-		val, err := doc.toValue()
+		val, err := doc.toValue(ctx)
 		if err != nil {
 			s.logger().Warn("skipping corrupt entry in list query",
 				"key", doc.Key, "namespace", doc.Namespace, "error", err)
@@ -972,7 +973,7 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 		if err := cursor.Decode(&doc); err != nil {
 			return nil, config.WrapStoreError("get_many", "mongodb", "", err)
 		}
-		val, err := doc.toValue()
+		val, err := doc.toValue(ctx)
 		if err != nil {
 			s.logger().Warn("skipping corrupt entry in get_many",
 				"key", doc.Key, "namespace", doc.Namespace, "error", err)
@@ -1016,7 +1017,7 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			continue
 		}
 
-		data, err := value.Marshal()
+		data, err := value.Marshal(ctx)
 		if err != nil {
 			keyErrors[key] = config.WrapStoreError("marshal", "mongodb", key, err)
 			continue
@@ -1232,7 +1233,7 @@ func (s *Store) processChangeStream(stream *mongo.ChangeStream, ctx context.Cont
 		if eventType != config.ChangeTypeDelete {
 			event.Namespace = change.FullDocument.Namespace
 			event.Key = change.FullDocument.Key
-			val, err := change.FullDocument.toValue()
+			val, err := change.FullDocument.toValue(ctx)
 			if err != nil {
 				s.logger().Warn("failed to convert change stream document to value",
 					"key", change.FullDocument.Key, "namespace", change.FullDocument.Namespace, "error", err)

@@ -1,6 +1,7 @@
 package yaml
 
 import (
+	"context"
 	"testing"
 
 	"github.com/rbaliyan/config/codec"
@@ -29,13 +30,14 @@ func TestRoundTrip(t *testing.T) {
 	}
 
 	original := Config{Host: "localhost", Port: 8080}
-	data, err := c.Encode(original)
+	ctx := context.Background()
+	data, err := c.Encode(ctx, original)
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
 
 	var got Config
-	if err := c.Decode(data, &got); err != nil {
+	if err := c.Decode(ctx, data, &got); err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
 	if got != original {

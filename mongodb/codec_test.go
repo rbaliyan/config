@@ -1,6 +1,7 @@
 package mongodb
 
 import (
+	"context"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -86,8 +87,9 @@ func TestStringBSONAdapter_RoundTrip(t *testing.T) {
 // --- bsonCodec BSONValueCodec tests ---
 
 func TestBsonCodec_ToBSON(t *testing.T) {
+	ctx := context.Background()
 	c := &bsonCodec{}
-	encoded, err := c.Encode("test")
+	encoded, err := c.Encode(ctx, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,9 +113,10 @@ func TestBsonCodec_ToBSON_Empty(t *testing.T) {
 }
 
 func TestBsonCodec_FromBSON(t *testing.T) {
+	ctx := context.Background()
 	c := &bsonCodec{}
 	// Encode a value, convert to BSON, convert back, decode
-	encoded, err := c.Encode(int32(42))
+	encoded, err := c.Encode(ctx, int32(42))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +132,7 @@ func TestBsonCodec_FromBSON(t *testing.T) {
 	}
 
 	var result int32
-	if err := c.Decode(got, &result); err != nil {
+	if err := c.Decode(ctx, got, &result); err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
 	if result != 42 {
@@ -140,9 +143,10 @@ func TestBsonCodec_FromBSON(t *testing.T) {
 // --- toBSONValue / fromBSONValue dispatch tests ---
 
 func TestToBSONValue_WithBSONValueCodec(t *testing.T) {
+	ctx := context.Background()
 	// jsonBSONCodec implements BSONValueCodec
 	c := codec.Get("json")
-	data, err := c.Encode(map[string]string{"key": "value"})
+	data, err := c.Encode(ctx, map[string]string{"key": "value"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,6 +253,6 @@ func TestSupportsCodec_UnregisteredCodec(t *testing.T) {
 // used to test the BinData fallback path.
 type plainCodecForTest struct{}
 
-func (c *plainCodecForTest) Name() string                    { return "test-plain" }
-func (c *plainCodecForTest) Encode(v any) ([]byte, error)    { return nil, nil }
-func (c *plainCodecForTest) Decode(data []byte, v any) error { return nil }
+func (c *plainCodecForTest) Name() string                                            { return "test-plain" }
+func (c *plainCodecForTest) Encode(_ context.Context, _ any) ([]byte, error)         { return nil, nil }
+func (c *plainCodecForTest) Decode(_ context.Context, _ []byte, _ any) error         { return nil }
