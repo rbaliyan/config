@@ -57,7 +57,7 @@ func TestSQLiteStore_BasicOperations(t *testing.T) {
 
 	// Check the value
 	var intVal int
-	if err := retrieved.Unmarshal(&intVal); err != nil {
+	if err := retrieved.Unmarshal(ctx, &intVal); err != nil {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
 	if intVal != 42 {

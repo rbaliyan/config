@@ -1,6 +1,7 @@
 package mongodb
 
 import (
+	"context"
 	"fmt"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -25,7 +26,7 @@ var (
 
 func (c *bsonCodec) Name() string { return "bson" }
 
-func (c *bsonCodec) Encode(v any) ([]byte, error) {
+func (c *bsonCodec) Encode(_ context.Context, v any) ([]byte, error) {
 	t, val, err := bson.MarshalValue(v)
 	if err != nil {
 		return nil, fmt.Errorf("bson encode: %w", err)
@@ -37,7 +38,7 @@ func (c *bsonCodec) Encode(v any) ([]byte, error) {
 	return result, nil
 }
 
-func (c *bsonCodec) Decode(data []byte, v any) error {
+func (c *bsonCodec) Decode(_ context.Context, data []byte, v any) error {
 	if len(data) == 0 {
 		return fmt.Errorf("bson decode: empty data")
 	}

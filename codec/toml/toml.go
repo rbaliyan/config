@@ -3,6 +3,7 @@ package toml
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/BurntSushi/toml"
 	"github.com/rbaliyan/config/codec"
@@ -24,7 +25,7 @@ func (c *tomlCodec) Name() string {
 }
 
 // Encode encodes a value to TOML bytes.
-func (c *tomlCodec) Encode(v any) ([]byte, error) {
+func (c *tomlCodec) Encode(_ context.Context, v any) ([]byte, error) {
 	var buf bytes.Buffer
 	err := toml.NewEncoder(&buf).Encode(v)
 	if err != nil {
@@ -34,7 +35,7 @@ func (c *tomlCodec) Encode(v any) ([]byte, error) {
 }
 
 // Decode decodes TOML bytes into a value.
-func (c *tomlCodec) Decode(data []byte, v any) error {
+func (c *tomlCodec) Decode(_ context.Context, data []byte, v any) error {
 	_, err := toml.NewDecoder(bytes.NewReader(data)).Decode(v)
 	return err
 }

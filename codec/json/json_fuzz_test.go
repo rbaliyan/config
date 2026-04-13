@@ -1,6 +1,9 @@
 package json
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func FuzzJSONCodecDecode(f *testing.F) {
 	f.Add([]byte(`{"key":"value","num":42}`))
@@ -14,6 +17,6 @@ func FuzzJSONCodecDecode(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		var v any
-		_ = New().Decode(data, &v)
+		_ = New().Decode(context.Background(), data, &v)
 	})
 }

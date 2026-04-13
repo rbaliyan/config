@@ -54,8 +54,9 @@ type storeEntry struct {
 	updatedAt time.Time
 }
 
-func (e *storeEntry) toValue() (config.Value, error) {
+func (e *storeEntry) toValue(ctx context.Context) (config.Value, error) {
 	return config.NewValueFromBytes(
+		ctx,
 		e.value,
 		e.codec,
 		config.WithValueType(e.valueType),
@@ -113,7 +114,7 @@ func (s *Store) Connect(ctx context.Context) error {
 		if !ok {
 			// Top-level scalar → put in default namespace
 			ns := s.opts.defaultNamespace
-			if err := s.addEntryValidated(ns, topKey, topVal, now); err != nil {
+			if err := s.addEntryValidated(ctx, ns, topKey, topVal, now); err != nil {
 				s.logWarn("skipping entry", "namespace", ns, "key", topKey, "error", err)
 			}
 			continue
@@ -123,7 +124,7 @@ func (s *Store) Connect(ctx context.Context) error {
 			s.logWarn("skipping namespace: invalid name", "namespace", topKey, "error", err)
 			continue
 		}
-		s.flattenMap(topKey, "", m, now)
+		s.flattenMap(ctx, topKey, "", m, now)
 	}
 
 	return nil
@@ -164,7 +165,7 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 		return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
 	}
 
-	return e.toValue()
+	return e.toValue(ctx)
 }
 
 // Set is not supported for file-backed stores.
@@ -199,7 +200,7 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 	if keys := filter.Keys(); len(keys) > 0 {
 		for _, key := range keys {
 			if e, ok := nsEntries[key]; ok {
-				val, err := e.toValue()
+				val, err := e.toValue(ctx)
 				if err != nil {
 					return nil, fmt.Errorf("file: find key %q in %q: %w", key, namespace, err)
 				}
@@ -244,7 +245,7 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 
 	var lastID string
 	for _, m := range matching {
-		val, err := m.e.toValue()
+		val, err := m.e.toValue(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("file: find key %q in %q: %w", m.e.key, namespace, err)
 		}
@@ -310,7 +311,7 @@ func (s *Store) Namespaces() []string {
 }
 
 // flattenMap recursively flattens a map into store entries.
-func (s *Store) flattenMap(namespace, prefix string, m map[string]any, now time.Time) {
+func (s *Store) flattenMap(ctx context.Context, namespace, prefix string, m map[string]any, now time.Time) {
 	for k, v := range m {
 		key := k
 		if prefix != "" {
@@ -320,10 +321,10 @@ func (s *Store) flattenMap(namespace, prefix string, m map[string]any, now time.
 		switch val := v.(type) {
 		case map[string]any:
 			// Recurse into nested maps
-			s.flattenMap(namespace, key, val, now)
+			s.flattenMap(ctx, namespace, key, val, now)
 		default:
 			// Leaf value (scalar, list, etc.)
-			if err := s.addEntryValidated(namespace, key, val, now); err != nil {
+			if err := s.addEntryValidated(ctx, namespace, key, val, now); err != nil {
 				s.logWarn("skipping entry", "namespace", namespace, "key", key, "error", err)
 			}
 		}
@@ -331,17 +332,17 @@ func (s *Store) flattenMap(namespace, prefix string, m map[string]any, now time.
 }
 
 // addEntryValidated validates the key before creating a store entry.
-func (s *Store) addEntryValidated(namespace, key string, value any, now time.Time) error {
+func (s *Store) addEntryValidated(ctx context.Context, namespace, key string, value any, now time.Time) error {
 	if err := config.ValidateKey(key); err != nil {
 		return fmt.Errorf("invalid key: %w", err)
 	}
-	return s.addEntry(namespace, key, value, now)
+	return s.addEntry(ctx, namespace, key, value, now)
 }
 
 // addEntry creates a store entry for a single key-value pair.
-func (s *Store) addEntry(namespace, key string, value any, now time.Time) error {
+func (s *Store) addEntry(ctx context.Context, namespace, key string, value any, now time.Time) error {
 	c := codec.Default()
-	data, err := c.Encode(value)
+	data, err := c.Encode(ctx, value)
 	if err != nil {
 		return fmt.Errorf("encode %q/%q: %w", namespace, key, err)
 	}

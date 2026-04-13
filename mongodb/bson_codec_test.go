@@ -1,6 +1,7 @@
 package mongodb_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/rbaliyan/config/codec"
@@ -15,6 +16,7 @@ func TestBSONCodec_Name(t *testing.T) {
 }
 
 func TestBSONCodec_RoundTrip(t *testing.T) {
+	ctx := context.Background()
 	c := mongodb.BSON()
 
 	tests := []struct {
@@ -32,7 +34,7 @@ func TestBSONCodec_RoundTrip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			data, err := c.Encode(tt.input)
+			data, err := c.Encode(ctx, tt.input)
 			if err != nil {
 				t.Fatalf("Encode(%v): %v", tt.input, err)
 			}
@@ -44,7 +46,7 @@ func TestBSONCodec_RoundTrip(t *testing.T) {
 			switch v := tt.input.(type) {
 			case int32:
 				var out int32
-				if err := c.Decode(data, &out); err != nil {
+				if err := c.Decode(ctx, data, &out); err != nil {
 					t.Fatalf("Decode: %v", err)
 				}
 				if out != v {
@@ -52,7 +54,7 @@ func TestBSONCodec_RoundTrip(t *testing.T) {
 				}
 			case int64:
 				var out int64
-				if err := c.Decode(data, &out); err != nil {
+				if err := c.Decode(ctx, data, &out); err != nil {
 					t.Fatalf("Decode: %v", err)
 				}
 				if out != v {
@@ -60,7 +62,7 @@ func TestBSONCodec_RoundTrip(t *testing.T) {
 				}
 			case float64:
 				var out float64
-				if err := c.Decode(data, &out); err != nil {
+				if err := c.Decode(ctx, data, &out); err != nil {
 					t.Fatalf("Decode: %v", err)
 				}
 				if out != v {
@@ -68,7 +70,7 @@ func TestBSONCodec_RoundTrip(t *testing.T) {
 				}
 			case string:
 				var out string
-				if err := c.Decode(data, &out); err != nil {
+				if err := c.Decode(ctx, data, &out); err != nil {
 					t.Fatalf("Decode: %v", err)
 				}
 				if out != v {
@@ -76,7 +78,7 @@ func TestBSONCodec_RoundTrip(t *testing.T) {
 				}
 			case bool:
 				var out bool
-				if err := c.Decode(data, &out); err != nil {
+				if err := c.Decode(ctx, data, &out); err != nil {
 					t.Fatalf("Decode: %v", err)
 				}
 				if out != v {
@@ -88,6 +90,7 @@ func TestBSONCodec_RoundTrip(t *testing.T) {
 }
 
 func TestBSONCodec_Document(t *testing.T) {
+	ctx := context.Background()
 	c := mongodb.BSON()
 
 	type Config struct {
@@ -96,13 +99,13 @@ func TestBSONCodec_Document(t *testing.T) {
 	}
 
 	input := Config{Host: "localhost", Port: 5432}
-	data, err := c.Encode(input)
+	data, err := c.Encode(ctx, input)
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
 
 	var out Config
-	if err := c.Decode(data, &out); err != nil {
+	if err := c.Decode(ctx, data, &out); err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
 	if out != input {
@@ -113,17 +116,18 @@ func TestBSONCodec_Document(t *testing.T) {
 func TestBSONCodec_DecodeEmptyData(t *testing.T) {
 	c := mongodb.BSON()
 	var out string
-	err := c.Decode(nil, &out)
+	err := c.Decode(context.Background(), nil, &out)
 	if err == nil {
 		t.Error("expected error for empty data")
 	}
 }
 
 func TestBSONCodec_TypeByte(t *testing.T) {
+	ctx := context.Background()
 	c := mongodb.BSON()
 
 	// Encode a string and verify the type byte is 0x02 (BSON string type)
-	data, err := c.Encode("test")
+	data, err := c.Encode(ctx, "test")
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -132,7 +136,7 @@ func TestBSONCodec_TypeByte(t *testing.T) {
 	}
 
 	// Encode an int32 and verify the type byte is 0x10 (BSON int32 type)
-	data, err = c.Encode(int32(1))
+	data, err = c.Encode(ctx, int32(1))
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}

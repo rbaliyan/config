@@ -728,9 +728,9 @@ type testCodec struct {
 	name string
 }
 
-func (c *testCodec) Name() string                    { return c.name }
-func (c *testCodec) Encode(v any) ([]byte, error)    { return nil, nil }
-func (c *testCodec) Decode(data []byte, v any) error { return nil }
+func (c *testCodec) Name() string                                               { return c.name }
+func (c *testCodec) Encode(_ context.Context, _ any) ([]byte, error)             { return nil, nil }
+func (c *testCodec) Decode(_ context.Context, _ []byte, _ any) error             { return nil }
 
 func TestWithCodecOption(t *testing.T) {
 	cfg := setupTestConfig(t)
@@ -831,7 +831,7 @@ func TestWithFieldTagIntegration(t *testing.T) {
 		t.Fatalf("Get error: %v", err)
 	}
 	var name string
-	if err := nameVal.Unmarshal(&name); err != nil {
+	if err := nameVal.Unmarshal(ctx, &name); err != nil {
 		t.Fatalf("Unmarshal error: %v", err)
 	}
 	if name != "test" {

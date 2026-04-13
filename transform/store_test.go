@@ -17,7 +17,7 @@ type xorTransformer struct {
 
 func (x *xorTransformer) Name() string { return "xor" }
 
-func (x *xorTransformer) Transform(data []byte) ([]byte, error) {
+func (x *xorTransformer) Transform(_ context.Context, data []byte) ([]byte, error) {
 	out := make([]byte, len(data))
 	for i, b := range data {
 		out[i] = b ^ x.key
@@ -25,8 +25,8 @@ func (x *xorTransformer) Transform(data []byte) ([]byte, error) {
 	return out, nil
 }
 
-func (x *xorTransformer) Reverse(data []byte) ([]byte, error) {
-	return x.Transform(data) // XOR is its own inverse
+func (x *xorTransformer) Reverse(ctx context.Context, data []byte) ([]byte, error) {
+	return x.Transform(ctx, data) // XOR is its own inverse
 }
 
 func newTestStore(t *testing.T) (*transformStore, *memory.Store) {
@@ -117,14 +117,14 @@ func TestStoredBytesAreTransformed(t *testing.T) {
 		t.Fatalf("inner Get: %v", err)
 	}
 
-	data, err := raw.Marshal()
+	data, err := raw.Marshal(ctx)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
 
 	// The original JSON encoding of "hello" is `"hello"` (with quotes).
 	// After XOR with 0x42, the bytes should differ.
-	originalData, _ := original.Marshal()
+	originalData, _ := original.Marshal(ctx)
 	if string(data) == string(originalData) {
 		t.Fatal("stored bytes should differ from original, but they are identical")
 	}

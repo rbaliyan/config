@@ -356,7 +356,7 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 	}
 
 	return config.NewValueFromBytes(
-		value,
+		ctx, value,
 		codecName,
 		config.WithValueType(valueType),
 		config.WithValueMetadata(version, createdAt, updatedAt),
@@ -378,7 +378,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	}
 
 	// Marshal the value
-	data, err := value.Marshal()
+	data, err := value.Marshal(ctx)
 	if err != nil {
 		return nil, config.WrapStoreError("marshal", "postgres", key, err)
 	}
@@ -600,7 +600,7 @@ func (s *Store) executeListQuery(ctx context.Context, query string, args []any) 
 		}
 
 		val, err := config.NewValueFromBytes(
-			value,
+			ctx, value,
 			codecName,
 			config.WithValueType(valueType),
 			config.WithValueMetadata(version, createdAt, updatedAt),
@@ -781,7 +781,7 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 		}
 
 		val, err := config.NewValueFromBytes(
-			value,
+			ctx, value,
 			codecName,
 			config.WithValueType(valueType),
 			config.WithValueMetadata(version, createdAt, updatedAt),
@@ -839,7 +839,7 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			continue
 		}
 
-		data, err := value.Marshal()
+		data, err := value.Marshal(ctx)
 		if err != nil {
 			keyErrors[key] = config.WrapStoreError("marshal", "postgres", key, err)
 			continue
@@ -951,7 +951,7 @@ func (s *Store) listenNotifications() {
 					updatedAt = *payload.UpdatedAt
 				}
 				val, err := config.NewValueFromBytes(
-					payload.Value,
+					context.Background(), payload.Value,
 					payload.Codec,
 					config.WithValueType(payload.Type),
 					config.WithValueMetadata(payload.Version, createdAt, updatedAt),

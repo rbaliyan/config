@@ -1,6 +1,9 @@
 package yaml
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func FuzzYAMLCodecDecode(f *testing.F) {
 	f.Add([]byte("key: value\nnum: 42"))
@@ -14,6 +17,6 @@ func FuzzYAMLCodecDecode(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		var v any
-		_ = New().Decode(data, &v)
+		_ = New().Decode(context.Background(), data, &v)
 	})
 }

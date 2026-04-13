@@ -1,6 +1,8 @@
 package mongodb
 
 import (
+	"context"
+
 	"github.com/rbaliyan/config/codec"
 	jsoncodec "github.com/rbaliyan/config/codec/json"
 )
@@ -19,6 +21,6 @@ var (
 	_ BSONValueCodec = (*jsonBSONCodec)(nil)
 )
 
-func (c *jsonBSONCodec) Name() string                    { return c.inner.Name() }
-func (c *jsonBSONCodec) Encode(v any) ([]byte, error)    { return c.inner.Encode(v) }
-func (c *jsonBSONCodec) Decode(data []byte, v any) error { return c.inner.Decode(data, v) }
+func (c *jsonBSONCodec) Name() string                                         { return c.inner.Name() }
+func (c *jsonBSONCodec) Encode(ctx context.Context, v any) ([]byte, error)    { return c.inner.Encode(ctx, v) }
+func (c *jsonBSONCodec) Decode(ctx context.Context, data []byte, v any) error { return c.inner.Decode(ctx, data, v) }

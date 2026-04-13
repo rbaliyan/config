@@ -74,10 +74,11 @@ func BenchmarkValueString(b *testing.B) {
 }
 
 func BenchmarkValueMarshal(b *testing.B) {
+	ctx := context.Background()
 	v := config.NewValue(map[string]any{"host": "localhost", "port": 5432})
 	b.ResetTimer()
 	for b.Loop() {
-		_, _ = v.Marshal()
+		_, _ = v.Marshal(ctx)
 	}
 }
 

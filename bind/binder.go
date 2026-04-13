@@ -112,7 +112,7 @@ func (bc *boundConfig) GetStruct(ctx context.Context, key string, target any) er
 	data := make(map[string]any)
 	for entryKey, val := range entries {
 		var value any
-		if err := val.Unmarshal(&value); err != nil {
+		if err := val.Unmarshal(ctx, &value); err != nil {
 			continue
 		}
 		data[entryKey] = value
@@ -154,7 +154,7 @@ func (bc *boundConfig) GetStructDigest(ctx context.Context, key string, target a
 	data := make(map[string]any)
 	for entryKey, val := range entries {
 		var value any
-		if err := val.Unmarshal(&value); err != nil {
+		if err := val.Unmarshal(ctx, &value); err != nil {
 			continue
 		}
 		data[entryKey] = value

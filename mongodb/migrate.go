@@ -175,7 +175,7 @@ func (s *Store) migrateDocument(ctx context.Context, doc mongoEntry, o *migrateO
 
 	// Decode the value using the source codec
 	var decoded any
-	if err := sourceCodec.Decode(rawBytes, &decoded); err != nil {
+	if err := sourceCodec.Decode(ctx, rawBytes, &decoded); err != nil {
 		return fmt.Errorf("decode with %q: %w", sourceCodecName, err)
 	}
 
@@ -185,7 +185,7 @@ func (s *Store) migrateDocument(ctx context.Context, doc mongoEntry, o *migrateO
 		return fmt.Errorf("target codec %q not found", targetCodecName)
 	}
 
-	encoded, err := targetCodec.Encode(decoded)
+	encoded, err := targetCodec.Encode(ctx, decoded)
 	if err != nil {
 		return fmt.Errorf("encode with %q: %w", targetCodecName, err)
 	}

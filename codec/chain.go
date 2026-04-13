@@ -1,6 +1,9 @@
 package codec
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // chain is a Codec that applies a base serializer followed by an ordered
 // sequence of byte-level Transformers. On Encode the transformers run
@@ -54,14 +57,14 @@ func NewChain(base Codec, transformers ...Transformer) Codec {
 
 func (c *chain) Name() string { return c.name }
 
-func (c *chain) Encode(v any) ([]byte, error) {
-	data, err := c.base.Encode(v)
+func (c *chain) Encode(ctx context.Context, v any) ([]byte, error) {
+	data, err := c.base.Encode(ctx, v)
 	if err != nil {
 		return nil, fmt.Errorf("codec: chain encode: base: %w", err)
 	}
 
 	for i, t := range c.transformers {
-		data, err = t.Transform(data)
+		data, err = t.Transform(ctx, data)
 		if err != nil {
 			return nil, fmt.Errorf("codec: chain encode: transformer[%d] %q: %w", i, t.Name(), err)
 		}
@@ -69,16 +72,16 @@ func (c *chain) Encode(v any) ([]byte, error) {
 	return data, nil
 }
 
-func (c *chain) Decode(data []byte, v any) error {
+func (c *chain) Decode(ctx context.Context, data []byte, v any) error {
 	var err error
 	for i := len(c.transformers) - 1; i >= 0; i-- {
-		data, err = c.transformers[i].Reverse(data)
+		data, err = c.transformers[i].Reverse(ctx, data)
 		if err != nil {
 			return fmt.Errorf("codec: chain decode: transformer[%d] %q: %w", i, c.transformers[i].Name(), err)
 		}
 	}
 
-	if err := c.base.Decode(data, v); err != nil {
+	if err := c.base.Decode(ctx, data, v); err != nil {
 		return fmt.Errorf("codec: chain decode: base: %w", err)
 	}
 	return nil
