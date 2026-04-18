@@ -472,39 +472,38 @@ func (s *Store) logger() *slog.Logger {
 // You can also call this manually if you disabled auto-creation.
 //
 // For regular collections, creates:
-//   - Unique composite index on (namespace, key)
-//   - Index on namespace
-//   - Index on key
-//   - Index on type
-//   - Index on updated_at (descending)
+//   - Unique composite index on (namespace, key) — entry identity and point lookups
+//   - Compound index on (namespace, _id) — efficient cursor-based pagination
+//   - Index on type — Stats aggregation by type
 //
-// For capped collections, the unique index is skipped as capped collections
-// don't support unique indexes.
+// For capped collections, the unique index is replaced with a non-unique one.
+//
+// Existing deployments that have the old standalone indexes (namespace_1, key_1,
+// updated_at_-1) should call DropRedundantIndexes to remove them and reduce
+// per-write overhead.
 func (s *Store) EnsureIndexes(ctx context.Context) error {
 	if s.collection == nil {
 		return fmt.Errorf("collection not initialized, call Connect first")
 	}
 
 	indexes := []mongo.IndexModel{
+		// Compound index for cursor-based pagination: {namespace: X, _id: {$gt: cursor}}
 		{
-			Keys: bson.D{{Key: "namespace", Value: 1}},
+			Keys: bson.D{
+				{Key: "namespace", Value: 1},
+				{Key: "_id", Value: 1},
+			},
 		},
-		{
-			Keys: bson.D{{Key: "key", Value: 1}},
-		},
-		{
-			Keys: bson.D{{Key: "updated_at", Value: -1}},
-		},
+		// For Stats aggregation grouped by type
 		{
 			Keys: bson.D{{Key: "type", Value: 1}},
 		},
 	}
 
-	// Add unique composite index only for non-capped collections
-	// Capped collections don't support unique indexes
+	// Add unique composite index only for non-capped collections.
+	// Capped collections don't support unique indexes.
 	if !s.cfg.Capped {
 		indexes = append(indexes, mongo.IndexModel{
-			// Unique index on (namespace, key) - this is the entry identity
 			Keys: bson.D{
 				{Key: "namespace", Value: 1},
 				{Key: "key", Value: 1},
@@ -512,7 +511,6 @@ func (s *Store) EnsureIndexes(ctx context.Context) error {
 			Options: options.Index().SetUnique(true),
 		})
 	} else {
-		// For capped collections, add a non-unique composite index for lookups
 		indexes = append(indexes, mongo.IndexModel{
 			Keys: bson.D{
 				{Key: "namespace", Value: 1},
@@ -530,6 +528,42 @@ func (s *Store) EnsureIndexes(ctx context.Context) error {
 		"collection", s.cfg.Collection,
 		"indexCount", len(created),
 		"capped", s.cfg.Capped,
+	)
+
+	return nil
+}
+
+// DropRedundantIndexes removes indexes that were created by older versions of this
+// library but are no longer needed:
+//   - namespace_1: covered by the (namespace, key) composite left-prefix
+//   - key_1: never queried without namespace; only adds write overhead
+//   - updated_at_-1: not used in any query or sort path
+//
+// Call this once on existing deployments after upgrading. New deployments
+// created with EnsureIndexes will not have these indexes.
+func (s *Store) DropRedundantIndexes(ctx context.Context) error {
+	if s.collection == nil {
+		return fmt.Errorf("collection not initialized, call Connect first")
+	}
+
+	redundant := []string{"namespace_1", "key_1", "updated_at_-1"}
+	var errs []error
+	for _, name := range redundant {
+		if err := s.collection.Indexes().DropOne(ctx, name); err != nil {
+			// "index not found" is fine — it was already absent
+			if !strings.Contains(err.Error(), "index not found") {
+				errs = append(errs, fmt.Errorf("drop index %q: %w", name, err))
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
+	s.logger().Info("redundant indexes dropped",
+		"collection", s.cfg.Collection,
+		"dropped", redundant,
 	)
 
 	return nil
@@ -893,8 +927,8 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 		return nil, config.ErrStoreClosed
 	}
 
-	// Count total entries
-	total, err := s.collection.CountDocuments(ctx, bson.M{})
+	// EstimatedDocumentCount reads collection metadata — O(1) vs CountDocuments O(n).
+	total, err := s.collection.EstimatedDocumentCount(ctx)
 	if err != nil {
 		return nil, config.WrapStoreError("stats", "mongodb", "", err)
 	}
@@ -905,38 +939,39 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 		EntriesByNamespace: make(map[string]int64),
 	}
 
-	// Aggregate by type
-	typePipeline := mongo.Pipeline{
-		{{Key: "$group", Value: bson.M{"_id": "$type", "count": bson.M{"$sum": 1}}}},
-	}
-	typeCursor, err := s.collection.Aggregate(ctx, typePipeline)
-	if err == nil {
-		defer func() { _ = typeCursor.Close(ctx) }()
-		for typeCursor.Next(ctx) {
-			var result struct {
-				ID    config.Type `bson:"_id"`
-				Count int64       `bson:"count"`
-			}
-			if err := typeCursor.Decode(&result); err == nil {
-				stats.EntriesByType[result.ID] = result.Count
-			}
-		}
+	// Single collection scan via $facet instead of two separate aggregation passes.
+	pipeline := mongo.Pipeline{
+		{{Key: "$facet", Value: bson.D{
+			{Key: "byType", Value: bson.A{
+				bson.M{"$group": bson.M{"_id": "$type", "count": bson.M{"$sum": 1}}},
+			}},
+			{Key: "byNamespace", Value: bson.A{
+				bson.M{"$group": bson.M{"_id": "$namespace", "count": bson.M{"$sum": 1}}},
+			}},
+		}}},
 	}
 
-	// Aggregate by namespace
-	nsPipeline := mongo.Pipeline{
-		{{Key: "$group", Value: bson.M{"_id": "$namespace", "count": bson.M{"$sum": 1}}}},
-	}
-	nsCursor, err := s.collection.Aggregate(ctx, nsPipeline)
+	cursor, err := s.collection.Aggregate(ctx, pipeline)
 	if err == nil {
-		defer func() { _ = nsCursor.Close(ctx) }()
-		for nsCursor.Next(ctx) {
+		defer func() { _ = cursor.Close(ctx) }()
+		if cursor.Next(ctx) {
 			var result struct {
-				ID    string `bson:"_id"`
-				Count int64  `bson:"count"`
+				ByType []struct {
+					ID    config.Type `bson:"_id"`
+					Count int64       `bson:"count"`
+				} `bson:"byType"`
+				ByNamespace []struct {
+					ID    string `bson:"_id"`
+					Count int64  `bson:"count"`
+				} `bson:"byNamespace"`
 			}
-			if err := nsCursor.Decode(&result); err == nil {
-				stats.EntriesByNamespace[result.ID] = result.Count
+			if err := cursor.Decode(&result); err == nil {
+				for _, r := range result.ByType {
+					stats.EntriesByType[r.ID] = r.Count
+				}
+				for _, r := range result.ByNamespace {
+					stats.EntriesByNamespace[r.ID] = r.Count
+				}
 			}
 		}
 	}
