@@ -126,6 +126,7 @@ func (s *Store) Connect(ctx context.Context) error {
 		return config.WrapStoreError("connect", "redis", s.opts.addr, err)
 	}
 	s.client = client
+	s.idSeq.Store(time.Now().UnixNano())
 	s.stopWg.Add(1)
 	go s.runPubSub()
 	return nil
@@ -316,13 +317,11 @@ func (s *Store) buildEntryPayload(data []byte, value config.Value, version int64
 	}
 }
 
-// makeEntryID returns a monotonically increasing int64 ID. Each call
-// atomically increments a per-Store counter and adds it to the current
-// nanosecond clock. Because the counter only climbs, two calls made inside
-// the same nanosecond still produce distinct, ordered IDs. Find parses
-// EntryID with ParseInt for pagination, so the output must remain numeric.
+// makeEntryID returns a monotonically increasing, globally unique int64 ID.
+// idSeq is seeded from UnixNano at Connect time, so IDs from a new session
+// are always greater than any ID written in a prior session.
 func (s *Store) makeEntryID(_, _ string) string {
-	return strconv.FormatInt(time.Now().UnixNano()+s.idSeq.Add(1), 10)
+	return strconv.FormatInt(s.idSeq.Add(1), 10)
 }
 
 func (s *Store) Delete(ctx context.Context, namespace, key string) error {
