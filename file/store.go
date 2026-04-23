@@ -15,10 +15,15 @@ import (
 )
 
 // Store implements config.Store backed by a configuration file.
-// It is read-only — Set and Delete return config.ErrReadOnly.
+//
+// By default the Store is read-only: Set and Delete return
+// config.ErrReadOnly, and Watch returns config.ErrWatchNotSupported. Pass
+// WithWritable to NewStore to enable writes (persisted to a sidecar file)
+// and Watch (polling-based).
 //
 // Top-level keys in the file become namespaces.
-// Nested keys are flattened with "/" separator (configurable).
+// Nested keys are flattened with "/" separator (configurable via
+// WithKeySeparator).
 //
 // Given this YAML:
 //
@@ -40,6 +45,13 @@ type Store struct {
 	entries map[string]map[string]*storeEntry // namespace -> key -> entry
 	nextID  int64
 	closed  atomic.Bool
+
+	sc *sidecar // non-nil when opts.writable
+
+	watchMu  sync.RWMutex
+	watchers map[*watchEntry]struct{}
+	pollStop chan struct{}
+	pollWg   sync.WaitGroup
 }
 
 type storeEntry struct {
@@ -65,6 +77,16 @@ func (e *storeEntry) toValue(ctx context.Context) (config.Value, error) {
 	)
 }
 
+type watchEntry struct {
+	filter    config.WatchFilter
+	ch        chan config.ChangeEvent
+	ctx       context.Context
+	cancel    context.CancelFunc
+	mu        sync.Mutex
+	closed    bool
+	closeOnce sync.Once
+}
+
 // Compile-time interface checks.
 var (
 	_ config.Store         = (*Store)(nil)
@@ -78,16 +100,21 @@ func NewStore(path string, opts ...StoreOption) *Store {
 	o := storeOptions{
 		keySeparator:     "/",
 		defaultNamespace: "default",
+		sidecarSuffix:    ".writes.yaml",
+		watchInterval:    2 * time.Second,
+		watchBufSize:     100,
 	}
 	for _, opt := range opts {
 		opt(&o)
 	}
 
 	return &Store{
-		path:    path,
-		opts:    o,
-		loader:  New(path, o.loaderOpts...),
-		entries: make(map[string]map[string]*storeEntry),
+		path:     path,
+		opts:     o,
+		loader:   New(path, o.loaderOpts...),
+		entries:  make(map[string]map[string]*storeEntry),
+		watchers: make(map[*watchEntry]struct{}),
+		pollStop: make(chan struct{}),
 	}
 }
 
@@ -112,14 +139,12 @@ func (s *Store) Connect(ctx context.Context) error {
 	for topKey, topVal := range raw {
 		m, ok := topVal.(map[string]any)
 		if !ok {
-			// Top-level scalar → put in default namespace
 			ns := s.opts.defaultNamespace
 			if err := s.addEntryValidated(ctx, ns, topKey, topVal, now); err != nil {
 				s.logWarn("skipping entry", "namespace", ns, "key", topKey, "error", err)
 			}
 			continue
 		}
-		// Top-level map → namespace
 		if err := config.ValidateNamespace(topKey); err != nil {
 			s.logWarn("skipping namespace: invalid name", "namespace", topKey, "error", err)
 			continue
@@ -127,7 +152,78 @@ func (s *Store) Connect(ctx context.Context) error {
 		s.flattenMap(ctx, topKey, "", m, now)
 	}
 
+	if s.opts.writable {
+		sidecarPath := s.path + s.opts.sidecarSuffix
+		s.sc = newSidecar(sidecarPath)
+		if err := s.sc.load(); err != nil {
+			return config.WrapStoreError("connect", "file", sidecarPath, err)
+		}
+		s.applySidecar(ctx, now)
+		// Add to the WaitGroup BEFORE starting the goroutine so a concurrent
+		// Close() that reaches Wait before the goroutine begins still blocks
+		// correctly until the goroutine exits.
+		s.pollWg.Add(1)
+		go s.startPolling()
+	}
+
 	return nil
+}
+
+// applySidecar merges sidecar data over base entries. Must be called with s.mu held.
+func (s *Store) applySidecar(ctx context.Context, now time.Time) {
+	all := s.sc.allSettings()
+	for ns, keys := range all {
+		for key, val := range keys {
+			if val == nil {
+				// tombstone: remove from view
+				if s.entries[ns] != nil {
+					delete(s.entries[ns], key)
+				}
+				continue
+			}
+			existing := s.entriesGet(ns, key)
+			version := int64(1)
+			createdAt := now
+			var entryID string
+			if existing != nil {
+				version = existing.version + 1
+				createdAt = existing.createdAt
+				entryID = existing.id
+			} else {
+				s.nextID++
+				entryID = fmt.Sprintf("%d", s.nextID)
+			}
+			c := codec.Default()
+			data, err := c.Encode(ctx, val)
+			if err != nil {
+				s.logWarn("sidecar encode error", "namespace", ns, "key", key, "error", err)
+				continue
+			}
+			e := &storeEntry{
+				id:        entryID,
+				key:       key,
+				namespace: ns,
+				value:     data,
+				codec:     c.Name(),
+				valueType: config.NewValue(val).Type(),
+				version:   version,
+				createdAt: createdAt,
+				updatedAt: now,
+			}
+			if s.entries[ns] == nil {
+				s.entries[ns] = make(map[string]*storeEntry)
+			}
+			s.entries[ns][key] = e
+		}
+	}
+}
+
+func (s *Store) entriesGet(ns, key string) *storeEntry {
+	m, ok := s.entries[ns]
+	if !ok {
+		return nil
+	}
+	return m[key]
 }
 
 // Close releases resources.
@@ -135,6 +231,30 @@ func (s *Store) Close(ctx context.Context) error {
 	if s.closed.Swap(true) {
 		return nil
 	}
+
+	if s.opts.writable {
+		close(s.pollStop)
+		s.pollWg.Wait()
+	}
+
+	s.watchMu.Lock()
+	toClose := make([]*watchEntry, 0, len(s.watchers))
+	for we := range s.watchers {
+		toClose = append(toClose, we)
+	}
+	s.watchers = make(map[*watchEntry]struct{})
+	s.watchMu.Unlock()
+
+	for _, we := range toClose {
+		we.cancel()
+		we.closeOnce.Do(func() {
+			we.mu.Lock()
+			we.closed = true
+			close(we.ch)
+			we.mu.Unlock()
+		})
+	}
+
 	s.mu.Lock()
 	s.entries = make(map[string]map[string]*storeEntry)
 	s.mu.Unlock()
@@ -168,14 +288,122 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 	return e.toValue(ctx)
 }
 
-// Set is not supported for file-backed stores.
+// Set creates or updates a value. Only supported when WithWritable() is used.
 func (s *Store) Set(ctx context.Context, namespace, key string, value config.Value) (config.Value, error) {
-	return nil, config.ErrReadOnly
+	if !s.opts.writable {
+		return nil, config.ErrReadOnly
+	}
+	if s.closed.Load() {
+		return nil, config.ErrStoreClosed
+	}
+	if err := config.ValidateNamespace(namespace); err != nil {
+		return nil, err
+	}
+	if err := config.ValidateKey(key); err != nil {
+		return nil, err
+	}
+
+	// Encode value with default codec to get raw bytes for the storeEntry.
+	c := codec.Default()
+	data, err := c.Encode(ctx, value)
+	if err != nil {
+		return nil, config.WrapStoreError("set", "file", key, err)
+	}
+
+	// Decode back to raw any for sidecar (YAML storage needs native values).
+	var raw any
+	if err := c.Decode(ctx, data, &raw); err != nil {
+		return nil, config.WrapStoreError("set", "file", key, err)
+	}
+
+	if err := s.sc.set(namespace, key, raw); err != nil {
+		return nil, config.WrapStoreError("set", "file", key, err)
+	}
+
+	now := time.Now().UTC()
+
+	s.mu.Lock()
+	existing := s.entriesGet(namespace, key)
+	version := int64(1)
+	createdAt := now
+	var entryID string
+	if existing != nil {
+		version = existing.version + 1
+		createdAt = existing.createdAt
+		entryID = existing.id
+	} else {
+		s.nextID++
+		entryID = fmt.Sprintf("%d", s.nextID)
+	}
+	e := &storeEntry{
+		id:        entryID,
+		key:       key,
+		namespace: namespace,
+		value:     data,
+		codec:     c.Name(),
+		valueType: value.Type(),
+		version:   version,
+		createdAt: createdAt,
+		updatedAt: now,
+	}
+	if s.entries[namespace] == nil {
+		s.entries[namespace] = make(map[string]*storeEntry)
+	}
+	s.entries[namespace][key] = e
+	s.mu.Unlock()
+
+	newValue, err := e.toValue(ctx)
+	if err != nil {
+		return nil, config.WrapStoreError("set", "file", key, err)
+	}
+
+	event := config.ChangeEvent{
+		Type:      config.ChangeTypeSet,
+		Namespace: namespace,
+		Key:       key,
+		Value:     newValue,
+		Timestamp: now,
+	}
+	go s.notifyWatchers(event)
+
+	return newValue, nil
 }
 
-// Delete is not supported for file-backed stores.
+// Delete removes a value. Only supported when WithWritable() is used.
 func (s *Store) Delete(ctx context.Context, namespace, key string) error {
-	return config.ErrReadOnly
+	if !s.opts.writable {
+		return config.ErrReadOnly
+	}
+	if s.closed.Load() {
+		return config.ErrStoreClosed
+	}
+	if err := config.ValidateNamespace(namespace); err != nil {
+		return err
+	}
+	if err := config.ValidateKey(key); err != nil {
+		return err
+	}
+
+	if err := s.sc.delete(namespace, key); err != nil {
+		return config.WrapStoreError("delete", "file", key, err)
+	}
+
+	s.mu.Lock()
+	if s.entries[namespace] != nil {
+		delete(s.entries[namespace], key)
+	}
+	s.mu.Unlock()
+
+	event := config.ChangeEvent{
+		Type:      config.ChangeTypeDelete,
+		Namespace: namespace,
+		Key:       key,
+		Value:     nil,
+		Timestamp: time.Now().UTC(),
+	}
+	go s.notifyWatchers(event)
+
+	return nil
 }
 
 // Find returns entries matching the filter within a namespace.
@@ -256,9 +484,48 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 	return config.NewPage(results, lastID, limit), nil
 }
 
-// Watch is not supported for file-backed stores.
+// Watch returns a channel for change events. Only supported when WithWritable() is used.
 func (s *Store) Watch(ctx context.Context, filter config.WatchFilter) (<-chan config.ChangeEvent, error) {
-	return nil, config.ErrWatchNotSupported
+	if !s.opts.writable {
+		return nil, config.ErrWatchNotSupported
+	}
+	if s.closed.Load() {
+		return nil, config.ErrStoreClosed
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	ch := make(chan config.ChangeEvent, s.opts.watchBufSize)
+
+	we := &watchEntry{
+		filter: filter,
+		ch:     ch,
+		ctx:    ctx,
+		cancel: cancel,
+	}
+
+	s.watchMu.Lock()
+	s.watchers[we] = struct{}{}
+	s.watchMu.Unlock()
+
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-s.pollStop:
+		}
+
+		s.watchMu.Lock()
+		delete(s.watchers, we)
+		s.watchMu.Unlock()
+
+		we.closeOnce.Do(func() {
+			we.mu.Lock()
+			we.closed = true
+			close(ch)
+			we.mu.Unlock()
+		})
+	}()
+
+	return ch, nil
 }
 
 // Health returns nil if the store has loaded successfully.
@@ -308,6 +575,149 @@ func (s *Store) Namespaces() []string {
 	}
 	sort.Strings(ns)
 	return ns
+}
+
+// startPolling polls the base file and sidecar for changes.
+// The caller is responsible for pollWg.Add(1) before invoking this goroutine
+// so Close() can safely Wait even if startPolling has not yet begun executing.
+func (s *Store) startPolling() {
+	defer s.pollWg.Done()
+
+	ticker := time.NewTicker(s.opts.watchInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.pollStop:
+			return
+		case <-ticker.C:
+			s.poll()
+		}
+	}
+}
+
+func (s *Store) poll() {
+	ctx := context.Background()
+
+	_ = s.loader.Load()
+	_ = s.sc.load()
+
+	now := time.Now().UTC()
+
+	s.mu.Lock()
+
+	// Snapshot old entries for diffing.
+	old := make(map[string]map[string]*storeEntry)
+	for ns, keys := range s.entries {
+		kcp := make(map[string]*storeEntry, len(keys))
+		for k, e := range keys {
+			kcp[k] = e
+		}
+		old[ns] = kcp
+	}
+
+	// Rebuild from base file.
+	// Do NOT reset nextID: Set() allocates IDs monotonically and resetting
+	// here would cause a subsequent Set to collide with an existing ID.
+	raw := s.loader.AllSettings()
+	s.entries = make(map[string]map[string]*storeEntry)
+
+	for topKey, topVal := range raw {
+		m, ok := topVal.(map[string]any)
+		if !ok {
+			ns := s.opts.defaultNamespace
+			if err := s.addEntryValidated(ctx, ns, topKey, topVal, now); err != nil {
+				s.logWarn("skipping entry", "namespace", ns, "key", topKey, "error", err)
+			}
+			continue
+		}
+		if err := config.ValidateNamespace(topKey); err != nil {
+			continue
+		}
+		s.flattenMap(ctx, topKey, "", m, now)
+	}
+
+	// Apply sidecar.
+	s.applySidecar(ctx, now)
+
+	// Diff new vs old to determine events.
+	type diffEvent struct {
+		ct    config.ChangeType
+		ns    string
+		key   string
+		entry *storeEntry
+	}
+	var events []diffEvent
+
+	// Check for sets and updates.
+	for ns, keys := range s.entries {
+		for key, newEntry := range keys {
+			oldEntry := old[ns][key]
+			if oldEntry == nil || string(oldEntry.value) != string(newEntry.value) {
+				events = append(events, diffEvent{ct: config.ChangeTypeSet, ns: ns, key: key, entry: newEntry})
+			}
+		}
+	}
+
+	// Check for deletes.
+	for ns, keys := range old {
+		for key := range keys {
+			if s.entries[ns] == nil || s.entries[ns][key] == nil {
+				events = append(events, diffEvent{ct: config.ChangeTypeDelete, ns: ns, key: key})
+			}
+		}
+	}
+
+	s.mu.Unlock()
+
+	for _, ev := range events {
+		var val config.Value
+		if ev.ct == config.ChangeTypeSet && ev.entry != nil {
+			var err error
+			val, err = ev.entry.toValue(ctx)
+			if err != nil {
+				continue
+			}
+		}
+		event := config.ChangeEvent{
+			Type:      ev.ct,
+			Namespace: ev.ns,
+			Key:       ev.key,
+			Value:     val,
+			Timestamp: now,
+		}
+		s.notifyWatchers(event)
+	}
+}
+
+// notifyWatchers sends an event to all matching watchers.
+func (s *Store) notifyWatchers(event config.ChangeEvent) {
+	s.watchMu.RLock()
+	watchers := make([]*watchEntry, 0, len(s.watchers))
+	for we := range s.watchers {
+		watchers = append(watchers, we)
+	}
+	s.watchMu.RUnlock()
+
+	for _, we := range watchers {
+		if config.MatchesWatchFilter(event, we.filter) {
+			s.sendToWatcher(we, event)
+		}
+	}
+}
+
+// sendToWatcher safely sends an event to a watcher.
+func (s *Store) sendToWatcher(we *watchEntry, event config.ChangeEvent) {
+	we.mu.Lock()
+	defer we.mu.Unlock()
+	if we.closed {
+		return
+	}
+	select {
+	case we.ch <- event:
+	default:
+		// drop event (buffer full)
+	}
 }
 
 // flattenMap recursively flattens a map into store entries.

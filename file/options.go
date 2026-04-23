@@ -1,13 +1,42 @@
-// Package file provides file-based configuration loading and a read-only
+// Package file provides file-based configuration loading and a
 // config.Store backed by YAML, TOML, or JSON files.
 //
 // It provides two main types:
 //   - Loader: register named config structs and unmarshal file sections into them (replaces go-conf/viper)
-//   - Store: implements config.Store with file contents, mapping top-level keys to namespaces
+//   - Store: implements config.Store with file contents, mapping top-level keys to namespaces.
+//     Read-only by default; enable writes via WithWritable().
+//
+// # Read mode (default)
+//
+// When constructed without WithWritable, the Store loads the file once on
+// Connect and serves Get and Find from memory. Set and Delete return
+// config.ErrReadOnly; Watch returns config.ErrWatchNotSupported.
+//
+// # Writable mode
+//
+// WithWritable enables Set, Delete, and Watch. Writes are persisted to a
+// companion "sidecar" file (default: "{path}.writes.yaml") so the base file
+// stays pristine and can continue to be edited by hand. On Connect the
+// sidecar is layered on top of the base file; tombstones in the sidecar
+// hide deleted keys. A background goroutine polls both files at
+// WithWatchInterval (default 2s) to detect external edits and emit Watch
+// events.
+//
+// Usage:
+//
+//	// Read-only — fail on any Set attempt.
+//	store := file.NewStore("config.yaml")
+//
+//	// Writable — Set persists to config.yaml.writes.yaml, Watch works.
+//	store := file.NewStore("config.yaml",
+//	    file.WithWritable(),
+//	    file.WithWatchInterval(5*time.Second),
+//	)
 package file
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/go-viper/mapstructure/v2"
 )
@@ -74,6 +103,10 @@ type storeOptions struct {
 	keySeparator     string // separator for flattened keys (default: "/")
 	defaultNamespace string // namespace for top-level scalars (default: "default")
 	loaderOpts       []LoaderOption
+	writable         bool
+	sidecarSuffix    string        // default ".writes.yaml"
+	watchInterval    time.Duration // default 2s
+	watchBufSize     int           // default 100
 }
 
 // WithKeySeparator sets the separator used for flattened nested keys.
@@ -99,5 +132,43 @@ func WithDefaultNamespace(ns string) StoreOption {
 func WithLoaderOptions(opts ...LoaderOption) StoreOption {
 	return func(o *storeOptions) {
 		o.loaderOpts = append(o.loaderOpts, opts...)
+	}
+}
+
+// WithWritable enables sidecar-based write support and Watch.
+// Writes are persisted to a companion file (default: "{path}.writes.yaml").
+func WithWritable() StoreOption {
+	return func(o *storeOptions) {
+		o.writable = true
+	}
+}
+
+// WithSidecarSuffix overrides the sidecar file suffix.
+// Default is ".writes.yaml".
+func WithSidecarSuffix(s string) StoreOption {
+	return func(o *storeOptions) {
+		if s != "" {
+			o.sidecarSuffix = s
+		}
+	}
+}
+
+// WithWatchInterval sets the polling interval for file change detection.
+// Default is 2s.
+func WithWatchInterval(d time.Duration) StoreOption {
+	return func(o *storeOptions) {
+		if d > 0 {
+			o.watchInterval = d
+		}
+	}
+}
+
+// WithWatchBufferSize sets the buffer size for watch event channels.
+// Default is 100.
+func WithWatchBufferSize(n int) StoreOption {
+	return func(o *storeOptions) {
+		if n > 0 {
+			o.watchBufSize = n
+		}
 	}
 }
