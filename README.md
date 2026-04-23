@@ -11,7 +11,7 @@ A type-safe, namespace-aware configuration library for Go with support for multi
 
 ## Features
 
-- **Multiple Storage Backends**: Memory, PostgreSQL, MongoDB, SQLite, File
+- **Multiple Storage Backends**: Memory, PostgreSQL, MongoDB, SQLite, File, Redis, Kubernetes (ConfigMaps/Secrets)
 - **Version History**: Retrieve and paginate historical versions of any config key
 - **Multi-Store**: Combine stores for caching, fallback, or replication patterns
 - **Namespace Isolation**: Organize configuration by environment, tenant, or service
@@ -155,17 +155,78 @@ store := sqlite.NewStore("config.db",
 )
 ```
 
-### File Store (Read-Only)
+### File Store
 
-Load configuration from files on disk with automatic reload via fsnotify.
+Load configuration from YAML, TOML, or JSON files on disk.
+
+By default the file store is read-only: `Set` and `Delete` return `config.ErrReadOnly` and `Watch` returns `config.ErrWatchNotSupported`. Pass `file.WithWritable()` to enable writes, in which case writes are persisted to a sidecar file (default: `{path}.writes.yaml`) that overlays the base file, and `Watch` is served by polling both files at `WithWatchInterval` (default 2s).
 
 ```go
 import "github.com/rbaliyan/config/file"
 
-store := file.NewStore("config/",
-    file.WithCodec("yaml"),
+// Read-only (default).
+store := file.NewStore("config.yaml")
+
+// Writable: Set/Delete persist to config.yaml.writes.yaml, Watch is polling-based.
+writable := file.NewStore("config.yaml",
+    file.WithWritable(),
+    file.WithWatchInterval(5*time.Second),
 )
 ```
+
+Top-level keys in the file become namespaces; nested keys are flattened with `/` (configurable via `WithKeySeparator`).
+
+### Redis Store
+
+Persistent storage backed by Redis. Each namespace is stored as a single Redis hash (`{keyPrefix}:{namespace}`); change events are published on a single pub/sub channel (`{keyPrefix}:changes`). Writes and notifications are performed atomically via Lua scripts, so watchers never observe a write they cannot read back.
+
+```go
+import "github.com/rbaliyan/config/redis"
+
+store := redis.NewStore(
+    redis.WithAddress("redis.internal:6379"),
+    redis.WithKeyPrefix("cfg"),     // hash names become "cfg:{namespace}"
+    redis.WithPassword("s3cret"),
+)
+
+// Or connect to a Redis Cluster.
+cluster := redis.NewStore(
+    redis.WithCluster("redis-0:6379", "redis-1:6379", "redis-2:6379"),
+)
+```
+
+### Kubernetes Store
+
+Persistent storage backed by Kubernetes ConfigMaps and Secrets, with real-time `Watch` via informers. Config namespaces map to Kubernetes namespaces (or a single fixed namespace via `WithK8sNamespace`). Each config namespace is backed by one ConfigMap named `config-{namespace}`; keys prefixed with `secret/` (configurable via `WithSecretKeyPrefix`) are routed to a Secret named `config-secrets-{namespace}` instead.
+
+This store is in a separate Go module (`github.com/rbaliyan/config/k8s`) to keep `client-go` out of the core module.
+
+```bash
+go get github.com/rbaliyan/config/k8s
+```
+
+```go
+import (
+    "github.com/rbaliyan/config/k8s"
+    "k8s.io/client-go/kubernetes"
+    "k8s.io/client-go/tools/clientcmd"
+)
+
+clientConfig, _ := clientcmd.BuildConfigFromFlags("", "/path/to/kubeconfig")
+clientset, _ := kubernetes.NewForConfig(clientConfig)
+
+store := k8s.NewStore(clientset,
+    k8s.WithK8sNamespace("my-app"),       // restrict to one k8s namespace
+    k8s.WithSecretKeyPrefix("secret/"),   // keys with this prefix -> Secrets
+    k8s.WithResyncPeriod(10*time.Minute),
+)
+if err := store.Connect(ctx); err != nil { // waits for informer cache sync
+    return err
+}
+defer store.Close(ctx)
+```
+
+Config key `/` characters are replaced with `.` to form valid Kubernetes data keys (e.g. `app/timeout` becomes `app.timeout`).
 
 ## Working with Values
 
