@@ -196,6 +196,9 @@ func (s *Store) entryKey(namespace, key string) string {
 	return namespace + keySeparator + key
 }
 
+// BackendName returns the stable backend identifier used in error messages.
+func (s *Store) BackendName() string { return "memory" }
+
 // Connect establishes connection (no-op for memory store).
 func (s *Store) Connect(ctx context.Context) error {
 	return nil
@@ -272,8 +275,6 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	now := time.Now().UTC()
 	ek := s.entryKey(namespace, key)
 	existing, exists := s.entries[ek]
@@ -283,10 +284,12 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	switch writeMode {
 	case config.WriteModeCreate:
 		if exists {
+			s.mu.Unlock()
 			return nil, &config.KeyExistsError{Key: key, Namespace: namespace}
 		}
 	case config.WriteModeUpdate:
 		if !exists {
+			s.mu.Unlock()
 			return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
 		}
 	}
@@ -323,19 +326,19 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	}
 
 	s.entries[ek] = newEntry
-
-	// Build Value for return and notification
 	newValue := newEntry.toValue()
+	s.mu.Unlock()
 
-	// Notify watchers asynchronously
-	event := config.ChangeEvent{
+	// Notify watchers synchronously (outside the entry lock) so that the
+	// caller sees events delivered before it returns. Ordering with
+	// subsequent mutations is preserved because sendToWatcher is non-blocking.
+	s.notifyWatchers(config.ChangeEvent{
 		Type:      config.ChangeTypeSet,
 		Namespace: namespace,
 		Key:       key,
 		Value:     newValue,
 		Timestamp: now,
-	}
-	go s.notifyWatchers(event)
+	})
 
 	return newValue, nil
 }
@@ -351,25 +354,21 @@ func (s *Store) Delete(ctx context.Context, namespace, key string) error {
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	ek := s.entryKey(namespace, key)
 	if _, ok := s.entries[ek]; !ok {
+		s.mu.Unlock()
 		return &config.KeyNotFoundError{Key: key, Namespace: namespace}
 	}
-
 	delete(s.entries, ek)
+	s.mu.Unlock()
 
-	// Notify watchers
-	event := config.ChangeEvent{
+	s.notifyWatchers(config.ChangeEvent{
 		Type:      config.ChangeTypeDelete,
 		Namespace: namespace,
 		Key:       key,
 		Value:     nil,
 		Timestamp: time.Now().UTC(),
-	}
-	go s.notifyWatchers(event)
-
+	})
 	return nil
 }
 
@@ -609,7 +608,6 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	now := time.Now().UTC()
 	events := make([]config.ChangeEvent, 0, len(values))
@@ -661,23 +659,19 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 		s.entries[ek] = newEntry
 		succeeded = append(succeeded, key)
 
-		newValue := newEntry.toValue()
-		event := config.ChangeEvent{
+		events = append(events, config.ChangeEvent{
 			Type:      config.ChangeTypeSet,
 			Namespace: namespace,
 			Key:       key,
-			Value:     newValue,
+			Value:     newEntry.toValue(),
 			Timestamp: now,
-		}
-		events = append(events, event)
+		})
 	}
+	s.mu.Unlock()
 
-	// Notify watchers for all changes
-	go func() {
-		for _, event := range events {
-			s.notifyWatchers(event)
-		}
-	}()
+	for _, event := range events {
+		s.notifyWatchers(event)
+	}
 
 	if len(keyErrors) > 0 {
 		return &config.BulkWriteError{
@@ -698,8 +692,6 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	var deleted int64
 	now := time.Now().UTC()
 	events := make([]config.ChangeEvent, 0, len(keys))
@@ -709,7 +701,6 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 		if _, ok := s.entries[ek]; ok {
 			delete(s.entries, ek)
 			deleted++
-
 			events = append(events, config.ChangeEvent{
 				Type:      config.ChangeTypeDelete,
 				Namespace: namespace,
@@ -719,14 +710,11 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 			})
 		}
 	}
+	s.mu.Unlock()
 
-	// Notify watchers for all changes
-	go func() {
-		for _, event := range events {
-			s.notifyWatchers(event)
-		}
-	}()
-
+	for _, event := range events {
+		s.notifyWatchers(event)
+	}
 	return deleted, nil
 }
 
@@ -848,22 +836,19 @@ func (s *Store) SetAlias(ctx context.Context, alias, target string) (config.Valu
 
 	// Lock both aliases and entries to enforce uniqueness across key spaces.
 	s.aliasMu.Lock()
-	defer s.aliasMu.Unlock()
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 
-	// Check alias doesn't already exist as an alias.
 	if _, exists := s.aliases[alias]; exists {
+		s.mu.RUnlock()
+		s.aliasMu.Unlock()
 		return nil, &config.AliasExistsError{Alias: alias, Reason: "alias already registered"}
 	}
-
-	// Check alias key doesn't exist as a config entry in any namespace.
 	for _, e := range s.entries {
 		if e.key == alias {
-			return nil, &config.AliasExistsError{
-				Alias:  alias,
-				Reason: fmt.Sprintf("key exists in namespace %q", e.namespace),
-			}
+			reason := fmt.Sprintf("key exists in namespace %q", e.namespace)
+			s.mu.RUnlock()
+			s.aliasMu.Unlock()
+			return nil, &config.AliasExistsError{Alias: alias, Reason: reason}
 		}
 	}
 
@@ -875,16 +860,19 @@ func (s *Store) SetAlias(ctx context.Context, alias, target string) (config.Valu
 		createdAt: now,
 	}
 	s.aliases[alias] = ae
-
 	val := ae.toValue()
-	event := config.ChangeEvent{
+	s.mu.RUnlock()
+	s.aliasMu.Unlock()
+
+	// Emit the event after releasing locks so watcher callbacks cannot
+	// deadlock by calling back into the store; sendToWatcher is non-blocking
+	// so delivery order matches the SetAlias call order.
+	s.notifyWatchers(config.ChangeEvent{
 		Type:      config.ChangeTypeAliasSet,
 		Key:       alias,
 		Value:     val,
 		Timestamp: now,
-	}
-	go s.notifyWatchers(event)
-
+	})
 	return val, nil
 }
 
@@ -896,21 +884,18 @@ func (s *Store) DeleteAlias(ctx context.Context, alias string) error {
 	}
 
 	s.aliasMu.Lock()
-	defer s.aliasMu.Unlock()
-
 	if _, exists := s.aliases[alias]; !exists {
+		s.aliasMu.Unlock()
 		return &config.KeyNotFoundError{Key: alias}
 	}
-
 	delete(s.aliases, alias)
+	s.aliasMu.Unlock()
 
-	event := config.ChangeEvent{
+	s.notifyWatchers(config.ChangeEvent{
 		Type:      config.ChangeTypeAliasDelete,
 		Key:       alias,
 		Timestamp: time.Now().UTC(),
-	}
-	go s.notifyWatchers(event)
-
+	})
 	return nil
 }
 

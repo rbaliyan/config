@@ -12,7 +12,7 @@ func TestMakeEntryID_MonotonicAndUnique(t *testing.T) {
 	seen := make(map[string]struct{}, n)
 	var prev int64
 	for i := 0; i < n; i++ {
-		id := s.makeEntryID("ns", "k")
+		id := s.makeEntryID()
 		if _, dup := seen[id]; dup {
 			t.Fatalf("duplicate id at iteration %d: %q", i, id)
 		}
@@ -43,7 +43,7 @@ func TestMakeEntryID_ConcurrentUnique(t *testing.T) {
 			defer wg.Done()
 			local := make([]string, 0, perWorker)
 			for j := 0; j < perWorker; j++ {
-				local = append(local, s.makeEntryID("ns", "k"))
+				local = append(local, s.makeEntryID())
 			}
 			mu.Lock()
 			defer mu.Unlock()

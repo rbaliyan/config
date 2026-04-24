@@ -175,6 +175,9 @@ var (
 	_ config.BulkStore     = (*Store)(nil)
 )
 
+// BackendName returns the stable backend identifier used in error messages.
+func (s *Store) BackendName() string { return "postgres" }
+
 // Connect initializes the store (creates schema and starts notification listener).
 // The database connection must already be established.
 func (s *Store) Connect(ctx context.Context) error {
@@ -365,7 +368,8 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 }
 
 // Set creates or updates a configuration value.
-// Returns the stored Value with updated metadata (version, timestamps).
+// Returns the stored Value with updated metadata (version, timestamps) in a
+// single round-trip via RETURNING.
 func (s *Store) Set(ctx context.Context, namespace, key string, value config.Value) (config.Value, error) {
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
@@ -377,73 +381,30 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		return nil, err
 	}
 
-	// Marshal the value
 	data, err := value.Marshal(ctx)
 	if err != nil {
 		return nil, config.WrapStoreError("marshal", "postgres", key, err)
 	}
 
 	var query string
-	var result sql.Result
-
 	writeMode := config.GetWriteMode(value)
 	switch writeMode {
 	case config.WriteModeCreate:
-		// Insert only if not exists - use ON CONFLICT DO NOTHING
 		query = fmt.Sprintf(`
 			INSERT INTO %s (key, namespace, value, codec, type, version, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, 1, NOW(), NOW())
 			ON CONFLICT (namespace, key) DO NOTHING
-		`, s.cfg.Table)
-
-		result, err = s.db.ExecContext(ctx, query,
-			key,
-			namespace,
-			data,
-			value.Codec(),
-			value.Type(),
-		)
-		if err != nil {
-			return nil, config.WrapStoreError("set", "postgres", key, err)
-		}
-
-		// Check if insert happened
-		rowsAffected, _ := result.RowsAffected()
-		if rowsAffected == 0 {
-			return nil, &config.KeyExistsError{Key: key, Namespace: namespace}
-		}
-
+			RETURNING id, version, created_at, updated_at
+		`, s.cfg.Table) // #nosec G201 -- table name validated in Connect
 	case config.WriteModeUpdate:
-		// Update only if exists
 		query = fmt.Sprintf(`
 			UPDATE %s SET
-				value = $3,
-				codec = $4,
-				type = $5,
-				version = version + 1,
-				updated_at = NOW()
+				value = $3, codec = $4, type = $5,
+				version = version + 1, updated_at = NOW()
 			WHERE namespace = $2 AND key = $1
-		`, s.cfg.Table)
-
-		result, err = s.db.ExecContext(ctx, query,
-			key,
-			namespace,
-			data,
-			value.Codec(),
-			value.Type(),
-		)
-		if err != nil {
-			return nil, config.WrapStoreError("set", "postgres", key, err)
-		}
-
-		// Check if update happened
-		rowsAffected, _ := result.RowsAffected()
-		if rowsAffected == 0 {
-			return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
-		}
-
+			RETURNING id, version, created_at, updated_at
+		`, s.cfg.Table) // #nosec G201 -- table name validated in Connect
 	default:
-		// Upsert with version increment using unique constraint on (namespace, key)
 		query = fmt.Sprintf(`
 			INSERT INTO %s (key, namespace, value, codec, type, version, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, 1, NOW(), NOW())
@@ -453,22 +414,41 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 				type = EXCLUDED.type,
 				version = %s.version + 1,
 				updated_at = NOW()
-		`, s.cfg.Table, s.cfg.Table)
+			RETURNING id, version, created_at, updated_at
+		`, s.cfg.Table, s.cfg.Table) // #nosec G201 -- table name validated in Connect
+	}
 
-		_, err = s.db.ExecContext(ctx, query,
-			key,
-			namespace,
-			data,
-			value.Codec(),
-			value.Type(),
-		)
-		if err != nil {
+	var (
+		id                   int64
+		version              int64
+		createdAt, updatedAt time.Time
+	)
+	err = s.db.QueryRowContext(ctx, query,
+		key, namespace, data, value.Codec(), value.Type(),
+	).Scan(&id, &version, &createdAt, &updatedAt)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		// Conditional write did not match: distinguish create-vs-update semantics.
+		switch writeMode {
+		case config.WriteModeCreate:
+			return nil, &config.KeyExistsError{Key: key, Namespace: namespace}
+		case config.WriteModeUpdate:
+			return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
+		default:
 			return nil, config.WrapStoreError("set", "postgres", key, err)
 		}
 	}
+	if err != nil {
+		return nil, config.WrapStoreError("set", "postgres", key, err)
+	}
 
-	// Fetch the stored value with updated metadata
-	return s.Get(ctx, namespace, key)
+	return config.NewValueFromBytes(
+		ctx, data,
+		value.Codec(),
+		config.WithValueType(value.Type()),
+		config.WithValueMetadata(version, createdAt, updatedAt),
+		config.WithValueEntryID(fmt.Sprintf("%d", id)),
+	)
 }
 
 // Delete removes a configuration value by namespace and key.
@@ -631,9 +611,13 @@ func (s *Store) executeListQuery(ctx context.Context, query string, args []any) 
 }
 
 // Watch returns a channel that receives change events.
+// Returns ErrWatchNotSupported if the store was constructed without a listener.
 func (s *Store) Watch(ctx context.Context, filter config.WatchFilter) (<-chan config.ChangeEvent, error) {
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
+	}
+	if s.listener == nil {
+		return nil, config.ErrWatchNotSupported
 	}
 
 	ctx, cancel := context.WithCancel(ctx)

@@ -736,6 +736,18 @@ func (s *Store) SupportsCodec(codecName string) bool {
 	return true
 }
 
+// BackendName returns the configured backend name, delegating to the primary
+// store when no explicit name was supplied.
+func (s *Store) BackendName() string {
+	if s.opts.backendName != "" {
+		return s.opts.backendName
+	}
+	if bn, ok := s.primary.(interface{ BackendName() string }); ok {
+		return bn.BackendName()
+	}
+	return ""
+}
+
 // SetAlias creates an alias on the primary and propagates to secondaries in ModeSync.
 // Returns errAliasingNotSupported if the primary does not implement config.AliasStore.
 func (s *Store) SetAlias(ctx context.Context, alias, target string) (config.Value, error) {
@@ -905,6 +917,9 @@ func (s *Store) applyEvent(ctx context.Context, event config.ChangeEvent) {
 	}
 
 	for _, sec := range s.secondaries {
+		if ctx.Err() != nil {
+			return
+		}
 		var applyErr error
 		switch event.Type {
 		case config.ChangeTypeSet:

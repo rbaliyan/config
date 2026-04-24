@@ -559,6 +559,18 @@ func (s *InstrumentedStore) SupportsCodec(codecName string) bool {
 	return true
 }
 
+// BackendName returns the configured backend name, delegating to the underlying
+// store when no explicit name was supplied.
+func (s *InstrumentedStore) BackendName() string {
+	if s.opts.backendName != "" {
+		return s.opts.backendName
+	}
+	if bn, ok := s.store.(interface{ BackendName() string }); ok {
+		return bn.BackendName()
+	}
+	return ""
+}
+
 // errorType returns a string classification of the error
 func errorType(err error) string {
 	if config.IsNotFound(err) {
