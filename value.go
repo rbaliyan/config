@@ -79,6 +79,21 @@ type storeMetadata interface {
 	EntryID() string
 }
 
+// EntryID returns the storage-level identifier associated with v, if any.
+// The identifier is an implementation detail used by Store backends for
+// pagination and update paths; it is empty for values created via NewValue
+// before they have been written.
+func EntryID(v Value) string {
+	if v == nil {
+		return ""
+	}
+	m := v.Metadata()
+	if sm, ok := m.(storeMetadata); ok {
+		return sm.EntryID()
+	}
+	return ""
+}
+
 // val is the concrete Value implementation.
 type val struct {
 	raw       any

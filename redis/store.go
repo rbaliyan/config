@@ -32,25 +32,71 @@ type changePayload struct {
 	Payload   *entryPayload `json:"payload,omitempty"`
 }
 
-const luaSetPublish = `
-redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
-redis.call('PUBLISH', ARGV[3], ARGV[4])
-return 1
+// luaUpsertPublish atomically performs an upsert: it reads the existing
+// field, computes the next version and preserves createdAt/entryID when the
+// field already exists, writes the merged payload, and publishes a change
+// notification — all in a single Redis round-trip so concurrent writers
+// cannot produce duplicate versions.
+//
+// ARGV layout:
+//
+//	[1] hash field (config key)
+//	[2] candidate payload JSON (initial version=1, fresh entryID, createdAt=updatedAt=now)
+//	[3] pub/sub channel
+//	[4] change payload prefix ("{\"type\":\"set\",...,\"payload\":")
+//	[5] change payload suffix ("}")
+//
+// The script merges the prior version/createdAt/entryID into the candidate
+// payload when one exists and returns the final stored JSON so the caller can
+// reuse it without a follow-up Get.
+const luaUpsertPublish = `
+local key = ARGV[1]
+local cand = cjson.decode(ARGV[2])
+local prior = redis.call('HGET', KEYS[1], key)
+if prior then
+    local p = cjson.decode(prior)
+    cand.ver = (tonumber(p.ver) or 0) + 1
+    cand.ca = p.ca
+    cand.id = p.id
+end
+local payload = cjson.encode(cand)
+redis.call('HSET', KEYS[1], key, payload)
+redis.call('PUBLISH', ARGV[3], ARGV[4] .. payload .. ARGV[5])
+return payload
+`
+
+// luaUpdatePublish atomically updates only when the field exists; fails with
+// nil when the field is missing. Shares the merge-then-publish semantics of
+// luaUpsertPublish.
+const luaUpdatePublish = `
+local key = ARGV[1]
+local cand = cjson.decode(ARGV[2])
+local prior = redis.call('HGET', KEYS[1], key)
+if not prior then return nil end
+local p = cjson.decode(prior)
+cand.ver = (tonumber(p.ver) or 0) + 1
+cand.ca = p.ca
+cand.id = p.id
+local payload = cjson.encode(cand)
+redis.call('HSET', KEYS[1], key, payload)
+redis.call('PUBLISH', ARGV[3], ARGV[4] .. payload .. ARGV[5])
+return payload
 `
 
 // luaSetNXPublish: atomic "create-if-not-exists then publish".
-// Returns 1 on success, 0 if the key already exists.
+// Returns the payload on success, nil if the key already exists.
 const luaSetNXPublish = `
 if redis.call('HSETNX', KEYS[1], ARGV[1], ARGV[2]) == 1 then
-    redis.call('PUBLISH', ARGV[3], ARGV[4])
-    return 1
+    redis.call('PUBLISH', ARGV[3], ARGV[4] .. ARGV[2] .. ARGV[5])
+    return ARGV[2]
 end
-return 0
+return nil
 `
 
 var (
-	setPublishScript   = goredis.NewScript(luaSetPublish)
-	setNXPublishScript = goredis.NewScript(luaSetNXPublish)
+	upsertPublishScript = goredis.NewScript(luaUpsertPublish)
+	updatePublishScript = goredis.NewScript(luaUpdatePublish)
+	setNXPublishScript  = goredis.NewScript(luaSetNXPublish)
 )
 
 // Store implements config.Store backed by Redis. See the package-level
@@ -98,6 +144,9 @@ func (s *Store) hashKey(namespace string) string {
 func (s *Store) chanKey() string {
 	return fmt.Sprintf("%s:changes", s.opts.keyPrefix)
 }
+
+// BackendName returns the stable backend identifier used in error messages.
+func (s *Store) BackendName() string { return "redis" }
 
 func (s *Store) Connect(ctx context.Context) error {
 	if s.closed.Load() {
@@ -221,88 +270,82 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	now := time.Now().UTC()
 	writeMode := config.GetWriteMode(value)
 
+	// Build the candidate payload used for a fresh create. The upsert/update
+	// scripts overwrite ver/ca/id in-place on the prior entry when one exists,
+	// so version/createdAt/entryID computed here are only used on the "no
+	// prior entry" branch.
+	cand := s.buildEntryPayload(data, value, 1, now, now, s.makeEntryID())
+	candJSON, err := json.Marshal(cand)
+	if err != nil {
+		return nil, config.WrapStoreError("set", "redis", key, err)
+	}
+
+	// Change payload is split into prefix/suffix around the stored payload so
+	// the Lua scripts can emit the exact bytes they persisted.
+	cpPrefix, cpSuffix, err := changePayloadFrames(namespace, key)
+	if err != nil {
+		return nil, config.WrapStoreError("set", "redis", key, err)
+	}
+
+	var script *goredis.Script
 	switch writeMode {
 	case config.WriteModeCreate:
-		// Build the payload with its final EntryID so the atomic HSETNX
-		// observes the complete entry on its very first write.
-		entryID := s.makeEntryID(namespace, key)
-		ep := s.buildEntryPayload(data, value, 1, now, now, entryID)
-		epJSON, err := json.Marshal(ep)
-		if err != nil {
-			return nil, config.WrapStoreError("set", "redis", key, err)
-		}
+		script = setNXPublishScript
+	case config.WriteModeUpdate:
+		script = updatePublishScript
+	default:
+		script = upsertPublishScript
+	}
 
-		cp := changePayload{Type: "set", Namespace: namespace, Key: key, Payload: ep}
-		cpJSON, _ := json.Marshal(cp)
+	res, err := script.Run(ctx, s.client, []string{hashKey},
+		key, string(candJSON), channel, cpPrefix, cpSuffix).Result()
+	if err != nil && err != goredis.Nil {
+		return nil, config.WrapStoreError("set", "redis", key, err)
+	}
 
-		res, err := setNXPublishScript.Run(ctx, s.client, []string{hashKey},
-			key, string(epJSON), channel, string(cpJSON)).Int64()
-		if err != nil {
-			return nil, config.WrapStoreError("set", "redis", key, err)
-		}
-		if res != 1 {
+	switch writeMode {
+	case config.WriteModeCreate:
+		if err == goredis.Nil || res == nil {
 			return nil, &config.KeyExistsError{Key: key, Namespace: namespace}
 		}
-
 	case config.WriteModeUpdate:
-		existing, err := s.client.HGet(ctx, hashKey, key).Bytes()
-		if err == goredis.Nil {
+		if err == goredis.Nil || res == nil {
 			return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
-		}
-		if err != nil {
-			return nil, config.WrapStoreError("set", "redis", key, err)
-		}
-
-		var prev entryPayload
-		if err := json.Unmarshal(existing, &prev); err != nil {
-			return nil, config.WrapStoreError("set", "redis", key, err)
-		}
-
-		ep := s.buildEntryPayload(data, value, prev.Version+1, prev.CreatedAt, now, prev.EntryID)
-		epJSON, err := json.Marshal(ep)
-		if err != nil {
-			return nil, config.WrapStoreError("set", "redis", key, err)
-		}
-
-		cp := changePayload{Type: "set", Namespace: namespace, Key: key, Payload: ep}
-		cpJSON, _ := json.Marshal(cp)
-
-		if err := setPublishScript.Run(ctx, s.client, []string{hashKey}, key, string(epJSON), channel, string(cpJSON)).Err(); err != nil {
-			return nil, config.WrapStoreError("set", "redis", key, err)
-		}
-
-	default:
-		existing, err := s.client.HGet(ctx, hashKey, key).Bytes()
-		var version int64 = 1
-		var createdAt = now
-		var entryID string
-		if err == nil {
-			var prev entryPayload
-			if jsonErr := json.Unmarshal(existing, &prev); jsonErr == nil {
-				version = prev.Version + 1
-				createdAt = prev.CreatedAt
-				entryID = prev.EntryID
-			}
-		}
-		if entryID == "" {
-			entryID = s.makeEntryID(namespace, key)
-		}
-
-		ep := s.buildEntryPayload(data, value, version, createdAt, now, entryID)
-		epJSON, err := json.Marshal(ep)
-		if err != nil {
-			return nil, config.WrapStoreError("set", "redis", key, err)
-		}
-
-		cp := changePayload{Type: "set", Namespace: namespace, Key: key, Payload: ep}
-		cpJSON, _ := json.Marshal(cp)
-
-		if err := setPublishScript.Run(ctx, s.client, []string{hashKey}, key, string(epJSON), channel, string(cpJSON)).Err(); err != nil {
-			return nil, config.WrapStoreError("set", "redis", key, err)
 		}
 	}
 
-	return s.Get(ctx, namespace, key)
+	payload, ok := res.(string)
+	if !ok {
+		return nil, config.WrapStoreError("set", "redis", key,
+			fmt.Errorf("unexpected script result type %T", res))
+	}
+
+	var ep entryPayload
+	if err := json.Unmarshal([]byte(payload), &ep); err != nil {
+		return nil, config.WrapStoreError("set", "redis", key, err)
+	}
+	return config.NewValueFromBytes(ctx, ep.Value, ep.Codec,
+		config.WithValueType(config.Type(ep.Type)),
+		config.WithValueMetadata(ep.Version, ep.CreatedAt, ep.UpdatedAt),
+		config.WithValueEntryID(ep.EntryID),
+	)
+}
+
+// changePayloadFrames returns the ("prefix", "suffix") of a change payload so
+// that the Lua scripts can splice the persisted entry JSON between them and
+// publish an identical representation of what was written.
+func changePayloadFrames(namespace, key string) (string, string, error) {
+	prefix, err := json.Marshal(struct {
+		Type      string `json:"type"`
+		Namespace string `json:"namespace"`
+		Key       string `json:"key"`
+	}{Type: "set", Namespace: namespace, Key: key})
+	if err != nil {
+		return "", "", err
+	}
+	// Rewrite the trailing "}" to ",\"payload\":" and keep "}" as the suffix.
+	head := string(prefix[:len(prefix)-1]) + `,"payload":`
+	return head, `}`, nil
 }
 
 func (s *Store) buildEntryPayload(data []byte, value config.Value, version int64, createdAt, updatedAt time.Time, entryID string) *entryPayload {
@@ -320,7 +363,7 @@ func (s *Store) buildEntryPayload(data []byte, value config.Value, version int64
 // makeEntryID returns a monotonically increasing, globally unique int64 ID.
 // idSeq is seeded from UnixNano at Connect time, so IDs from a new session
 // are always greater than any ID written in a prior session.
-func (s *Store) makeEntryID(_, _ string) string {
+func (s *Store) makeEntryID() string {
 	return strconv.FormatInt(s.idSeq.Add(1), 10)
 }
 

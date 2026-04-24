@@ -118,6 +118,9 @@ func NewStore(path string, opts ...StoreOption) *Store {
 	}
 }
 
+// BackendName returns the stable backend identifier used in error messages.
+func (s *Store) BackendName() string { return "file" }
+
 // Connect reads and parses the config file, populating the store.
 func (s *Store) Connect(ctx context.Context) error {
 	if s.closed.Load() {

@@ -245,14 +245,16 @@ func (m *manager) Close(ctx context.Context) error {
 	m.watchWg.Wait()
 
 	// Close store
+	var closeErr error
 	if m.store != nil {
-		if err := m.store.Close(ctx); err != nil {
-			m.logger.Error("failed to close store", "error", err)
+		closeErr = m.store.Close(ctx)
+		if closeErr != nil {
+			m.logger.Error("failed to close store", "error", closeErr)
 		}
 	}
 
 	m.logger.Info("config manager closed")
-	return nil
+	return closeErr
 }
 
 func (m *manager) isConnected() bool {
@@ -344,7 +346,7 @@ func (m *manager) initAliases(ctx context.Context) {
 				m.logger.Warn("invalid persisted alias value", "alias", alias, "error", strErr)
 				continue
 			}
-			m.aliases.setUnchecked(alias, target)
+			m.aliases.seed(alias, target)
 		}
 	}
 
@@ -359,7 +361,7 @@ func (m *manager) initAliases(ctx context.Context) {
 			}
 			continue
 		}
-		m.aliases.setUnchecked(alias, target)
+		m.aliases.seed(alias, target)
 	}
 }
 
@@ -413,20 +415,22 @@ func (m *manager) Aliases() map[string]string {
 }
 
 // handleAliasChange processes an alias change event from the Watch stream.
+// The event's wall-clock timestamp is used to discard stale events that would
+// undo a more recent locally-applied mutation.
 func (m *manager) handleAliasChange(change ChangeEvent) {
-	switch change.Type {
-	case ChangeTypeAliasSet:
-		if change.Value != nil {
-			target, err := change.Value.String()
-			if err != nil {
-				m.logger.Warn("invalid alias value from watch", "alias", change.Key, "error", err)
-				return
-			}
-			m.aliases.setUnchecked(change.Key, target)
+	var target string
+	if change.Type == ChangeTypeAliasSet {
+		if change.Value == nil {
+			return
 		}
-	case ChangeTypeAliasDelete:
-		m.aliases.remove(change.Key)
+		t, err := change.Value.String()
+		if err != nil {
+			m.logger.Warn("invalid alias value from watch", "alias", change.Key, "error", err)
+			return
+		}
+		target = t
 	}
+	m.aliases.applyEvent(change.Key, target, change.Type, change.Timestamp)
 }
 
 // Health performs a health check on the manager and underlying store.

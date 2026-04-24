@@ -155,6 +155,9 @@ var (
 	_ config.BulkStore     = (*Store)(nil)
 )
 
+// BackendName returns the stable backend identifier used in error messages.
+func (s *Store) BackendName() string { return "sqlite" }
+
 // Connect initializes the store (enables WAL mode and creates schema).
 // The database connection must already be established.
 func (s *Store) Connect(ctx context.Context) error {
