@@ -185,6 +185,14 @@ func (s *transformStore) SupportsCodec(codecName string) bool {
 	return true
 }
 
+// BackendName delegates to the inner store's backend identifier.
+func (s *transformStore) BackendName() string {
+	if bn, ok := s.store.(interface{ BackendName() string }); ok {
+		return bn.BackendName()
+	}
+	return ""
+}
+
 // GetMany retrieves multiple values and reverses each one.
 func (s *transformStore) GetMany(ctx context.Context, namespace string, keys []string) (map[string]config.Value, error) {
 	if bulk, ok := s.store.(config.BulkStore); ok {
@@ -330,12 +338,8 @@ func valueOptions(v config.Value) []config.ValueOption {
 		if m.IsStale() {
 			opts = append(opts, config.WithValueStale(true))
 		}
-		// EntryID is on storeMetadata (unexported interface) but valueMetadata
-		// exports the method, so we can reach it via a structural type assertion.
-		if sm, ok := m.(interface{ EntryID() string }); ok {
-			if id := sm.EntryID(); id != "" {
-				opts = append(opts, config.WithValueEntryID(id))
-			}
+		if id := config.EntryID(v); id != "" {
+			opts = append(opts, config.WithValueEntryID(id))
 		}
 	}
 

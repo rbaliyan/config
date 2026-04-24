@@ -330,6 +330,9 @@ func (s *Store) SupportsCodec(codecName string) bool {
 	return codec.Get(codecName) != nil
 }
 
+// BackendName returns the stable backend identifier used in error messages.
+func (s *Store) BackendName() string { return "mongodb" }
+
 // Connect initializes the store (optionally creates collection/indexes and starts change stream listener).
 // The MongoDB client must already be connected.
 func (s *Store) Connect(ctx context.Context) error {

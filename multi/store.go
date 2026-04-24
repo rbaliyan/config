@@ -516,6 +516,17 @@ func (ms *Store) GetVersions(ctx context.Context, namespace, key string, filter 
 	return nil, config.ErrVersioningNotSupported
 }
 
+// BackendName delegates to the primary store's backend identifier.
+func (ms *Store) BackendName() string {
+	if len(ms.stores) == 0 {
+		return ""
+	}
+	if bn, ok := ms.stores[0].(interface{ BackendName() string }); ok {
+		return bn.BackendName()
+	}
+	return ""
+}
+
 // SupportsCodec checks all underlying stores for codec support.
 // Returns false if any store rejects the codec.
 // Returns true if no stores implement CodecValidator.

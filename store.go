@@ -161,9 +161,11 @@ type VersionedStore interface {
 	// ordered by version descending (newest first). Use Limit() and Cursor() for pagination.
 	//
 	// Returns ErrNotFound if the key has never existed or was deleted.
-	// Note: deleting a key may also remove its version history depending on the
-	// store implementation. Database-backed stores (postgres, mongodb) retain
-	// history in a separate table/collection; the memory store discards it.
+	// Note: deleting a key also removes its version history in every current
+	// implementation. Only the memory store implements this interface today;
+	// other backends do not retain prior versions and do not satisfy
+	// VersionedStore (GetVersions via Manager.GetVersions returns
+	// ErrVersioningNotSupported).
 	GetVersions(ctx context.Context, namespace, key string, filter VersionFilter) (VersionPage, error)
 }
 

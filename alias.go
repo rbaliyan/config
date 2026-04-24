@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"sync"
+	"time"
 )
 
 // AliasManager provides runtime management of key aliases.
@@ -52,14 +53,21 @@ type AliasManager interface {
 // aliasResolver manages key aliases with thread-safe in-memory access.
 // It is the fast-path for alias resolution during Get/Set/Delete operations.
 // Persistence is handled by the Manager via [AliasStore].
+//
+// The resolver tracks the wall-clock time of every local mutation so the
+// watch goroutine can ignore stale events that would otherwise undo a
+// locally-applied change (e.g. a buffered AliasSet event that is processed
+// after the caller has already invoked RemoveAlias).
 type aliasResolver struct {
-	mu      sync.RWMutex
-	aliases map[string]string // alias key → target key
+	mu         sync.RWMutex
+	aliases    map[string]string    // alias key → target key
+	lastChange map[string]time.Time // alias key → wall-clock time of last local mutation
 }
 
 func newAliasResolver() *aliasResolver {
 	return &aliasResolver{
-		aliases: make(map[string]string),
+		aliases:    make(map[string]string),
+		lastChange: make(map[string]time.Time),
 	}
 }
 
@@ -96,15 +104,37 @@ func (r *aliasResolver) set(alias, target string) error {
 	}
 
 	r.aliases[alias] = target
+	r.lastChange[alias] = time.Now().UTC()
 	return nil
 }
 
-// setUnchecked adds an alias without chain validation.
-// Used when applying watch events where the store is the source of truth.
-func (r *aliasResolver) setUnchecked(alias, target string) {
+// applyEvent updates the resolver from a watch event, ignoring stale events
+// that would undo a more recent local mutation. The event's wall-clock
+// timestamp is compared against the resolver's last local change for the
+// alias; events older than the last local change are dropped.
+func (r *aliasResolver) applyEvent(alias, target string, eventType ChangeType, eventTime time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if last, ok := r.lastChange[alias]; ok && eventTime.Before(last) {
+		return
+	}
+	switch eventType {
+	case ChangeTypeAliasSet:
+		r.aliases[alias] = target
+	case ChangeTypeAliasDelete:
+		delete(r.aliases, alias)
+	}
+	r.lastChange[alias] = eventTime
+}
+
+// seed imports an alias mapping at initialization time, before any watcher is
+// started. Unlike applyEvent it does no timestamp comparison; callers must
+// ensure seed runs before Connect starts the watch goroutine.
+func (r *aliasResolver) seed(alias, target string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.aliases[alias] = target
+	r.lastChange[alias] = time.Now().UTC()
 }
 
 // remove removes an alias.
@@ -112,6 +142,7 @@ func (r *aliasResolver) remove(alias string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.aliases, alias)
+	r.lastChange[alias] = time.Now().UTC()
 }
 
 // has reports whether the alias exists.

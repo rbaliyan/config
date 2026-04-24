@@ -2,11 +2,29 @@ package config
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/rbaliyan/config/codec"
 	_ "github.com/rbaliyan/config/codec/json"
 )
+
+// backendNamer is an optional interface a Store can implement to report a
+// short, stable backend name (e.g. "postgres", "mongodb") for use in error
+// messages. Stores that do not implement it fall back to an opaque label.
+type backendNamer interface {
+	BackendName() string
+}
+
+// storeBackendName returns the backend name for s, or "store" if s does not
+// implement backendNamer. It is used to produce stable error messages without
+// leaking Go internal type paths.
+func storeBackendName(s Store) string {
+	if bn, ok := s.(backendNamer); ok {
+		if name := bn.BackendName(); name != "" {
+			return name
+		}
+	}
+	return "store"
+}
 
 // Reader provides read-only access to configuration.
 // Use this interface in application code to read config values.
@@ -163,7 +181,7 @@ func (c *nsConfig) Set(ctx context.Context, key string, value any, opts ...SetOp
 	// Validate codec against store
 	if cv, ok := c.manager.store.(CodecValidator); ok {
 		if !cv.SupportsCodec(codecToUse.Name()) {
-			return &UnsupportedCodecError{Codec: codecToUse.Name(), Backend: fmt.Sprintf("%T", c.manager.store)}
+			return &UnsupportedCodecError{Codec: codecToUse.Name(), Backend: storeBackendName(c.manager.store)}
 		}
 	}
 

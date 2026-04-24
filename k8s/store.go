@@ -91,6 +91,9 @@ func NewStore(client kubernetes.Interface, opts ...Option) *Store {
 	}
 }
 
+// BackendName returns the stable backend identifier used in error messages.
+func (s *Store) BackendName() string { return "k8s" }
+
 // Connect starts the informer factory and waits for the initial cache sync.
 // The context deadline/timeout controls how long to wait for cache sync.
 func (s *Store) Connect(ctx context.Context) error {
