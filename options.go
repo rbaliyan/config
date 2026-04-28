@@ -22,6 +22,7 @@ type managerOptions struct {
 	watchBackoff       watchBackoffConfig
 	maxKeysPerNS       int // 0 = unlimited
 	aliases            map[string]string // alias key → target key
+	cache              Cache             // nil = use default in-memory LRU
 }
 
 // Option configures the Manager.
@@ -150,6 +151,25 @@ func WithAliases(target string, aliases ...string) Option {
 		}
 		for _, alias := range aliases {
 			o.aliases[alias] = target
+		}
+	}
+}
+
+// WithCache sets a custom cache implementation for the Manager.
+// When set, the provided cache is used instead of the default in-memory LRU.
+// Use this to share cache state across instances with a distributed backend
+// such as Redis:
+//
+//	mgr, err := config.New(
+//	    config.WithStore(pgStore),
+//	    config.WithCache(redis.NewCache(redisClient,
+//	        redis.WithCacheTTL(5*time.Minute),
+//	    )),
+//	)
+func WithCache(c Cache) Option {
+	return func(o *managerOptions) {
+		if c != nil {
+			o.cache = c
 		}
 	}
 }
