@@ -23,6 +23,7 @@ type managerOptions struct {
 	maxKeysPerNS       int // 0 = unlimited
 	aliases            map[string]string // alias key → target key
 	cache              Cache             // nil = use default in-memory LRU
+	memoryCacheTTL     time.Duration     // 0 = no expiry (LRU eviction only)
 }
 
 // Option configures the Manager.
@@ -151,6 +152,17 @@ func WithAliases(target string, aliases ...string) Option {
 		}
 		for _, alias := range aliases {
 			o.aliases[alias] = target
+		}
+	}
+}
+
+// WithMemoryCacheTTL sets the TTL for entries in the default in-memory LRU cache.
+// Entries older than d are automatically evicted. Use 0 (the default) to disable
+// expiry and rely solely on LRU eviction. Has no effect when WithCache is also set.
+func WithMemoryCacheTTL(d time.Duration) Option {
+	return func(o *managerOptions) {
+		if d > 0 {
+			o.memoryCacheTTL = d
 		}
 	}
 }

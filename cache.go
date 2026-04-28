@@ -2,10 +2,10 @@ package config
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
+	"time"
 
-	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/hashicorp/golang-lru/v2/expirable"
 )
 
 // CacheStats contains cache statistics.
@@ -71,11 +71,12 @@ const defaultCacheCapacity = 10000
 // so "ns\x00key" is guaranteed unique for any (namespace, key) pair.
 const cacheKeySeparator = "\x00"
 
-// memoryCache is an in-memory LRU cache implementation using hashicorp/golang-lru.
-// It provides proper LRU semantics where both reads and writes refresh entry age.
+// memoryCache is an in-memory LRU cache implementation using hashicorp/golang-lru/v2/expirable.
+// It supports optional TTL-based expiry in addition to LRU eviction.
 type memoryCache struct {
-	lru      *lru.Cache[string, Value]
+	lru      *expirable.LRU[string, Value]
 	capacity int
+	ttl      time.Duration
 
 	// Statistics (atomic for lock-free reads)
 	hits      atomic.Int64
@@ -83,27 +84,22 @@ type memoryCache struct {
 	evictions atomic.Int64
 }
 
-// newMemoryCache creates a new in-memory cache.
-// If capacity is 0, it uses a default capacity of 10000.
-// For truly unbounded caches, use a very large capacity or consider memory implications.
-// Returns an error if cache creation fails (e.g., invalid capacity).
-func newMemoryCache(capacity int) (Cache, error) {
+// newMemoryCache creates a new in-memory LRU cache.
+// If capacity is 0, it uses the default capacity of 10000.
+// If ttl is 0, entries never expire (LRU eviction only).
+func newMemoryCache(capacity int, ttl time.Duration) (Cache, error) {
 	if capacity <= 0 {
 		capacity = defaultCacheCapacity
 	}
 
 	c := &memoryCache{
 		capacity: capacity,
+		ttl:      ttl,
 	}
 
-	// Create LRU cache with eviction callback to track stats
-	var err error
-	c.lru, err = lru.NewWithEvict[string, Value](capacity, func(key string, value Value) {
+	c.lru = expirable.NewLRU(capacity, func(key string, value Value) {
 		c.evictions.Add(1)
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create LRU cache: %w", err)
-	}
+	}, ttl)
 
 	return c, nil
 }
@@ -149,3 +145,4 @@ func (c *memoryCache) Stats() CacheStats {
 		Evictions: c.evictions.Load(),
 	}
 }
+
