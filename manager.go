@@ -164,7 +164,7 @@ func New(opts ...Option) (Manager, error) {
 		c = o.cache
 	} else {
 		var err error
-		c, err = newMemoryCache(0)
+		c, err = newMemoryCache(0, o.memoryCacheTTL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize cache: %w", err)
 		}
