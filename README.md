@@ -174,7 +174,9 @@ writable := file.NewStore("config.yaml",
 )
 ```
 
-Top-level keys in the file become namespaces; nested keys are flattened with `/` (configurable via `WithKeySeparator`).
+Top-level keys in the file become namespaces; nested keys are flattened with `/` (configurable via `WithKeySeparator`). Top-level scalar values go into the namespace set by `WithDefaultNamespace` (default: `"default"`).
+
+Pass `WithExpansion` or `WithAngleBracketExpander` to substitute `${VAR}` or `<VAR>` placeholders at load time — see [Variable Expansion](#variable-expansion).
 
 ### Redis Store
 
@@ -649,6 +651,96 @@ if err != nil {
     }
 }
 ```
+
+## Variable Expansion
+
+Placeholder tokens in string values can be substituted at parse time (file
+store only) or at query time (any backend via `expand.Store`).
+
+### Parse-time expansion (file store)
+
+Placeholders are resolved once when the file is loaded. Changes to the
+underlying source (env vars, etc.) are not reflected until the store reloads.
+
+```go
+// ${VAR} and ${VAR:-default} from environment variables.
+store := file.NewStore("config.yaml",
+    file.WithExpansion(file.EnvExpander()),
+)
+
+// <secret-name> from a custom secrets provider.
+store := file.NewStore("config.yaml",
+    file.WithAngleBracketExpander(func(name string) (string, bool) {
+        return vault.Get(name) // your lookup
+    }),
+)
+
+// Chain multiple sources: custom overrides first, env fallback.
+store := file.NewStore("config.yaml",
+    file.WithExpansion(overridesFn),
+    file.WithExpansion(file.EnvExpander()),
+)
+```
+
+Config file syntax:
+
+```yaml
+database:
+  host: ${DB_HOST}               # replaced with env var
+  port: ${DB_PORT:-5432}         # fallback to 5432 if unset
+  password: <db_password>        # replaced via angle-bracket expander
+  literal: \${NOT_EXPANDED}      # backslash disables substitution
+```
+
+### Query-time expansion (any backend)
+
+`expand.NewStore` wraps any `config.Store` and expands placeholders on every
+`Get` and `Find`, so changes to the source are reflected immediately.
+
+```go
+import "github.com/rbaliyan/config/expand"
+
+inner, _ := memory.NewStore(), inner.Connect(ctx)
+
+s, err := expand.NewStore(inner,
+    expand.WithDollarExpander(expand.EnvExpander()),  // ${VAR}
+    expand.WithAngleExpander(secretsFn),              // <VAR>
+)
+
+// Reads expand at call time; writes pass through to the inner store unchanged.
+val, _ := s.Get(ctx, "app", "host")
+```
+
+## Sensitive Values
+
+`config.Secret` wraps a sensitive string and masks it in all output so secrets
+are never accidentally leaked into logs, error messages, or HTTP responses.
+
+```go
+type AppConfig struct {
+    DBPassword config.Secret `yaml:"db_password"`
+    APIKey     config.Secret `json:"api_key"`
+}
+
+var cfg AppConfig
+// Decode from YAML/JSON/TOML: Secret.Value() holds the real string.
+yaml.Unmarshal(data, &cfg)
+
+fmt.Println(cfg.DBPassword)        // ******
+log.Info("config loaded", "cfg", cfg) // *** no leak ***
+realPwd := cfg.DBPassword.Value()  // "actual-password"
+
+// Marshal back to YAML/JSON: non-zero Secret writes "******", zero writes "".
+out, _ := yaml.Marshal(cfg)
+
+// IsZero reports whether no value has been set.
+if cfg.APIKey.IsZero() {
+    log.Warn("API key not configured")
+}
+```
+
+`UnmarshalText("******")` produces a zero `Secret` (empty value), preventing a
+masked token from being treated as a real credential on round-trip.
 
 ## Manager Options
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/rbaliyan/config"
 	"github.com/rbaliyan/config/codec"
+	"github.com/rbaliyan/config/expand"
 )
 
 // Store implements config.Store backed by a configuration file.
@@ -754,6 +755,17 @@ func (s *Store) addEntryValidated(ctx context.Context, namespace, key string, va
 
 // addEntry creates a store entry for a single key-value pair.
 func (s *Store) addEntry(ctx context.Context, namespace, key string, value any, now time.Time) error {
+	if s.opts.expander != nil {
+		if str, ok := value.(string); ok {
+			value = expand.Dollar(str, s.opts.expander)
+		}
+	}
+	if s.opts.angleExpander != nil {
+		if str, ok := value.(string); ok {
+			value = expand.Angle(str, s.opts.angleExpander)
+		}
+	}
+
 	c := codec.Default()
 	data, err := c.Encode(ctx, value)
 	if err != nil {
