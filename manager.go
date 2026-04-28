@@ -110,7 +110,7 @@ type manager struct {
 	connectMu sync.Mutex // serializes Connect and Close
 	status    int32      // 0=created, 1=connected, 2=closed
 	store     Store
-	cache     cache // internal cache for resilience
+	cache     Cache // internal cache for resilience
 	codec     codec.Codec
 	logger    *slog.Logger
 	aliases   *aliasResolver
@@ -158,10 +158,16 @@ func New(opts ...Option) (Manager, error) {
 		opt(o)
 	}
 
-	// Create internal cache for resilience (bounded, no expiration)
-	cache, err := newMemoryCache(0) // Use default capacity
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize cache: %w", err)
+	// Use a provided cache or fall back to the default in-memory LRU.
+	var c Cache
+	if o.cache != nil {
+		c = o.cache
+	} else {
+		var err error
+		c, err = newMemoryCache(0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize cache: %w", err)
+		}
 	}
 
 	m := &manager{
@@ -173,7 +179,7 @@ func New(opts ...Option) (Manager, error) {
 		aliases:        newAliasResolver(),
 		seedAliases:    o.aliases,
 		configs:        make(map[string]*nsConfig),
-		cache:          cache,
+		cache:          c,
 		maxKeysPerNS:   o.maxKeysPerNS,
 	}
 

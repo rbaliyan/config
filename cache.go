@@ -36,20 +36,19 @@ func (s *CacheStats) HitRate() float64 {
 	return float64(s.Hits) / float64(total)
 }
 
-// cache defines the internal interface for local configuration caching.
+// Cache defines the interface for configuration value caching.
 //
 // The cache provides fast local access to configuration values and serves as
 // a resilience layer. If the backend store becomes unavailable, the application
 // can continue serving cached values.
 //
 // The cache is automatically invalidated via the store's Watch mechanism
-// (e.g., MongoDB Change Streams, PostgreSQL LISTEN/NOTIFY). This provides
-// eventual consistency without external dependencies like Redis.
+// (e.g., MongoDB Change Streams, PostgreSQL LISTEN/NOTIFY).
 //
-// Note: The cache is NOT meant for sharing state across application instances.
-// Each instance maintains its own local cache that is independently synchronized
-// with the backend store.
-type cache interface {
+// The default implementation is an in-process LRU (see newMemoryCache). For
+// shared caching across multiple application instances, supply a distributed
+// implementation (e.g. redis.NewCache) via config.WithCache.
+type Cache interface {
 	// Get retrieves a cached value.
 	// Returns ErrNotFound if not in cache.
 	Get(ctx context.Context, namespace, key string) (Value, error)
@@ -88,7 +87,7 @@ type memoryCache struct {
 // If capacity is 0, it uses a default capacity of 10000.
 // For truly unbounded caches, use a very large capacity or consider memory implications.
 // Returns an error if cache creation fails (e.g., invalid capacity).
-func newMemoryCache(capacity int) (cache, error) {
+func newMemoryCache(capacity int) (Cache, error) {
 	if capacity <= 0 {
 		capacity = defaultCacheCapacity
 	}
@@ -110,7 +109,7 @@ func newMemoryCache(capacity int) (cache, error) {
 }
 
 // Compile-time interface check
-var _ cache = (*memoryCache)(nil)
+var _ Cache = (*memoryCache)(nil)
 
 func cacheKey(namespace, key string) string {
 	return namespace + cacheKeySeparator + key
