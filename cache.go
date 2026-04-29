@@ -79,9 +79,8 @@ type memoryCache struct {
 	ttl      time.Duration
 
 	// Statistics (atomic for lock-free reads)
-	hits      atomic.Int64
-	misses    atomic.Int64
-	evictions atomic.Int64
+	hits   atomic.Int64
+	misses atomic.Int64
 
 	// callbackEvictions counts hashicorp-LRU-fired evictions (capacity-driven,
 	// library TTL, and explicit Remove). suppressEviction is incremented before

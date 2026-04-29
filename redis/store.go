@@ -217,7 +217,7 @@ func (s *Store) Connect(ctx context.Context) error {
 	s.client = client
 	s.idSeq.Store(time.Now().UnixNano())
 	s.stopWg.Add(1)
-	go s.runPubSub()
+	go s.runPubSub() // #nosec G118 -- intentional long-lived goroutine; manages lifecycle via stop channel, not caller ctx
 	return nil
 }
 

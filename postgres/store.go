@@ -205,7 +205,7 @@ func (s *Store) Connect(ctx context.Context) error {
 			return config.WrapStoreError("listen", "postgres", "", err)
 		}
 		s.watchWg.Add(1)
-		go s.listenNotifications()
+		go s.listenNotifications() // #nosec G118 -- intentional long-lived goroutine; manages lifecycle via watchCtx, not caller ctx
 	}
 
 	return nil
@@ -241,7 +241,7 @@ func (s *Store) createSchema(ctx context.Context) error {
 		s.cfg.Table, s.cfg.Table,
 		s.cfg.Table, s.cfg.Table,
 		s.cfg.Table, s.cfg.Table,
-		s.cfg.Table, s.cfg.Table)
+		s.cfg.Table, s.cfg.Table) // #nosec G201 -- table name is from operator configuration, not user input
 
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return err
