@@ -67,6 +67,10 @@ type Metadata interface {
 	// - Show degraded UI indicators
 	// - Trigger background refresh
 	IsStale() bool
+
+	// ExpiresAt returns the absolute time at which this value expires.
+	// A zero time means no TTL (the value never expires).
+	ExpiresAt() time.Time
 }
 
 // storeMetadata extends Metadata with internal fields used by store implementations.
@@ -109,13 +113,15 @@ type valueMetadata struct {
 	version   int64
 	createdAt time.Time
 	updatedAt time.Time
-	entryID   string // Internal: database-level entry ID for store operations
-	stale     bool   // True if served from cache due to store error
+	expiresAt time.Time // zero = no TTL
+	entryID   string    // Internal: database-level entry ID for store operations
+	stale     bool      // True if served from cache due to store error
 }
 
 func (m *valueMetadata) Version() int64       { return m.version }
 func (m *valueMetadata) CreatedAt() time.Time { return m.createdAt }
 func (m *valueMetadata) UpdatedAt() time.Time { return m.updatedAt }
+func (m *valueMetadata) ExpiresAt() time.Time { return m.expiresAt }
 func (m *valueMetadata) EntryID() string      { return m.entryID }
 func (m *valueMetadata) IsStale() bool        { return m.stale }
 
@@ -128,7 +134,7 @@ var (
 // ValueOption configures a value during construction.
 type ValueOption func(*val)
 
-// WithCodec sets the codec for the value.
+// WithValueCodec sets the codec for the value.
 func WithValueCodec(c codec.Codec) ValueOption {
 	return func(v *val) {
 		v.codec = c
@@ -164,6 +170,31 @@ func WithValueEntryID(id string) ValueOption {
 		}
 		v.metadata.entryID = id
 	}
+}
+
+// WithValueExpiresAt sets the absolute expiry time on the value.
+// A zero time means no TTL. Used by store backends when reading back stored values.
+func WithValueExpiresAt(t time.Time) ValueOption {
+	return func(v *val) {
+		if v.metadata == nil {
+			v.metadata = &valueMetadata{}
+		}
+		v.metadata.expiresAt = t
+	}
+}
+
+// GetExpiresAt returns the expiry time stored in v's metadata, or zero if none.
+func GetExpiresAt(v Value) time.Time {
+	if v == nil {
+		return time.Time{}
+	}
+	return v.Metadata().ExpiresAt()
+}
+
+// IsExpired reports whether v has a non-zero expiry time that is in the past.
+func IsExpired(v Value) bool {
+	t := GetExpiresAt(v)
+	return !t.IsZero() && time.Now().After(t)
 }
 
 // WithValueStale marks the value as stale (served from cache due to store error).
@@ -288,6 +319,7 @@ func MarkStale(v Value) Value {
 				version:   src.metadata.version,
 				createdAt: src.metadata.createdAt,
 				updatedAt: src.metadata.updatedAt,
+				expiresAt: src.metadata.expiresAt,
 				entryID:   src.metadata.entryID,
 				stale:     true,
 			}

@@ -1753,3 +1753,48 @@ func TestStore_GetVersions_DeleteManyDiscardsHistory(t *testing.T) {
 		t.Errorf("Expected ErrNotFound for key 'b' after DeleteMany, got: %v", err)
 	}
 }
+
+// TestStore_ExpiredEntryTreatedAsAbsent verifies that an entry whose TTL has
+// elapsed but which has not yet been swept behaves as if absent for both Get
+// and conditional Set paths. This keeps write semantics aligned with read
+// semantics regardless of when the background sweeper runs.
+func TestStore_ExpiredEntryTreatedAsAbsent(t *testing.T) {
+	store := NewStore()
+	ctx := context.Background()
+	_ = store.Connect(ctx)
+	defer func() { _ = store.Close(ctx) }()
+
+	pastExpiry := time.Now().UTC().Add(-1 * time.Hour)
+
+	val := config.NewValue("stale", config.WithValueExpiresAt(pastExpiry))
+	if _, err := store.Set(ctx, "ns", "k", val); err != nil {
+		t.Fatalf("seed Set: %v", err)
+	}
+
+	if _, err := store.Get(ctx, "ns", "k"); !config.IsNotFound(err) {
+		t.Errorf("Get on expired entry: want NotFound, got %v", err)
+	}
+
+	upd := config.NewValue("late", config.WithValueWriteMode(config.WriteModeUpdate))
+	if _, err := store.Set(ctx, "ns", "k", upd); !config.IsNotFound(err) {
+		t.Errorf("Update on expired entry: want NotFound, got %v", err)
+	}
+
+	create := config.NewValue("fresh", config.WithValueWriteMode(config.WriteModeCreate))
+	stored, err := store.Set(ctx, "ns", "k", create)
+	if err != nil {
+		t.Fatalf("Create over expired entry: %v", err)
+	}
+	if v := stored.Metadata().Version(); v != 1 {
+		t.Errorf("Create over expired: version = %d, want 1", v)
+	}
+
+	got, err := store.Get(ctx, "ns", "k")
+	if err != nil {
+		t.Fatalf("Get after takeover: %v", err)
+	}
+	gs, _ := got.String()
+	if gs != "fresh" {
+		t.Errorf("post-takeover value = %q, want %q", gs, "fresh")
+	}
+}

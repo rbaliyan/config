@@ -654,27 +654,23 @@ func TestConcurrentAccess(t *testing.T) {
 	iterations := 100
 
 	// Start readers
-	for i := 0; i < numReaders; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < iterations; j++ {
+	for range numReaders {
+		wg.Go(func() {
+			for range iterations {
 				_, _ = cfg.Get(ctx, "counter")
 			}
-		}()
+		})
 	}
 
 	// Start writers
 	var writeCount atomic.Int64
-	for i := 0; i < numWriters; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < iterations; j++ {
+	for range numWriters {
+		wg.Go(func() {
+			for range iterations {
 				count := writeCount.Add(1)
 				_ = cfg.Set(ctx, "counter", count)
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -736,7 +732,7 @@ func TestFindWithPagination(t *testing.T) {
 	cfg := mgr.Namespace("test")
 
 	// Create multiple entries
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		_ = cfg.Set(ctx, "key"+string(rune('a'+i)), i)
 	}
 
@@ -1518,6 +1514,7 @@ type customMetadata struct {
 func (m *customMetadata) Version() int64       { return m.version }
 func (m *customMetadata) CreatedAt() time.Time { return time.Time{} }
 func (m *customMetadata) UpdatedAt() time.Time { return time.Time{} }
+func (m *customMetadata) ExpiresAt() time.Time { return time.Time{} }
 func (m *customMetadata) IsStale() bool        { return false }
 
 func (v *customValue) Marshal(_ context.Context) ([]byte, error) { return json.Marshal(v.raw) }
@@ -2476,17 +2473,15 @@ func TestConcurrentNamespaceCreation(t *testing.T) {
 	var wg sync.WaitGroup
 	results := make([]config.Config, 20)
 
-	for i := 0; i < 20; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			results[idx] = mgr.Namespace("concurrent")
-		}(i)
+	for i := range 20 {
+		wg.Go(func() {
+			results[i] = mgr.Namespace("concurrent")
+		})
 	}
 	wg.Wait()
 
 	// All should return the same instance
-	for i := 1; i < 20; i++ {
+	for i := range 20 {
 		if results[i] != results[0] {
 			t.Error("All concurrent Namespace calls should return the same instance")
 			break

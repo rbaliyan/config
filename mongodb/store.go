@@ -133,6 +133,7 @@ type mongoEntry struct {
 	Version   int64         `bson:"version"`
 	CreatedAt time.Time     `bson:"created_at"`
 	UpdatedAt time.Time     `bson:"updated_at"`
+	ExpiresAt *time.Time    `bson:"expires_at,omitempty"` // nil = no TTL
 }
 
 func (e *mongoEntry) toValue(ctx context.Context) (config.Value, error) {
@@ -144,6 +145,10 @@ func (e *mongoEntry) toValue(ctx context.Context) (config.Value, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read value for key %q: %w", e.Key, err)
 	}
+	var expiresAt time.Time
+	if e.ExpiresAt != nil {
+		expiresAt = *e.ExpiresAt
+	}
 	return config.NewValueFromBytes(
 		ctx,
 		data,
@@ -151,6 +156,7 @@ func (e *mongoEntry) toValue(ctx context.Context) (config.Value, error) {
 		config.WithValueType(e.Type),
 		config.WithValueMetadata(e.Version, e.CreatedAt, e.UpdatedAt),
 		config.WithValueEntryID(e.ID.Hex()),
+		config.WithValueExpiresAt(expiresAt),
 	)
 }
 
@@ -501,6 +507,12 @@ func (s *Store) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys: bson.D{{Key: "type", Value: 1}},
 		},
+		// TTL index: MongoDB auto-deletes expired documents (runs ~60s after expiry).
+		// Sparse so documents without expires_at are excluded from the index.
+		{
+			Keys:    bson.D{{Key: "expires_at", Value: 1}},
+			Options: options.Index().SetExpireAfterSeconds(0).SetSparse(true),
+		},
 	}
 
 	// Add unique composite index only for non-capped collections.
@@ -616,6 +628,10 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 	filter := bson.M{
 		"namespace": namespace,
 		"key":       key,
+		"$or": bson.A{
+			bson.M{"expires_at": bson.M{"$exists": false}},
+			bson.M{"expires_at": bson.M{"$gt": time.Now().UTC()}},
+		},
 	}
 
 	var doc mongoEntry
@@ -659,10 +675,27 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	}
 	now := time.Now().UTC()
 
+	expiry := config.GetExpiresAt(value)
+	var expiresAtPtr *time.Time
+	if !expiry.IsZero() {
+		expiresAtPtr = &expiry
+	}
+
 	writeMode := config.GetWriteMode(value)
 	switch writeMode {
 	case config.WriteModeCreate:
-		// Insert only - will fail if document exists due to unique index
+		// An expired document must behave as absent: take over the slot rather
+		// than report a duplicate-key error. We try a duplicate-aware delete of
+		// any expired document at this (namespace, key), then insert. The TTL
+		// monitor normally reaps expired docs within ~60s; this path handles
+		// the gap before the monitor runs.
+		expiredFilter := bson.M{
+			"namespace":  namespace,
+			"key":        key,
+			"expires_at": bson.M{"$lte": time.Now().UTC()},
+		}
+		_, _ = s.collection.DeleteOne(ctx, expiredFilter)
+
 		doc := mongoEntry{
 			Key:       key,
 			Namespace: namespace,
@@ -672,36 +705,43 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 			Version:   1,
 			CreatedAt: now,
 			UpdatedAt: now,
+			ExpiresAt: expiresAtPtr,
 		}
 
 		result, err := s.collection.InsertOne(ctx, doc)
 		if err != nil {
-			// Check if it's a duplicate key error
 			if mongo.IsDuplicateKeyError(err) {
 				return nil, &config.KeyExistsError{Key: key, Namespace: namespace}
 			}
 			return nil, config.WrapStoreError("set", "mongodb", key, err)
 		}
 
-		// Set the ID from the insert result
 		if oid, ok := result.InsertedID.(bson.ObjectID); ok {
 			doc.ID = oid
 		}
 		return doc.toValue(ctx)
 
 	case config.WriteModeUpdate:
-		// Update only - fail if document doesn't exist
+		// Treat expired documents as absent so update semantics match Get.
 		filter := bson.M{
 			"namespace": namespace,
 			"key":       key,
+			"$or": bson.A{
+				bson.M{"expires_at": bson.M{"$exists": false}},
+				bson.M{"expires_at": bson.M{"$gt": time.Now().UTC()}},
+			},
+		}
+		setFields := bson.M{
+			"value":      bsonVal,
+			"codec":      value.Codec(),
+			"type":       value.Type(),
+			"updated_at": now,
+		}
+		if expiresAtPtr != nil {
+			setFields["expires_at"] = *expiresAtPtr
 		}
 		update := bson.M{
-			"$set": bson.M{
-				"value":      bsonVal,
-				"codec":      value.Codec(),
-				"type":       value.Type(),
-				"updated_at": now,
-			},
+			"$set": setFields,
 			"$inc": bson.M{"version": int64(1)},
 		}
 
@@ -725,15 +765,19 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 			"namespace": namespace,
 			"key":       key,
 		}
+		setFields := bson.M{
+			"key":        key,
+			"namespace":  namespace,
+			"value":      bsonVal,
+			"codec":      value.Codec(),
+			"type":       value.Type(),
+			"updated_at": now,
+		}
+		if expiresAtPtr != nil {
+			setFields["expires_at"] = *expiresAtPtr
+		}
 		update := bson.M{
-			"$set": bson.M{
-				"key":        key,
-				"namespace":  namespace,
-				"value":      bsonVal,
-				"codec":      value.Codec(),
-				"type":       value.Type(),
-				"updated_at": now,
-			},
+			"$set": setFields,
 			"$inc": bson.M{"version": int64(1)},
 			"$setOnInsert": bson.M{
 				"created_at": now,
@@ -792,7 +836,14 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 	}
 
 	limit := filter.Limit()
-	mongoFilter := bson.M{"namespace": namespace}
+	expiryFilter := bson.A{
+		bson.M{"expires_at": bson.M{"$exists": false}},
+		bson.M{"expires_at": bson.M{"$gt": time.Now().UTC()}},
+	}
+	mongoFilter := bson.M{
+		"namespace": namespace,
+		"$or":       expiryFilter,
+	}
 
 	// Keys mode: get specific keys (no pagination)
 	if keys := filter.Keys(); len(keys) > 0 {
@@ -997,6 +1048,10 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 	filter := bson.M{
 		"namespace": namespace,
 		"key":       bson.M{"$in": keys},
+		"$or": bson.A{
+			bson.M{"expires_at": bson.M{"$exists": false}},
+			bson.M{"expires_at": bson.M{"$gt": time.Now().UTC()}},
+		},
 	}
 
 	cursor, err := s.collection.Find(ctx, filter)
@@ -1072,19 +1127,25 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			continue
 		}
 
-		filter := bson.M{
+		setFields := bson.M{
+			"key":        key,
+			"namespace":  namespace,
+			"value":      bsonVal,
+			"codec":      value.Codec(),
+			"type":       value.Type(),
+			"updated_at": now,
+		}
+		expiry := config.GetExpiresAt(value)
+		if !expiry.IsZero() {
+			setFields["expires_at"] = expiry
+		}
+
+		bulkFilter := bson.M{
 			"namespace": namespace,
 			"key":       key,
 		}
 		update := bson.M{
-			"$set": bson.M{
-				"key":        key,
-				"namespace":  namespace,
-				"value":      bsonVal,
-				"codec":      value.Codec(),
-				"type":       value.Type(),
-				"updated_at": now,
-			},
+			"$set": setFields,
 			"$inc": bson.M{"version": int64(1)},
 			"$setOnInsert": bson.M{
 				"created_at": now,
@@ -1092,7 +1153,7 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 		}
 
 		model := mongo.NewUpdateOneModel().
-			SetFilter(filter).
+			SetFilter(bulkFilter).
 			SetUpdate(update).
 			SetUpsert(true)
 

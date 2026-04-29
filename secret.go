@@ -120,14 +120,23 @@ func (s *Secret) MarshalText() ([]byte, error) {
 // TOML, and other text-based formats to populate the Secret.
 // If the input is the mask "******", the secret is set to the empty value
 // to prevent masked tokens from being treated as real credentials on round-trip.
+// Any prior backing bytes are zeroed before being replaced so re-used Secrets
+// do not leave stale plaintext on the heap.
 func (s *Secret) UnmarshalText(b []byte) error {
+	if s == nil {
+		return fmt.Errorf("config: UnmarshalText on nil *Secret")
+	}
+	hadValue := s.v != nil
+	clear(s.v)
 	if string(b) == secretMask {
-		clear(s.v)
 		s.v = nil
 		return nil
 	}
 	s.v = make([]byte, len(b))
 	copy(s.v, b)
+	if !hadValue {
+		runtime.SetFinalizer(s, (*Secret).Wipe)
+	}
 	return nil
 }
 
@@ -145,10 +154,16 @@ func (s *Secret) Value() (driver.Value, error) {
 }
 
 // Scan implements sql.Scanner so a Secret can be read from a SQL database.
-// A NULL column value results in a zero Secret.
+// A NULL column value results in a zero Secret. Any prior backing bytes are
+// zeroed before being replaced so re-used Secrets do not leave stale
+// plaintext on the heap.
 func (s *Secret) Scan(value any) error {
+	if s == nil {
+		return fmt.Errorf("config: Scan on nil *Secret")
+	}
+	hadValue := s.v != nil
+	clear(s.v)
 	if value == nil {
-		clear(s.v)
 		s.v = nil
 		return nil
 	}
@@ -159,7 +174,11 @@ func (s *Secret) Scan(value any) error {
 	case string:
 		s.v = []byte(v)
 	default:
+		s.v = nil
 		return fmt.Errorf("cannot scan %T into Secret", value)
+	}
+	if !hadValue {
+		runtime.SetFinalizer(s, (*Secret).Wipe)
 	}
 	return nil
 }
