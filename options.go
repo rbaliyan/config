@@ -193,6 +193,7 @@ type setOptions struct {
 	codec     codec.Codec
 	typ       Type
 	writeMode WriteMode
+	expiresAt time.Time // zero = no TTL
 }
 
 func newSetOptions() *setOptions {
@@ -248,5 +249,38 @@ func WithIfNotExists() SetOption {
 func WithIfExists() SetOption {
 	return func(o *setOptions) {
 		o.writeMode = WriteModeUpdate
+	}
+}
+
+// WithTTL sets a time-to-live on the stored value. After d has elapsed the
+// value is treated as if it does not exist: Get returns ErrNotFound, Find/
+// GetMany skip the entry, and the cache layer reports a miss.
+//
+// Physical removal of the row/document is backend-specific:
+//
+//   - memory   — a background sweeper deletes expired entries every
+//     WithCleanupInterval (default 1m) and emits a ChangeTypeDelete watch event.
+//   - mongodb  — MongoDB's native TTL index reaps expired documents
+//     (typically within ~60s of expiry); change-stream events are emitted
+//     by the server.
+//   - postgres — read paths filter on expires_at; physical rows are removed
+//     when the next write touches them. Run a periodic DELETE job to reclaim
+//     storage and trigger NOTIFY events on demand.
+//   - sqlite   — same as postgres; no native TTL.
+//   - redis    — entries carry an embedded expiry; reads filter past-expiry
+//     payloads. The Redis-level TTL on the hash key is not used because hash
+//     fields cannot have individual TTLs.
+//
+// Passing 0 or a negative duration is ignored (no TTL is set). On update,
+// passing 0 preserves any existing TTL on the entry.
+//
+// Example:
+//
+//	err := cfg.Set(ctx, "session/token", tok, config.WithTTL(24*time.Hour))
+func WithTTL(d time.Duration) SetOption {
+	return func(o *setOptions) {
+		if d > 0 {
+			o.expiresAt = time.Now().UTC().Add(d)
+		}
 	}
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"runtime"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
@@ -22,14 +23,22 @@ func (s *Secret) MarshalBSONValue() (byte, []byte, error) {
 // Accepts BSON Null (zero Secret), BSON Binary (raw bytes), or BSON String
 // (text representation). A string equal to the mask "******" results in a
 // zero Secret to prevent masked tokens from being treated as real credentials.
+// Any prior backing bytes are zeroed before being replaced so re-used Secrets
+// do not leave stale plaintext on the heap.
 func (s *Secret) UnmarshalBSONValue(typ byte, data []byte) error {
+	if s == nil {
+		return fmt.Errorf("config: UnmarshalBSONValue on nil *Secret")
+	}
+	hadValue := s.v != nil
+	clear(s.v)
 	switch bson.Type(typ) {
 	case bson.TypeNull:
-		clear(s.v)
 		s.v = nil
+		return nil
 	case bson.TypeBinary:
 		_, b, _, ok := bsoncore.ReadBinary(data)
 		if !ok {
+			s.v = nil
 			return fmt.Errorf("config: malformed BSON binary for Secret")
 		}
 		s.v = make([]byte, len(b))
@@ -37,16 +46,20 @@ func (s *Secret) UnmarshalBSONValue(typ byte, data []byte) error {
 	case bson.TypeString:
 		str, _, ok := bsoncore.ReadString(data)
 		if !ok {
+			s.v = nil
 			return fmt.Errorf("config: malformed BSON string for Secret")
 		}
 		if str == secretMask {
-			clear(s.v)
 			s.v = nil
 			return nil
 		}
 		s.v = []byte(str)
 	default:
+		s.v = nil
 		return fmt.Errorf("config: cannot unmarshal BSON type 0x%02x into Secret", typ)
+	}
+	if !hadValue {
+		runtime.SetFinalizer(s, (*Secret).Wipe)
 	}
 	return nil
 }

@@ -82,6 +82,13 @@ type memoryCache struct {
 	hits      atomic.Int64
 	misses    atomic.Int64
 	evictions atomic.Int64
+
+	// callbackEvictions counts hashicorp-LRU-fired evictions (capacity-driven,
+	// library TTL, and explicit Remove). suppressEviction is incremented before
+	// internal Remove calls (TTL-miss path, Delete) so those do not get counted
+	// as eviction-pressure metrics; the difference is reported as evictions.
+	callbackEvictions atomic.Int64
+	suppressEviction  atomic.Int64
 }
 
 // newMemoryCache creates a new in-memory LRU cache.
@@ -98,7 +105,7 @@ func newMemoryCache(capacity int, ttl time.Duration) (Cache, error) {
 	}
 
 	c.lru = expirable.NewLRU(capacity, func(key string, value Value) {
-		c.evictions.Add(1)
+		c.callbackEvictions.Add(1)
 	}, ttl)
 
 	return c, nil
@@ -112,9 +119,19 @@ func cacheKey(namespace, key string) string {
 }
 
 // Get retrieves a cached value.
+// Values past their per-value ExpiresAt are evicted and reported as a miss,
+// independent of the cache's own TTL setting.
 func (c *memoryCache) Get(ctx context.Context, namespace, key string) (Value, error) {
-	value, ok := c.lru.Get(cacheKey(namespace, key))
+	k := cacheKey(namespace, key)
+	value, ok := c.lru.Get(k)
 	if !ok {
+		c.misses.Add(1)
+		return nil, ErrNotFound
+	}
+
+	if IsExpired(value) {
+		c.suppressEviction.Add(1)
+		c.lru.Remove(k)
 		c.misses.Add(1)
 		return nil, ErrNotFound
 	}
@@ -124,25 +141,39 @@ func (c *memoryCache) Get(ctx context.Context, namespace, key string) (Value, er
 }
 
 // Set stores a value in the cache.
+// Values that are already past their per-value ExpiresAt are dropped silently
+// so the cache never serves data that the store would treat as expired.
 func (c *memoryCache) Set(ctx context.Context, namespace, key string, value Value) error {
+	if IsExpired(value) {
+		return nil
+	}
 	c.lru.Add(cacheKey(namespace, key), value)
 	return nil
 }
 
 // Delete removes an entry from the cache.
 func (c *memoryCache) Delete(ctx context.Context, namespace, key string) error {
+	c.suppressEviction.Add(1)
 	c.lru.Remove(cacheKey(namespace, key))
 	return nil
 }
 
 // Stats returns cache statistics.
+// Evictions reflects only capacity-driven (LRU) and library-TTL evictions —
+// not explicit Delete calls or per-value TTL misses, which represent
+// application intent rather than memory pressure.
 func (c *memoryCache) Stats() CacheStats {
+	cb := c.callbackEvictions.Load()
+	suppressed := c.suppressEviction.Load()
+	// Defensive floor: a Remove may not fire the callback (e.g. key absent),
+	// leaving suppressed > cb, which would produce a negative metric.
+	evictions := max(cb-suppressed, 0)
 	return CacheStats{
 		Hits:      c.hits.Load(),
 		Misses:    c.misses.Load(),
 		Size:      int64(c.lru.Len()),
 		Capacity:  int64(c.capacity),
-		Evictions: c.evictions.Load(),
+		Evictions: evictions,
 	}
 }
 

@@ -2,24 +2,33 @@
 
 package config
 
-import "syscall"
+import (
+	"fmt"
+	"syscall"
+)
 
 // Lock attempts to lock the secret's memory pages so they are not swapped to
 // disk. Requires sufficient OS privileges (typically CAP_IPC_LOCK on Linux).
 // Returns nil if the secret is zero.
 func (s *Secret) Lock() error {
-	if len(s.v) == 0 {
+	if s == nil || len(s.v) == 0 {
 		return nil
 	}
-	return syscall.Mlock(s.v)
+	if err := syscall.Mlock(s.v); err != nil {
+		return fmt.Errorf("config: secret mlock: %w", err)
+	}
+	return nil
 }
 
 // Unlock releases the mlock on the secret's memory pages.
 // Call Unlock before Wipe if Lock was previously called.
 // Returns nil if the secret is zero.
 func (s *Secret) Unlock() error {
-	if len(s.v) == 0 {
+	if s == nil || len(s.v) == 0 {
 		return nil
 	}
-	return syscall.Munlock(s.v)
+	if err := syscall.Munlock(s.v); err != nil {
+		return fmt.Errorf("config: secret munlock: %w", err)
+	}
+	return nil
 }

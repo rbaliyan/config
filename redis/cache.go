@@ -41,12 +41,13 @@ func WithCacheTTL(ttl time.Duration) CacheOption {
 // cachePayload is the JSON envelope stored in Redis for each cached value.
 // It carries enough information to reconstruct a config.Value faithfully.
 type cachePayload struct {
-	Data      []byte    `json:"d"`
-	Codec     string    `json:"c"`
-	Type      int       `json:"t"`
-	Version   int64     `json:"ver"`
-	CreatedAt time.Time `json:"ca"`
-	UpdatedAt time.Time `json:"ua"`
+	Data      []byte     `json:"d"`
+	Codec     string     `json:"c"`
+	Type      int        `json:"t"`
+	Version   int64      `json:"ver"`
+	CreatedAt time.Time  `json:"ca"`
+	UpdatedAt time.Time  `json:"ua"`
+	ExpiresAt *time.Time `json:"exp,omitempty"` // nil = no TTL on the cached value
 }
 
 // redisCache is a Redis-backed config.Cache.
@@ -112,9 +113,21 @@ func (c *redisCache) Get(ctx context.Context, namespace, key string) (config.Val
 		return nil, config.ErrNotFound
 	}
 
+	var expiresAt time.Time
+	if p.ExpiresAt != nil {
+		// A cache entry past its TTL must not be returned — the caller would
+		// otherwise see expired data after a successful cache hit.
+		if time.Now().UTC().After(*p.ExpiresAt) {
+			c.misses.Add(1)
+			return nil, config.ErrNotFound
+		}
+		expiresAt = *p.ExpiresAt
+	}
+
 	v, err := config.NewValueFromBytes(ctx, p.Data, p.Codec,
 		config.WithValueType(config.Type(p.Type)),
 		config.WithValueMetadata(p.Version, p.CreatedAt, p.UpdatedAt),
+		config.WithValueExpiresAt(expiresAt),
 	)
 	if err != nil {
 		c.misses.Add(1)
@@ -142,13 +155,31 @@ func (c *redisCache) Set(ctx context.Context, namespace, key string, value confi
 		CreatedAt: meta.CreatedAt(),
 		UpdatedAt: meta.UpdatedAt(),
 	}
+	if expiry := meta.ExpiresAt(); !expiry.IsZero() {
+		p.ExpiresAt = &expiry
+	}
 
 	encoded, err := json.Marshal(p)
 	if err != nil {
 		return fmt.Errorf("redis cache encode: %w", err)
 	}
 
-	return c.client.Set(ctx, c.redisKey(namespace, key), encoded, c.cfg.ttl).Err()
+	// If the value has its own TTL, propagate it as the Redis key TTL so the
+	// cache key is evicted at the same instant the value expires. The
+	// configured cache TTL is used as a ceiling.
+	ttl := c.cfg.ttl
+	if !meta.ExpiresAt().IsZero() {
+		valueTTL := time.Until(meta.ExpiresAt())
+		if valueTTL <= 0 {
+			// Already expired — do not cache.
+			return nil
+		}
+		if ttl == 0 || valueTTL < ttl {
+			ttl = valueTTL
+		}
+	}
+
+	return c.client.Set(ctx, c.redisKey(namespace, key), encoded, ttl).Err()
 }
 
 // Delete removes a cache entry from Redis.

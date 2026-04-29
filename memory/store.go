@@ -30,7 +30,13 @@ type entry struct {
 	version   int64
 	createdAt time.Time
 	updatedAt time.Time
+	expiresAt time.Time // zero = no TTL
 	history   []historyEntry // all versions ordered by version ascending
+}
+
+// isExpired reports whether the entry has a non-zero expiry time in the past.
+func (e *entry) isExpired(now time.Time) bool {
+	return !e.expiresAt.IsZero() && now.After(e.expiresAt)
 }
 
 // toValue returns the stored Value wrapped with the entry's current metadata.
@@ -40,6 +46,7 @@ func (e *entry) toValue() config.Value {
 		version:   e.version,
 		createdAt: e.createdAt,
 		updatedAt: e.updatedAt,
+		expiresAt: e.expiresAt,
 		entryID:   e.id,
 	}
 }
@@ -50,6 +57,7 @@ type metadataValue struct {
 	version   int64
 	createdAt time.Time
 	updatedAt time.Time
+	expiresAt time.Time
 	entryID   string
 }
 
@@ -58,6 +66,7 @@ func (v *metadataValue) Metadata() config.Metadata {
 		version:   v.version,
 		createdAt: v.createdAt,
 		updatedAt: v.updatedAt,
+		expiresAt: v.expiresAt,
 		entryID:   v.entryID,
 	}
 }
@@ -68,12 +77,14 @@ type entryMetadata struct {
 	version   int64
 	createdAt time.Time
 	updatedAt time.Time
+	expiresAt time.Time
 	entryID   string
 }
 
 func (m *entryMetadata) Version() int64       { return m.version }
 func (m *entryMetadata) CreatedAt() time.Time { return m.createdAt }
 func (m *entryMetadata) UpdatedAt() time.Time { return m.updatedAt }
+func (m *entryMetadata) ExpiresAt() time.Time { return m.expiresAt }
 func (m *entryMetadata) IsStale() bool        { return false }
 func (m *entryMetadata) EntryID() string      { return m.entryID }
 
@@ -95,9 +106,14 @@ type Store struct {
 	watchers      map[*watchEntry]struct{}
 	droppedEvents atomic.Int64 // Counter for dropped events due to full channels
 
-	bufferSize int
-	maxHistory int                             // Max historical versions per key (0 = unlimited)
-	onDropped  func(event config.ChangeEvent) // Optional callback when event is dropped
+	bufferSize      int
+	maxHistory      int                            // Max historical versions per key (0 = unlimited)
+	cleanupInterval time.Duration                  // How often to sweep expired entries (0 = default 1m)
+	onDropped       func(event config.ChangeEvent) // Optional callback when event is dropped
+
+	// connectOnce ensures Connect's TTL sweeper goroutine is started at most
+	// once even if Connect is called multiple times.
+	connectOnce sync.Once
 }
 
 // aliasEntry is the internal storage representation for an alias.
@@ -160,6 +176,17 @@ func WithMaxHistory(n int) Option {
 	}
 }
 
+// WithCleanupInterval sets how often the store sweeps for expired entries and
+// publishes ChangeTypeDelete events for them. Defaults to 1 minute.
+// Use a short interval (e.g. 10ms) in tests to avoid slow assertions.
+func WithCleanupInterval(d time.Duration) Option {
+	return func(s *Store) {
+		if d > 0 {
+			s.cleanupInterval = d
+		}
+	}
+}
+
 // NewStore creates a new in-memory store.
 func NewStore(opts ...Option) *Store {
 	s := &Store{
@@ -199,9 +226,59 @@ func (s *Store) entryKey(namespace, key string) string {
 // BackendName returns the stable backend identifier used in error messages.
 func (s *Store) BackendName() string { return "memory" }
 
-// Connect establishes connection (no-op for memory store).
+// Connect establishes connection and starts the TTL cleanup goroutine.
+// Calling Connect more than once is safe — the sweeper is started exactly
+// once for the lifetime of the store.
 func (s *Store) Connect(ctx context.Context) error {
+	if s.closed.Load() {
+		return config.ErrStoreClosed
+	}
+	s.connectOnce.Do(func() {
+		interval := s.cleanupInterval
+		if interval <= 0 {
+			interval = time.Minute
+		}
+		go s.runCleanup(interval)
+	})
 	return nil
+}
+
+// runCleanup periodically removes expired entries and notifies watchers.
+func (s *Store) runCleanup(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopChan:
+			return
+		case now := <-ticker.C:
+			s.sweepExpired(now)
+		}
+	}
+}
+
+// sweepExpired deletes all entries whose TTL has elapsed and fires Delete events.
+func (s *Store) sweepExpired(now time.Time) {
+	s.mu.Lock()
+	var expired []*entry
+	for _, e := range s.entries {
+		if e.isExpired(now) {
+			expired = append(expired, e)
+		}
+	}
+	for _, e := range expired {
+		delete(s.entries, s.entryKey(e.namespace, e.key))
+	}
+	s.mu.Unlock()
+
+	for _, e := range expired {
+		s.notifyWatchers(config.ChangeEvent{
+			Type:      config.ChangeTypeDelete,
+			Namespace: e.namespace,
+			Key:       e.key,
+			Timestamp: now,
+		})
+	}
 }
 
 // Close releases resources and stops watchers.
@@ -237,6 +314,7 @@ func (s *Store) Close(ctx context.Context) error {
 }
 
 // Get retrieves a configuration value by namespace and key.
+// Returns ErrNotFound if the entry has expired.
 func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, error) {
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
@@ -250,6 +328,9 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 
 	e, ok := s.entries[s.entryKey(namespace, key)]
 	if !ok {
+		return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
+	}
+	if e.isExpired(time.Now()) {
 		return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
 	}
 
@@ -279,7 +360,15 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	ek := s.entryKey(namespace, key)
 	existing, exists := s.entries[ek]
 
-	// Check write mode conditions
+	// An entry past its TTL must behave as absent for write-mode checks: a
+	// Create on an expired key should succeed and an Update should fail. This
+	// matches read-side semantics (Get returns ErrNotFound for expired entries)
+	// and avoids depending on the sweep cadence for correctness.
+	if exists && existing.isExpired(now) {
+		exists = false
+		existing = nil
+	}
+
 	writeMode := config.GetWriteMode(value)
 	switch writeMode {
 	case config.WriteModeCreate:
@@ -294,6 +383,10 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		}
 	}
 
+	// Extract TTL from the incoming value. A non-zero expiresAt overrides any
+	// existing TTL. A zero value preserves the existing TTL on updates.
+	incomingExpiry := config.GetExpiresAt(value)
+
 	newEntry := &entry{
 		key:       key,
 		namespace: namespace,
@@ -306,6 +399,12 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		newEntry.version = existing.version + 1
 		newEntry.createdAt = existing.createdAt
 		newEntry.updatedAt = now
+		// Preserve TTL unless caller explicitly sets a new one.
+		if !incomingExpiry.IsZero() {
+			newEntry.expiresAt = incomingExpiry
+		} else {
+			newEntry.expiresAt = existing.expiresAt
+		}
 		// Copy existing history and append the previous current version.
 		// We copy to avoid aliasing the old entry's backing array.
 		newEntry.history = make([]historyEntry, len(existing.history), len(existing.history)+1)
@@ -323,6 +422,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		newEntry.version = 1
 		newEntry.createdAt = now
 		newEntry.updatedAt = now
+		newEntry.expiresAt = incomingExpiry
 	}
 
 	s.entries[ek] = newEntry
@@ -629,6 +729,10 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 		ek := s.entryKey(namespace, key)
 		existing, exists := s.entries[ek]
 
+		// Extract TTL from the incoming value. A non-zero expiresAt overrides
+		// any existing TTL. A zero value preserves the existing TTL on updates.
+		incomingExpiry := config.GetExpiresAt(value)
+
 		newEntry := &entry{
 			key:       key,
 			namespace: namespace,
@@ -640,6 +744,11 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			newEntry.version = existing.version + 1
 			newEntry.createdAt = existing.createdAt
 			newEntry.updatedAt = now
+			if !incomingExpiry.IsZero() {
+				newEntry.expiresAt = incomingExpiry
+			} else {
+				newEntry.expiresAt = existing.expiresAt
+			}
 			newEntry.history = make([]historyEntry, len(existing.history), len(existing.history)+1)
 			copy(newEntry.history, existing.history)
 			newEntry.history = append(newEntry.history, historyEntry{
@@ -654,6 +763,7 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			newEntry.version = 1
 			newEntry.createdAt = now
 			newEntry.updatedAt = now
+			newEntry.expiresAt = incomingExpiry
 		}
 
 		s.entries[ek] = newEntry
@@ -816,6 +926,7 @@ func (s *Store) historyToValue(e *entry, h historyEntry) config.Value {
 		version:   h.version,
 		createdAt: e.createdAt,
 		updatedAt: h.updatedAt,
+		expiresAt: e.expiresAt,
 		entryID:   e.id,
 	}
 }

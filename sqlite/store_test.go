@@ -352,6 +352,45 @@ func TestSQLiteStore_DeleteMany(t *testing.T) {
 	}
 }
 
+// TestSQLiteStore_ExpiredEntryTreatedAsAbsent verifies write semantics
+// align with read semantics for entries past their TTL.
+func TestSQLiteStore_ExpiredEntryTreatedAsAbsent(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// Seed with a TTL just in the future, then wait past it. SQLite's
+	// datetime() function is second-resolution, so use a buffer of >1s.
+	soonExpiry := time.Now().UTC().Add(1 * time.Second)
+	val := config.NewValue("stale", config.WithValueExpiresAt(soonExpiry))
+	if _, err := store.Set(ctx, "ns", "k", val); err != nil {
+		t.Fatalf("seed Set: %v", err)
+	}
+	time.Sleep(2200 * time.Millisecond)
+
+	if _, err := store.Get(ctx, "ns", "k"); !config.IsNotFound(err) {
+		t.Errorf("Get on expired entry: want NotFound, got %v", err)
+	}
+
+	upd := config.NewValue("late", config.WithValueWriteMode(config.WriteModeUpdate))
+	if _, err := store.Set(ctx, "ns", "k", upd); !config.IsNotFound(err) {
+		t.Errorf("Update on expired entry: want NotFound, got %v", err)
+	}
+
+	create := config.NewValue("fresh", config.WithValueWriteMode(config.WriteModeCreate))
+	if _, err := store.Set(ctx, "ns", "k", create); err != nil {
+		t.Fatalf("Create over expired entry: %v", err)
+	}
+
+	got, err := store.Get(ctx, "ns", "k")
+	if err != nil {
+		t.Fatalf("Get after takeover: %v", err)
+	}
+	gs, _ := got.String()
+	if gs != "fresh" {
+		t.Errorf("post-takeover value = %q, want %q", gs, "fresh")
+	}
+}
+
 // Compile-time interface checks
 var (
 	_ config.Store         = (*sqlite.Store)(nil)

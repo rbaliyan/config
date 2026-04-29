@@ -191,11 +191,12 @@ func (c *nsConfig) Set(ctx context.Context, key string, value any, opts ...SetOp
 		typ = detectType(value)
 	}
 
-	// Create Value with write mode
+	// Create Value with write mode and optional TTL
 	val := NewValue(value,
 		WithValueCodec(codecToUse),
 		WithValueType(typ),
 		WithValueWriteMode(setOpts.writeMode),
+		WithValueExpiresAt(setOpts.expiresAt),
 	)
 
 	// Enforce max keys per namespace on creates (skip for update-only mode)

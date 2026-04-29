@@ -16,13 +16,18 @@ import (
 )
 
 type entryPayload struct {
-	Value     []byte    `json:"v"`
-	Codec     string    `json:"c"`
-	Type      int       `json:"t"`
-	Version   int64     `json:"ver"`
-	CreatedAt time.Time `json:"ca"`
-	UpdatedAt time.Time `json:"ua"`
-	EntryID   string    `json:"id"`
+	Value     []byte     `json:"v"`
+	Codec     string     `json:"c"`
+	Type      int        `json:"t"`
+	Version   int64      `json:"ver"`
+	CreatedAt time.Time  `json:"ca"`
+	UpdatedAt time.Time  `json:"ua"`
+	EntryID   string     `json:"id"`
+	ExpiresAt *time.Time `json:"exp,omitempty"` // nil = no TTL
+	// ExpiresAtUnixNano mirrors ExpiresAt as integer unix-nanos so the Lua
+	// scripts can compare against the current time without parsing RFC3339.
+	// Zero means no TTL (matches the "exp omitempty" semantic).
+	ExpiresAtUnixNano int64 `json:"expN,omitempty"`
 }
 
 type changePayload struct {
@@ -34,9 +39,9 @@ type changePayload struct {
 
 // luaUpsertPublish atomically performs an upsert: it reads the existing
 // field, computes the next version and preserves createdAt/entryID when the
-// field already exists, writes the merged payload, and publishes a change
-// notification — all in a single Redis round-trip so concurrent writers
-// cannot produce duplicate versions.
+// field already exists and is not yet expired, writes the merged payload, and
+// publishes a change notification — all in a single Redis round-trip so
+// concurrent writers cannot produce duplicate versions.
 //
 // ARGV layout:
 //
@@ -45,19 +50,34 @@ type changePayload struct {
 //	[3] pub/sub channel
 //	[4] change payload prefix ("{\"type\":\"set\",...,\"payload\":")
 //	[5] change payload suffix ("}")
+//	[6] candidate exp as unix-nanos (0 if no TTL); used to overwrite cand.exp
+//	    after JSON decode so Lua compares numbers rather than ISO strings.
+//	[7] prior-exp threshold as unix-nanos: the current time at which a prior
+//	    entry whose stored exp is ≤ this value should be treated as absent.
 //
-// The script merges the prior version/createdAt/entryID into the candidate
-// payload when one exists and returns the final stored JSON so the caller can
-// reuse it without a follow-up Get.
+// An expired prior entry is treated as absent: the candidate is written as a
+// fresh create (version=1, fresh entryID, createdAt=now). Expiry comparisons
+// use unix-nanos integers (passed as ARGV) instead of RFC3339 string compares,
+// which avoids subtle bugs with variable-length nanosecond suffixes.
 const luaUpsertPublish = `
 local key = ARGV[1]
 local cand = cjson.decode(ARGV[2])
+local candExp = tonumber(ARGV[6])
+local now = tonumber(ARGV[7])
 local prior = redis.call('HGET', KEYS[1], key)
 if prior then
     local p = cjson.decode(prior)
-    cand.ver = (tonumber(p.ver) or 0) + 1
-    cand.ca = p.ca
-    cand.id = p.id
+    local pExp = tonumber(p.expN)
+    local expired = (pExp ~= nil and pExp > 0 and pExp <= now)
+    if not expired then
+        cand.ver = (tonumber(p.ver) or 0) + 1
+        cand.ca = p.ca
+        cand.id = p.id
+        if (candExp == nil or candExp == 0) and pExp ~= nil and pExp > 0 then
+            cand.exp = p.exp
+            cand.expN = p.expN
+        end
+    end
 end
 local payload = cjson.encode(cand)
 redis.call('HSET', KEYS[1], key, payload)
@@ -65,32 +85,52 @@ redis.call('PUBLISH', ARGV[3], ARGV[4] .. payload .. ARGV[5])
 return payload
 `
 
-// luaUpdatePublish atomically updates only when the field exists; fails with
-// nil when the field is missing. Shares the merge-then-publish semantics of
+// luaUpdatePublish atomically updates only when the field exists and is not
+// expired; returns nil otherwise. Shares the merge-then-publish semantics of
 // luaUpsertPublish.
 const luaUpdatePublish = `
 local key = ARGV[1]
 local cand = cjson.decode(ARGV[2])
+local candExp = tonumber(ARGV[6])
+local now = tonumber(ARGV[7])
 local prior = redis.call('HGET', KEYS[1], key)
 if not prior then return nil end
 local p = cjson.decode(prior)
+local pExp = tonumber(p.expN)
+if pExp ~= nil and pExp > 0 and pExp <= now then
+    return nil
+end
 cand.ver = (tonumber(p.ver) or 0) + 1
 cand.ca = p.ca
 cand.id = p.id
+if (candExp == nil or candExp == 0) and pExp ~= nil and pExp > 0 then
+    cand.exp = p.exp
+    cand.expN = p.expN
+end
 local payload = cjson.encode(cand)
 redis.call('HSET', KEYS[1], key, payload)
 redis.call('PUBLISH', ARGV[3], ARGV[4] .. payload .. ARGV[5])
 return payload
 `
 
-// luaSetNXPublish: atomic "create-if-not-exists then publish".
-// Returns the payload on success, nil if the key already exists.
+// luaSetNXPublish: atomic "create-if-not-exists then publish". An expired
+// prior field is treated as absent — the candidate overwrites it. Returns
+// the payload on success, nil if a non-expired field already exists.
 const luaSetNXPublish = `
-if redis.call('HSETNX', KEYS[1], ARGV[1], ARGV[2]) == 1 then
-    redis.call('PUBLISH', ARGV[3], ARGV[4] .. ARGV[2] .. ARGV[5])
-    return ARGV[2]
+local key = ARGV[1]
+local now = tonumber(ARGV[7])
+local prior = redis.call('HGET', KEYS[1], key)
+if prior then
+    local p = cjson.decode(prior)
+    local pExp = tonumber(p.expN)
+    local expired = (pExp ~= nil and pExp > 0 and pExp <= now)
+    if not expired then
+        return nil
+    end
 end
-return nil
+redis.call('HSET', KEYS[1], key, ARGV[2])
+redis.call('PUBLISH', ARGV[3], ARGV[4] .. ARGV[2] .. ARGV[5])
+return ARGV[2]
 `
 
 var (
@@ -239,10 +279,19 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 		return nil, config.WrapStoreError("get", "redis", key, err)
 	}
 
+	if ep.ExpiresAt != nil && time.Now().UTC().After(*ep.ExpiresAt) {
+		return nil, &config.KeyNotFoundError{Key: key, Namespace: namespace}
+	}
+
+	var expiresAt time.Time
+	if ep.ExpiresAt != nil {
+		expiresAt = *ep.ExpiresAt
+	}
 	return config.NewValueFromBytes(ctx, ep.Value, ep.Codec,
 		config.WithValueType(config.Type(ep.Type)),
 		config.WithValueMetadata(ep.Version, ep.CreatedAt, ep.UpdatedAt),
 		config.WithValueEntryID(ep.EntryID),
+		config.WithValueExpiresAt(expiresAt),
 	)
 }
 
@@ -297,8 +346,18 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		script = upsertPublishScript
 	}
 
+	// Pass times to Lua as integer unix-nanos so comparisons are exact and
+	// independent of RFC3339 string formatting quirks.
+	candExpNano := int64(0)
+	if cand.ExpiresAt != nil {
+		candExpNano = cand.ExpiresAt.UnixNano()
+	}
+	nowNano := now.UnixNano()
 	res, err := script.Run(ctx, s.client, []string{hashKey},
-		key, string(candJSON), channel, cpPrefix, cpSuffix).Result()
+		key, string(candJSON), channel, cpPrefix, cpSuffix,
+		strconv.FormatInt(candExpNano, 10),
+		strconv.FormatInt(nowNano, 10),
+	).Result()
 	if err != nil && err != goredis.Nil {
 		return nil, config.WrapStoreError("set", "redis", key, err)
 	}
@@ -324,10 +383,15 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 	if err := json.Unmarshal([]byte(payload), &ep); err != nil {
 		return nil, config.WrapStoreError("set", "redis", key, err)
 	}
+	var expiresAt time.Time
+	if ep.ExpiresAt != nil {
+		expiresAt = *ep.ExpiresAt
+	}
 	return config.NewValueFromBytes(ctx, ep.Value, ep.Codec,
 		config.WithValueType(config.Type(ep.Type)),
 		config.WithValueMetadata(ep.Version, ep.CreatedAt, ep.UpdatedAt),
 		config.WithValueEntryID(ep.EntryID),
+		config.WithValueExpiresAt(expiresAt),
 	)
 }
 
@@ -349,7 +413,7 @@ func changePayloadFrames(namespace, key string) (string, string, error) {
 }
 
 func (s *Store) buildEntryPayload(data []byte, value config.Value, version int64, createdAt, updatedAt time.Time, entryID string) *entryPayload {
-	return &entryPayload{
+	ep := &entryPayload{
 		Value:     data,
 		Codec:     value.Codec(),
 		Type:      int(value.Type()),
@@ -358,6 +422,12 @@ func (s *Store) buildEntryPayload(data []byte, value config.Value, version int64
 		UpdatedAt: updatedAt,
 		EntryID:   entryID,
 	}
+	expiry := config.GetExpiresAt(value)
+	if !expiry.IsZero() {
+		ep.ExpiresAt = &expiry
+		ep.ExpiresAtUnixNano = expiry.UnixNano()
+	}
+	return ep
 }
 
 // makeEntryID returns a monotonically increasing, globally unique int64 ID.
@@ -413,6 +483,8 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 	hashKey := s.hashKey(namespace)
 	limit := filter.Limit()
 
+	now := time.Now().UTC()
+
 	if keys := filter.Keys(); len(keys) > 0 {
 		results := make(map[string]config.Value, len(keys))
 		for _, k := range keys {
@@ -427,10 +499,18 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 			if err := json.Unmarshal(raw, &ep); err != nil {
 				continue
 			}
+			if ep.ExpiresAt != nil && now.After(*ep.ExpiresAt) {
+				continue
+			}
+			var expiresAt time.Time
+			if ep.ExpiresAt != nil {
+				expiresAt = *ep.ExpiresAt
+			}
 			v, err := config.NewValueFromBytes(ctx, ep.Value, ep.Codec,
 				config.WithValueType(config.Type(ep.Type)),
 				config.WithValueMetadata(ep.Version, ep.CreatedAt, ep.UpdatedAt),
 				config.WithValueEntryID(ep.EntryID),
+				config.WithValueExpiresAt(expiresAt),
 			)
 			if err != nil {
 				continue
@@ -463,6 +543,9 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 		if err := json.Unmarshal([]byte(raw), &ep); err != nil {
 			continue
 		}
+		if ep.ExpiresAt != nil && now.After(*ep.ExpiresAt) {
+			continue
+		}
 		id, _ := strconv.ParseInt(ep.EntryID, 10, 64)
 		entries = append(entries, entry{key: k, ep: ep, entryID: id})
 	}
@@ -486,10 +569,15 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 		if limit > 0 && count >= limit {
 			break
 		}
+		var expiresAt time.Time
+		if e.ep.ExpiresAt != nil {
+			expiresAt = *e.ep.ExpiresAt
+		}
 		v, err := config.NewValueFromBytes(ctx, e.ep.Value, e.ep.Codec,
 			config.WithValueType(config.Type(e.ep.Type)),
 			config.WithValueMetadata(e.ep.Version, e.ep.CreatedAt, e.ep.UpdatedAt),
 			config.WithValueEntryID(e.ep.EntryID),
+			config.WithValueExpiresAt(expiresAt),
 		)
 		if err != nil {
 			continue
@@ -678,10 +766,15 @@ func changePayloadToEvent(cp changePayload) config.ChangeEvent {
 	default:
 		event.Type = config.ChangeTypeSet
 		if cp.Payload != nil {
+			var expiresAt time.Time
+			if cp.Payload.ExpiresAt != nil {
+				expiresAt = *cp.Payload.ExpiresAt
+			}
 			v, err := config.NewValueFromBytes(context.Background(), cp.Payload.Value, cp.Payload.Codec,
 				config.WithValueType(config.Type(cp.Payload.Type)),
 				config.WithValueMetadata(cp.Payload.Version, cp.Payload.CreatedAt, cp.Payload.UpdatedAt),
 				config.WithValueEntryID(cp.Payload.EntryID),
+				config.WithValueExpiresAt(expiresAt),
 			)
 			if err == nil {
 				event.Value = v

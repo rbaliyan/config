@@ -92,6 +92,7 @@ type notifyPayload struct {
 	Type      config.Type `json:"type,omitempty"`       // Value type
 	CreatedAt *time.Time  `json:"created_at,omitempty"` // Creation timestamp
 	UpdatedAt *time.Time  `json:"updated_at,omitempty"` // Update timestamp
+	ExpiresAt *time.Time  `json:"expires_at,omitempty"` // TTL expiry (nil = no TTL)
 }
 
 // Option configures the PostgreSQL store.
@@ -222,6 +223,7 @@ func (s *Store) createSchema(ctx context.Context) error {
 			version BIGINT NOT NULL DEFAULT 1,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			expires_at TIMESTAMPTZ NULL,
 			UNIQUE(namespace, key)
 		);
 
@@ -231,7 +233,9 @@ func (s *Store) createSchema(ctx context.Context) error {
 		CREATE INDEX IF NOT EXISTS idx_%s_type ON %s(type);
 		CREATE INDEX IF NOT EXISTS idx_%s_updated_at ON %s(updated_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_%s_key_prefix ON %s(key text_pattern_ops);
+		CREATE INDEX IF NOT EXISTS idx_%s_expires_at ON %s(expires_at) WHERE expires_at IS NOT NULL;
 	`, s.cfg.Table,
+		s.cfg.Table, s.cfg.Table,
 		s.cfg.Table, s.cfg.Table,
 		s.cfg.Table, s.cfg.Table,
 		s.cfg.Table, s.cfg.Table,
@@ -272,7 +276,8 @@ func (s *Store) createSchema(ctx context.Context) error {
 					'codec', NEW.codec,
 					'type', NEW.type,
 					'created_at', NEW.created_at,
-					'updated_at', NEW.updated_at
+					'updated_at', NEW.updated_at,
+					'expires_at', NEW.expires_at
 				)::text;
 				PERFORM pg_notify('%s', payload);
 				RETURN NEW;
@@ -295,6 +300,20 @@ func (s *Store) createSchema(ctx context.Context) error {
 
 	_, err := s.db.ExecContext(ctx, trigger)
 	return err
+}
+
+// MigrateAddTTL adds the expires_at column and index to an existing table.
+// Safe to call on a table that already has the column (uses IF NOT EXISTS / IF EXISTS guards).
+// Call this once during application startup when upgrading from a schema without TTL support.
+func (s *Store) MigrateAddTTL(ctx context.Context) error {
+	query := fmt.Sprintf(`
+		ALTER TABLE %s ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NULL;
+		CREATE INDEX IF NOT EXISTS idx_%s_expires_at ON %s(expires_at) WHERE expires_at IS NOT NULL;
+	`, s.cfg.Table, s.cfg.Table, s.cfg.Table) // #nosec G201 -- table name validated in Connect
+	if _, err := s.db.ExecContext(ctx, query); err != nil {
+		return config.WrapStoreError("migrate_add_ttl", "postgres", "", err)
+	}
+	return nil
 }
 
 // Close stops the notification listener and closes all watchers.
@@ -334,8 +353,9 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, key, namespace, value, codec, type, version, created_at, updated_at
+		SELECT id, key, namespace, value, codec, type, version, created_at, updated_at, expires_at
 		FROM %s WHERE namespace = $1 AND key = $2
+		AND (expires_at IS NULL OR expires_at > NOW())
 	`, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 
 	var (
@@ -345,10 +365,11 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 		valueType            config.Type
 		version              int64
 		createdAt, updatedAt time.Time
+		expiresAt            sql.NullTime
 	)
 
 	err := s.db.QueryRowContext(ctx, query, namespace, key).Scan(
-		&id, &k, &ns, &value, &codecName, &valueType, &version, &createdAt, &updatedAt,
+		&id, &k, &ns, &value, &codecName, &valueType, &version, &createdAt, &updatedAt, &expiresAt,
 	)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -364,6 +385,7 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 		config.WithValueType(valueType),
 		config.WithValueMetadata(version, createdAt, updatedAt),
 		config.WithValueEntryID(fmt.Sprintf("%d", id)),
+		config.WithValueExpiresAt(expiresAt.Time),
 	)
 }
 
@@ -386,46 +408,69 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		return nil, config.WrapStoreError("marshal", "postgres", key, err)
 	}
 
+	expiry := config.GetExpiresAt(value)
+	expiresAtParam := sql.NullTime{}
+	if !expiry.IsZero() {
+		expiresAtParam = sql.NullTime{Time: expiry, Valid: true}
+	}
+
 	var query string
 	writeMode := config.GetWriteMode(value)
 	switch writeMode {
 	case config.WriteModeCreate:
+		// A previously stored row that has expired must behave as absent: take
+		// over the row instead of returning a duplicate-key error. The WHERE
+		// clause on the conflict branch only matches expired rows.
 		query = fmt.Sprintf(`
-			INSERT INTO %s (key, namespace, value, codec, type, version, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, 1, NOW(), NOW())
-			ON CONFLICT (namespace, key) DO NOTHING
-			RETURNING id, version, created_at, updated_at
-		`, s.cfg.Table) // #nosec G201 -- table name validated in Connect
+			INSERT INTO %s (key, namespace, value, codec, type, version, created_at, updated_at, expires_at)
+			VALUES ($1, $2, $3, $4, $5, 1, NOW(), NOW(), $6)
+			ON CONFLICT (namespace, key) DO UPDATE SET
+				value = EXCLUDED.value,
+				codec = EXCLUDED.codec,
+				type = EXCLUDED.type,
+				version = 1,
+				created_at = NOW(),
+				updated_at = NOW(),
+				expires_at = EXCLUDED.expires_at
+				WHERE %s.expires_at IS NOT NULL AND %s.expires_at <= NOW()
+			RETURNING id, version, created_at, updated_at, expires_at
+		`, s.cfg.Table, s.cfg.Table, s.cfg.Table) // #nosec G201 -- table name validated in Connect
 	case config.WriteModeUpdate:
+		// Treat expired rows as absent on update so semantics match Get (which
+		// also filters by expires_at).
 		query = fmt.Sprintf(`
 			UPDATE %s SET
 				value = $3, codec = $4, type = $5,
-				version = version + 1, updated_at = NOW()
+				version = version + 1, updated_at = NOW(),
+				expires_at = CASE WHEN $6::TIMESTAMPTZ IS NULL THEN expires_at ELSE $6 END
 			WHERE namespace = $2 AND key = $1
-			RETURNING id, version, created_at, updated_at
+			AND (expires_at IS NULL OR expires_at > NOW())
+			RETURNING id, version, created_at, updated_at, expires_at
 		`, s.cfg.Table) // #nosec G201 -- table name validated in Connect
 	default:
 		query = fmt.Sprintf(`
-			INSERT INTO %s (key, namespace, value, codec, type, version, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, 1, NOW(), NOW())
+			INSERT INTO %s (key, namespace, value, codec, type, version, created_at, updated_at, expires_at)
+			VALUES ($1, $2, $3, $4, $5, 1, NOW(), NOW(), $6)
 			ON CONFLICT (namespace, key) DO UPDATE SET
 				value = EXCLUDED.value,
 				codec = EXCLUDED.codec,
 				type = EXCLUDED.type,
 				version = %s.version + 1,
-				updated_at = NOW()
-			RETURNING id, version, created_at, updated_at
-		`, s.cfg.Table, s.cfg.Table) // #nosec G201 -- table name validated in Connect
+				updated_at = NOW(),
+				expires_at = CASE WHEN EXCLUDED.expires_at IS NULL THEN %s.expires_at ELSE EXCLUDED.expires_at END
+			RETURNING id, version, created_at, updated_at, expires_at
+		`, s.cfg.Table, s.cfg.Table, s.cfg.Table) // #nosec G201 -- table name validated in Connect
 	}
 
 	var (
 		id                   int64
 		version              int64
 		createdAt, updatedAt time.Time
+		expiresAt            sql.NullTime
 	)
 	err = s.db.QueryRowContext(ctx, query,
-		key, namespace, data, value.Codec(), value.Type(),
-	).Scan(&id, &version, &createdAt, &updatedAt)
+		key, namespace, data, value.Codec(), value.Type(), expiresAtParam,
+	).Scan(&id, &version, &createdAt, &updatedAt, &expiresAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// Conditional write did not match: distinguish create-vs-update semantics.
@@ -448,6 +493,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		config.WithValueType(value.Type()),
 		config.WithValueMetadata(version, createdAt, updatedAt),
 		config.WithValueEntryID(fmt.Sprintf("%d", id)),
+		config.WithValueExpiresAt(expiresAt.Time),
 	)
 }
 
@@ -503,8 +549,9 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 			argNum++
 		}
 		query := fmt.Sprintf(`
-			SELECT id, key, namespace, value, codec, type, version, created_at, updated_at
+			SELECT id, key, namespace, value, codec, type, version, created_at, updated_at, expires_at
 			FROM %s WHERE namespace = $%d AND key IN (%s)
+			AND (expires_at IS NULL OR expires_at > NOW())
 		`, s.cfg.Table, argNum, strings.Join(placeholders, ","))
 		args = append(args, namespace)
 
@@ -519,8 +566,9 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 
 	// Prefix mode: get all keys matching prefix
 	query := fmt.Sprintf(`
-		SELECT id, key, namespace, value, codec, type, version, created_at, updated_at
+		SELECT id, key, namespace, value, codec, type, version, created_at, updated_at, expires_at
 		FROM %s WHERE namespace = $%d
+		AND (expires_at IS NULL OR expires_at > NOW())
 	`, s.cfg.Table, argNum)
 	args = append(args, namespace)
 	argNum++
@@ -571,10 +619,11 @@ func (s *Store) executeListQuery(ctx context.Context, query string, args []any) 
 			valueType            config.Type
 			version              int64
 			createdAt, updatedAt time.Time
+			expiresAt            sql.NullTime
 		)
 
 		if err := rows.Scan(
-			&id, &k, &ns, &value, &codecName, &valueType, &version, &createdAt, &updatedAt,
+			&id, &k, &ns, &value, &codecName, &valueType, &version, &createdAt, &updatedAt, &expiresAt,
 		); err != nil {
 			return nil, "", config.WrapStoreError("list", "postgres", "", err)
 		}
@@ -585,6 +634,7 @@ func (s *Store) executeListQuery(ctx context.Context, query string, args []any) 
 			config.WithValueType(valueType),
 			config.WithValueMetadata(version, createdAt, updatedAt),
 			config.WithValueEntryID(fmt.Sprintf("%d", id)),
+			config.WithValueExpiresAt(expiresAt.Time),
 		)
 		if err != nil {
 			s.log().Warn("skipping corrupt entry in list query",
@@ -739,8 +789,9 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, key, namespace, value, codec, type, version, created_at, updated_at
+		SELECT id, key, namespace, value, codec, type, version, created_at, updated_at, expires_at
 		FROM %s WHERE namespace = $1 AND key IN (%s)
+		AND (expires_at IS NULL OR expires_at > NOW())
 	`, s.cfg.Table, strings.Join(placeholders, ",")) // #nosec G201 -- table name is from configuration, not user input
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -758,9 +809,10 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 			valueType            config.Type
 			version              int64
 			createdAt, updatedAt time.Time
+			expiresAt            sql.NullTime
 		)
 
-		if err := rows.Scan(&id, &k, &ns, &value, &codecName, &valueType, &version, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &k, &ns, &value, &codecName, &valueType, &version, &createdAt, &updatedAt, &expiresAt); err != nil {
 			return nil, config.WrapStoreError("get_many", "postgres", "", err)
 		}
 
@@ -770,6 +822,7 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 			config.WithValueType(valueType),
 			config.WithValueMetadata(version, createdAt, updatedAt),
 			config.WithValueEntryID(fmt.Sprintf("%d", id)),
+			config.WithValueExpiresAt(expiresAt.Time),
 		)
 		if err != nil {
 			s.log().Warn("skipping corrupt entry in get_many",
@@ -807,15 +860,16 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 	// transaction. Each key is written independently; failures on one key
 	// do not prevent writes to other keys.
 	query := fmt.Sprintf(`
-		INSERT INTO %s (key, namespace, value, codec, type, version, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, 1, NOW(), NOW())
+		INSERT INTO %s (key, namespace, value, codec, type, version, created_at, updated_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, 1, NOW(), NOW(), $6)
 		ON CONFLICT (namespace, key) DO UPDATE SET
 			value = EXCLUDED.value,
 			codec = EXCLUDED.codec,
 			type = EXCLUDED.type,
 			version = %s.version + 1,
-			updated_at = NOW()
-	`, s.cfg.Table, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
+			updated_at = NOW(),
+			expires_at = CASE WHEN EXCLUDED.expires_at IS NULL THEN %s.expires_at ELSE EXCLUDED.expires_at END
+	`, s.cfg.Table, s.cfg.Table, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 
 	for key, value := range values {
 		if key == "" {
@@ -829,7 +883,13 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 			continue
 		}
 
-		_, err = s.db.ExecContext(ctx, query, key, namespace, data, value.Codec(), value.Type())
+		expiry := config.GetExpiresAt(value)
+		expiresAtParam := sql.NullTime{}
+		if !expiry.IsZero() {
+			expiresAtParam = sql.NullTime{Time: expiry, Valid: true}
+		}
+
+		_, err = s.db.ExecContext(ctx, query, key, namespace, data, value.Codec(), value.Type(), expiresAtParam)
 		if err != nil {
 			keyErrors[key] = config.WrapStoreError("set_many", "postgres", key, err)
 		} else {
@@ -934,11 +994,16 @@ func (s *Store) listenNotifications() {
 				if payload.UpdatedAt != nil {
 					updatedAt = *payload.UpdatedAt
 				}
+				var expiresAt time.Time
+				if payload.ExpiresAt != nil {
+					expiresAt = *payload.ExpiresAt
+				}
 				val, err := config.NewValueFromBytes(
 					context.Background(), payload.Value,
 					payload.Codec,
 					config.WithValueType(payload.Type),
 					config.WithValueMetadata(payload.Version, createdAt, updatedAt),
+					config.WithValueExpiresAt(expiresAt),
 				)
 				if err == nil {
 					event.Value = val
