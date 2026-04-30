@@ -90,6 +90,16 @@ type memoryCache struct {
 	suppressEviction  atomic.Int64
 }
 
+// NewMemoryCache returns a Cache backed by a bounded in-memory LRU.
+// capacity is the maximum number of entries (0 uses the default of 10000).
+// ttl is the per-entry time-to-live (0 means no TTL — entries expire only under LRU pressure).
+//
+// Suitable as the inner cache for configcrypto.NewEncryptedCache, or for any
+// Store wrapper that needs a local write-back layer without external dependencies.
+func NewMemoryCache(capacity int, ttl time.Duration) (Cache, error) {
+	return newMemoryCache(capacity, ttl)
+}
+
 // newMemoryCache creates a new in-memory LRU cache.
 // If capacity is 0, it uses the default capacity of 10000.
 // If ttl is 0, entries never expire (LRU eviction only).
