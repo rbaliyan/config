@@ -291,6 +291,39 @@ func NewRawValue(data []byte, codecName string, opts ...ValueOption) Value {
 	return v
 }
 
+// CloneValue returns a new Value whose raw content is newRaw, with all metadata
+// (version, timestamps, TTL, entryID, write mode) copied from src.
+// The new value uses the default codec; pass WithValueCodec to override.
+// The stale flag is not copied — the clone is a fresh value, not a cache fallback.
+//
+// Intended for Store wrappers that transform the raw bytes (e.g. encrypt/decrypt,
+// compress, sign) without touching metadata. Instead of manually extracting every
+// metadata field from src and re-applying them with ValueOption calls, write:
+//
+//	decrypted := config.CloneValue(stored, plaintext)
+//	encrypted := config.CloneValue(incoming, ciphertext, config.WithValueCodec(encCodec))
+func CloneValue(src Value, newRaw any, opts ...ValueOption) Value {
+	v := &val{
+		raw:      newRaw,
+		dataType: detectType(newRaw),
+		codec:    codec.Default(),
+	}
+
+	if sv, ok := src.(*val); ok {
+		v.writeMode = sv.writeMode
+		if sv.metadata != nil {
+			cp := *sv.metadata
+			cp.stale = false
+			v.metadata = &cp
+		}
+	}
+
+	for _, opt := range opts {
+		opt(v)
+	}
+	return v
+}
+
 // NewValue creates a Value from any data with optional configuration.
 func NewValue(data any, opts ...ValueOption) Value {
 	v := &val{
