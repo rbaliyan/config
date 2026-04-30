@@ -41,6 +41,10 @@ const (
 
 	// TypeCustom represents a custom type that requires Unmarshal.
 	TypeCustom
+
+	// TypeSecret represents a sensitive byte value.
+	// String() and all text/JSON paths return "******"; use SecretFrom to extract the actual bytes.
+	TypeSecret
 )
 
 // String returns the string representation of the type.
@@ -68,6 +72,8 @@ func (t Type) String() string {
 		return "[]string"
 	case TypeCustom:
 		return "custom"
+	case TypeSecret:
+		return "secret"
 	default:
 		return fmt.Sprintf("unknown(%d)", t)
 	}
@@ -99,6 +105,8 @@ func ParseType(s string) Type {
 		return TypeListString
 	case "custom":
 		return TypeCustom
+	case "secret":
+		return TypeSecret
 	default:
 		return TypeUnknown
 	}
