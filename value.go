@@ -233,6 +233,47 @@ func (r *rawCodec) Decode(_ context.Context, _ []byte, _ any) error {
 // Compile-time interface check for rawCodec.
 var _ codec.Codec = (*rawCodec)(nil)
 
+// secretCodec is a byte-pass-through codec for TypeSecret values.
+// It is registered globally so that store backends (PostgreSQL, MongoDB, Redis,
+// SQLite) can look it up by name when reconstructing a TypeSecret Value on read.
+// Encode accepts []byte or *Secret and returns the raw bytes unchanged.
+// Decode into *any sets the target to the raw []byte (for NewValueFromBytes);
+// decode into **Secret wraps the bytes in a new Secret.
+type secretCodec struct{}
+
+func (secretCodec) Name() string { return "secret" }
+
+func (secretCodec) Encode(_ context.Context, v any) ([]byte, error) {
+	switch b := v.(type) {
+	case []byte:
+		return b, nil
+	case *Secret:
+		return b.Bytes(), nil
+	default:
+		return nil, fmt.Errorf("secretCodec: cannot encode %T", v)
+	}
+}
+
+func (secretCodec) Decode(_ context.Context, data []byte, v any) error {
+	switch p := v.(type) {
+	case *any:
+		*p = data
+		return nil
+	case **Secret:
+		*p = NewSecretBytes(data)
+		return nil
+	default:
+		return fmt.Errorf("secretCodec: cannot decode into %T; use SecretFrom or **Secret", v)
+	}
+}
+
+// Compile-time interface check for secretCodec.
+var _ codec.Codec = secretCodec{}
+
+func init() {
+	_ = codec.Register(secretCodec{})
+}
+
 // NewRawValue creates a Value holding pre-marshaled bytes without decoding.
 // The bytes are stored as-is and returned verbatim by Marshal().
 // This is used when the server does not have the codec registered (e.g.,
@@ -370,9 +411,19 @@ func (v *val) Marshal(ctx context.Context) ([]byte, error) {
 }
 
 // Unmarshal deserializes the value into the target.
+// For TypeSecret values, target must be **Secret; use SecretFrom for a safer API.
 func (v *val) Unmarshal(ctx context.Context, target any) error {
 	if v.raw == nil {
 		return ErrInvalidValue
+	}
+
+	if v.dataType == TypeSecret {
+		sp, ok := target.(**Secret)
+		if !ok {
+			return fmt.Errorf("%w: TypeSecret values must be unmarshaled into **Secret", ErrTypeMismatch)
+		}
+		*sp = NewSecretBytes(v.data)
+		return nil
 	}
 
 	// If we have raw bytes, use the codec
@@ -508,9 +559,13 @@ func (v *val) Float64() (float64, error) {
 
 // String returns the value as string.
 // Returns an error if the value is nil.
+// For TypeSecret values, always returns "******" to prevent accidental leakage.
 func (v *val) String() (string, error) {
 	if v.raw == nil {
 		return "", ErrNotFound
+	}
+	if v.dataType == TypeSecret {
+		return secretMask, nil
 	}
 	switch val := v.raw.(type) {
 	case string:
@@ -548,6 +603,46 @@ func (v *val) Bool() (bool, error) {
 
 // Helper functions
 
+// NewSecretValue creates a Value that holds a secret.
+// The raw bytes are stored as-is under the "secret" codec with TypeSecret, so
+// Marshal returns plaintext bytes suitable for an encrypted store or transport.
+// String() always returns "******" regardless of how the value is accessed.
+// Use SecretFrom to extract the *Secret from a stored Value.
+func NewSecretValue(s *Secret, opts ...ValueOption) Value {
+	if s == nil {
+		s = &Secret{}
+	}
+	b := s.Bytes()
+	v := &val{
+		raw:      s.Clone(),
+		data:     b,
+		dataType: TypeSecret,
+		codec:    secretCodec{},
+	}
+	for _, opt := range opts {
+		opt(v)
+	}
+	return v
+}
+
+// SecretFrom extracts a *Secret from a Value of TypeSecret.
+// The returned Secret holds a copy of the raw bytes; callers should call
+// Wipe() when done to zero them from the heap.
+// Returns ErrTypeMismatch if v is not TypeSecret.
+func SecretFrom(_ context.Context, v Value) (*Secret, error) {
+	if v == nil {
+		return nil, ErrNotFound
+	}
+	if v.Type() != TypeSecret {
+		return nil, fmt.Errorf("%w: want TypeSecret, got %s", ErrTypeMismatch, v.Type())
+	}
+	inner, ok := v.(*val)
+	if !ok || inner.data == nil {
+		return nil, fmt.Errorf("%w: secret data is not accessible", ErrInvalidValue)
+	}
+	return NewSecretBytes(inner.data), nil
+}
+
 // detectType maps a Go value to its config Type.
 // It handles JSON-decoded numbers (float64 that are actually integers,
 // json.Number) and unsigned integer types.
@@ -579,6 +674,8 @@ func detectType(data any) Type {
 		return TypeString
 	case bool:
 		return TypeBool
+	case *Secret:
+		return TypeSecret
 	default:
 		return TypeCustom
 	}

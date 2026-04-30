@@ -352,6 +352,67 @@ func TestSQLiteStore_DeleteMany(t *testing.T) {
 	}
 }
 
+func TestSQLiteStore_SecretValue(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	const ns, key = "secrettest", "creds/db_password"
+
+	original := config.NewSecret("super-secret-pw")
+	written, err := store.Set(ctx, ns, key, config.NewSecretValue(original))
+	if err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if written.Type() != config.TypeSecret {
+		t.Errorf("Set returned type %v, want TypeSecret", written.Type())
+	}
+
+	retrieved, err := store.Get(ctx, ns, key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	// Type must survive the round-trip.
+	if retrieved.Type() != config.TypeSecret {
+		t.Errorf("retrieved type = %v, want TypeSecret", retrieved.Type())
+	}
+
+	// String() must always mask — plaintext must never leak.
+	str, err := retrieved.String()
+	if err != nil {
+		t.Fatalf("String(): %v", err)
+	}
+	if str != "******" {
+		t.Errorf("String() = %q, want \"******\" (plaintext leaked)", str)
+	}
+
+	// SecretFrom must recover the original bytes.
+	got, err := config.SecretFrom(ctx, retrieved)
+	if err != nil {
+		t.Fatalf("SecretFrom: %v", err)
+	}
+	defer got.Wipe()
+	if !original.Equal(got) {
+		t.Errorf("SecretFrom bytes mismatch after round-trip: got %q", got.Bytes())
+	}
+
+	// Version increments on update.
+	if _, err := store.Set(ctx, ns, key, config.NewSecretValue(config.NewSecret("rotated-secret"))); err != nil {
+		t.Fatalf("update Set: %v", err)
+	}
+	updated, err := store.Get(ctx, ns, key)
+	if err != nil {
+		t.Fatalf("Get after update: %v", err)
+	}
+	if updated.Metadata().Version() != 2 {
+		t.Errorf("version after update = %d, want 2", updated.Metadata().Version())
+	}
+	// Updated value must also be masked.
+	if s, _ := updated.String(); s != "******" {
+		t.Errorf("updated String() = %q, want \"******\"", s)
+	}
+}
+
 // TestSQLiteStore_ExpiredEntryTreatedAsAbsent verifies write semantics
 // align with read semantics for entries past their TTL.
 func TestSQLiteStore_ExpiredEntryTreatedAsAbsent(t *testing.T) {

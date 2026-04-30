@@ -3,10 +3,12 @@ package config_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rbaliyan/config"
 	"github.com/rbaliyan/config/codec"
@@ -282,6 +284,237 @@ func TestSecret_CodecJSON(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "bearer-abc") {
 		t.Errorf("encoded JSON leaked secret: %s", encoded)
+	}
+}
+
+// --- TypeSecret / NewSecretValue / SecretFrom ---
+
+func TestTypeSecret_Enum(t *testing.T) {
+	if got := config.TypeSecret.String(); got != "secret" {
+		t.Errorf("TypeSecret.String() = %q, want \"secret\"", got)
+	}
+	if got := config.ParseType("secret"); got != config.TypeSecret {
+		t.Errorf("ParseType(\"secret\") = %v, want TypeSecret", got)
+	}
+}
+
+func TestNewSecretValue_Attributes(t *testing.T) {
+	s := config.NewSecret("my-token")
+	v := config.NewSecretValue(s)
+
+	if got := v.Type(); got != config.TypeSecret {
+		t.Errorf("Type() = %v, want TypeSecret", got)
+	}
+	if got := v.Codec(); got != "secret" {
+		t.Errorf("Codec() = %q, want \"secret\"", got)
+	}
+	str, err := v.String()
+	if err != nil {
+		t.Fatalf("String(): %v", err)
+	}
+	if str != "******" {
+		t.Errorf("String() = %q, want \"******\"", str)
+	}
+}
+
+func TestNewSecretValue_NilSafe(t *testing.T) {
+	v := config.NewSecretValue(nil)
+	if got := v.Type(); got != config.TypeSecret {
+		t.Errorf("Type() = %v, want TypeSecret", got)
+	}
+	str, err := v.String()
+	if err != nil {
+		t.Fatalf("String(): %v", err)
+	}
+	if str != "******" {
+		t.Errorf("String() = %q, want \"******\"", str)
+	}
+}
+
+// TestNewSecretValue_Marshal verifies Marshal returns the real bytes, not the mask.
+func TestNewSecretValue_Marshal(t *testing.T) {
+	ctx := context.Background()
+	v := config.NewSecretValue(config.NewSecret("real-password"))
+
+	data, err := v.Marshal(ctx)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if string(data) == "******" {
+		t.Error("Marshal returned the mask instead of actual bytes")
+	}
+	if string(data) != "real-password" {
+		t.Errorf("Marshal = %q, want \"real-password\"", data)
+	}
+}
+
+func TestSecretFrom_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	original := config.NewSecret("round-trip-secret")
+	v := config.NewSecretValue(original)
+
+	got, err := config.SecretFrom(ctx, v)
+	if err != nil {
+		t.Fatalf("SecretFrom: %v", err)
+	}
+	defer got.Wipe()
+
+	if !original.Equal(got) {
+		t.Errorf("SecretFrom returned wrong bytes: got %q", got.Bytes())
+	}
+}
+
+func TestSecretFrom_WrongType(t *testing.T) {
+	ctx := context.Background()
+	v := config.NewValue("not-a-secret")
+	if _, err := config.SecretFrom(ctx, v); !errors.Is(err, config.ErrTypeMismatch) {
+		t.Errorf("SecretFrom(TypeString) err = %v, want ErrTypeMismatch", err)
+	}
+}
+
+func TestSecretFrom_Nil(t *testing.T) {
+	ctx := context.Background()
+	if _, err := config.SecretFrom(ctx, nil); !errors.Is(err, config.ErrNotFound) {
+		t.Errorf("SecretFrom(nil) err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestSecretValue_Unmarshal(t *testing.T) {
+	ctx := context.Background()
+	original := config.NewSecret("my-api-key")
+	v := config.NewSecretValue(original)
+
+	var got *config.Secret
+	if err := v.Unmarshal(ctx, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got == nil {
+		t.Fatal("Unmarshal produced nil *Secret")
+	}
+	defer got.Wipe()
+	if !original.Equal(got) {
+		t.Errorf("Unmarshal bytes mismatch: got %q", got.Bytes())
+	}
+}
+
+func TestSecretValue_UnmarshalWrongTarget(t *testing.T) {
+	ctx := context.Background()
+	v := config.NewSecretValue(config.NewSecret("token"))
+
+	var s string
+	if err := v.Unmarshal(ctx, &s); !errors.Is(err, config.ErrTypeMismatch) {
+		t.Errorf("Unmarshal into *string err = %v, want ErrTypeMismatch", err)
+	}
+	var m map[string]any
+	if err := v.Unmarshal(ctx, &m); !errors.Is(err, config.ErrTypeMismatch) {
+		t.Errorf("Unmarshal into map err = %v, want ErrTypeMismatch", err)
+	}
+}
+
+// TestDetectType_Secret verifies NewValue(*Secret) detects TypeSecret and masks String().
+func TestDetectType_Secret(t *testing.T) {
+	s := config.NewSecret("detect-me")
+	v := config.NewValue(s)
+
+	if got := v.Type(); got != config.TypeSecret {
+		t.Errorf("NewValue(*Secret).Type() = %v, want TypeSecret", got)
+	}
+	str, err := v.String()
+	if err != nil {
+		t.Fatalf("String(): %v", err)
+	}
+	if str != "******" {
+		t.Errorf("NewValue(*Secret).String() = %q, want \"******\"", str)
+	}
+}
+
+func TestSecretValue_TypeConversionsUnsupported(t *testing.T) {
+	v := config.NewSecretValue(config.NewSecret("secret-bytes"))
+	if _, err := v.Int64(); err == nil {
+		t.Error("Int64() on TypeSecret should return error")
+	}
+	if _, err := v.Float64(); err == nil {
+		t.Error("Float64() on TypeSecret should return error")
+	}
+	if _, err := v.Bool(); err == nil {
+		t.Error("Bool() on TypeSecret should return error")
+	}
+}
+
+// TestSecretValue_DBReadback simulates how store backends reconstruct a TypeSecret value
+// from persisted bytes (the path taken by PostgreSQL, MongoDB, Redis, and SQLite).
+// When codec="raw" is not registered, NewValueFromBytes falls through to NewRawValue,
+// which preserves the bytes and respects WithValueType(TypeSecret).
+func TestSecretValue_DBReadback(t *testing.T) {
+	ctx := context.Background()
+	plaintext := "db-stored-secret"
+
+	v, err := config.NewValueFromBytes(ctx, []byte(plaintext), "secret",
+		config.WithValueType(config.TypeSecret))
+	if err != nil {
+		t.Fatalf("NewValueFromBytes: %v", err)
+	}
+
+	if got := v.Type(); got != config.TypeSecret {
+		t.Errorf("Type() = %v, want TypeSecret", got)
+	}
+	str, err := v.String()
+	if err != nil {
+		t.Fatalf("String(): %v", err)
+	}
+	if str != "******" {
+		t.Errorf("DBReadback String() = %q, plaintext leaked", str)
+	}
+	if str == plaintext {
+		t.Error("String() returned plaintext — secret leaked")
+	}
+
+	got, err := config.SecretFrom(ctx, v)
+	if err != nil {
+		t.Fatalf("SecretFrom after DBReadback: %v", err)
+	}
+	defer got.Wipe()
+	if string(got.Bytes()) != plaintext {
+		t.Errorf("SecretFrom bytes = %q, want %q", got.Bytes(), plaintext)
+	}
+}
+
+// TestSecretValue_WipeIndependence verifies that wiping an extracted *Secret
+// does not corrupt the Value's backing bytes for subsequent extractions.
+func TestSecretValue_WipeIndependence(t *testing.T) {
+	ctx := context.Background()
+	v := config.NewSecretValue(config.NewSecret("sensitive"))
+
+	first, err := config.SecretFrom(ctx, v)
+	if err != nil {
+		t.Fatalf("first SecretFrom: %v", err)
+	}
+	first.Wipe()
+
+	second, err := config.SecretFrom(ctx, v)
+	if err != nil {
+		t.Fatalf("second SecretFrom after wipe: %v", err)
+	}
+	defer second.Wipe()
+
+	if second.IsZero() {
+		t.Error("value lost its bytes after caller wiped the first extraction")
+	}
+	if string(second.Bytes()) != "sensitive" {
+		t.Errorf("second extraction = %q, want \"sensitive\"", second.Bytes())
+	}
+}
+
+func TestNewSecretValue_WithOptions(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	v := config.NewSecretValue(config.NewSecret("tok"),
+		config.WithValueMetadata(7, now, now))
+
+	if got := v.Metadata().Version(); got != 7 {
+		t.Errorf("Version() = %d, want 7", got)
+	}
+	if got := v.Type(); got != config.TypeSecret {
+		t.Errorf("Type() = %v after WithValueMetadata, want TypeSecret", got)
 	}
 }
 
