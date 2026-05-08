@@ -47,13 +47,13 @@ jobs:
         run: go install github.com/securego/gosec/v2/cmd/gosec@v2.22.4
 
       - name: Run GoSec
-        run: gosec -fmt sarif -out gosec-results.sarif -severity medium -confidence medium -exclude-dir k8s ./...
+        run: gosec -fmt sarif -out gosec-results.sarif -severity medium -confidence medium -exclude-dir k8s/example ./...
 
-      - name: Run GoSec (k8s submodule)
-        working-directory: k8s
+      - name: Run GoSec (k8s example adapter)
+        working-directory: k8s/example
         run: |
           go mod download
-          gosec -fmt sarif -out ../gosec-k8s-results.sarif -severity medium -confidence medium ./...
+          gosec -fmt sarif -out ../../gosec-k8s-example-results.sarif -severity medium -confidence medium ./...
 
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v3
@@ -62,9 +62,9 @@ jobs:
           sarif_file: gosec-results.sarif
           category: gosec
 
-      - name: Upload SARIF (k8s) to GitHub Security
+      - name: Upload SARIF (k8s example) to GitHub Security
         uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v3
         if: always()
         with:
-          sarif_file: gosec-k8s-results.sarif
-          category: gosec-k8s
+          sarif_file: gosec-k8s-example-results.sarif
+          category: gosec-k8s-example
