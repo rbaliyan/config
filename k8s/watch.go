@@ -7,6 +7,7 @@ import (
 	"github.com/rbaliyan/config"
 )
 
+// watchEntry represents a single subscriber to Store.Watch.
 type watchEntry struct {
 	filter    config.WatchFilter
 	ch        chan config.ChangeEvent
@@ -37,7 +38,7 @@ func (s *Store) notifyWatchers(event config.ChangeEvent) {
 	}
 }
 
-// sendToWatcher safely sends an event to a watcher, handling closed channels.
+// sendToWatcher safely sends an event to a watcher, dropping on a full channel.
 func (s *Store) sendToWatcher(we *watchEntry, event config.ChangeEvent) {
 	we.mu.Lock()
 	defer we.mu.Unlock()
