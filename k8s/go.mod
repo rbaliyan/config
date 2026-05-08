@@ -1,6 +1,6 @@
 module github.com/rbaliyan/config/k8s
 
-go 1.25.9
+go 1.26.3
 
 require (
 	github.com/rbaliyan/config v0.6.0
