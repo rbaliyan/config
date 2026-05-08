@@ -70,10 +70,32 @@ config/
 │   ├── store.go      # Fallback, ReadThrough, WriteThrough strategies
 │   └── options.go
 │
-└── live/             # Live config binding
-    ├── ref.go        # Atomic live reference (Ref[T])
-    └── binding.go    # Mutex-based live binding
+├── live/             # Live config binding
+│   ├── ref.go        # Atomic live reference (Ref[T])
+│   └── binding.go    # Mutex-based live binding
+│
+└── k8s/              # Kubernetes ConfigMap/Secret store (no k8s.io deps)
+    ├── client.go     # Client interface, Resource, Event, ErrNotFound
+    ├── store.go      # Store implementation built on Client
+    ├── options.go    # Store options
+    ├── watch.go      # Watch fan-out
+    └── example/      # Reference adapter (separate go.mod, depends on k8s.io/*)
+        ├── adapter.go # kubernetes.Interface → Client adapter
+        └── main/      # Runnable demo
 ```
+
+### k8s store
+
+Unlike the postgres or mongodb stores, the k8s store does NOT import `k8s.io/*`.
+Instead it depends on a narrow `k8s.Client` interface (Get/Upsert/Watch/Health)
+and the caller supplies an adapter — see `k8s/example/` for a reference
+implementation built on `kubernetes.Interface`. This keeps the heavy kubernetes
+transitive dependency out of `github.com/rbaliyan/config` and lets the store
+ride the same release cadence as the rest of the module.
+
+The store does not maintain a local resource cache: reads call straight through
+to the Client and Manager-level caching handles repeats, mirroring postgres /
+mongodb behavior.
 
 ## Key Design Decisions
 
@@ -331,6 +353,7 @@ Optional (for specific backends):
 
 ## Recent Changes
 
+- **k8s store decoupled from k8s.io/***: The `k8s` package now depends only on a `Client` interface (Get/Upsert/Watch/Health) instead of `kubernetes.Interface`. The previous `k8s/go.mod` is gone — k8s ships in the main module. A reference adapter using `kubernetes.Interface` lives at `k8s/example/` with its own `go.mod`. The store no longer maintains an informer cache; reads call straight through to the Client.
 - **Removed deprecated `live.Binding`**: Use `live.Ref[T]` instead for lock-free atomic reads. `DefaultPollInterval` and `ErrInvalidTarget` remain in the `live` package.
 - **Unexported `otel.Metrics`**: The metrics struct and fields are now unexported (`metrics`, `operationCount`, `errorCount`, `operationLatency`)
 - **Benchmarks**: `benchmark_test.go` provides benchmarks for Manager.Get, Value operations, MarkStale, and Store operations

@@ -1,26 +1,19 @@
 package k8s
 
-import (
-	"time"
-)
-
 const (
-	defaultSecretPrefix  = "secret/"
-	defaultResyncPeriod  = 10 * time.Minute
-	defaultWatchBufSize  = 100
+	defaultSecretPrefix = "secret/"
+	defaultWatchBufSize = 100
 )
 
 type storeOptions struct {
-	k8sNamespace string        // k8s namespace to watch; "" = all namespaces
-	secretPrefix string        // config keys with this prefix → Secret; default "secret/"
-	resyncPeriod time.Duration // informer resync; default 10m
-	watchBufSize int           // default 100
+	k8sNamespace string // k8s namespace to scope to; "" = all namespaces
+	secretPrefix string // config keys with this prefix → Secret; default "secret/"
+	watchBufSize int    // per-subscriber buffer for Store.Watch channels; default 100
 }
 
 func defaultOptions() storeOptions {
 	return storeOptions{
 		secretPrefix: defaultSecretPrefix,
-		resyncPeriod: defaultResyncPeriod,
 		watchBufSize: defaultWatchBufSize,
 	}
 }
@@ -28,8 +21,12 @@ func defaultOptions() storeOptions {
 // Option configures the k8s store.
 type Option func(*storeOptions)
 
-// WithK8sNamespace restricts the store to a single Kubernetes namespace.
-// When empty (the default), the store watches all namespaces.
+// WithK8sNamespace pins all reads and writes to a single Kubernetes namespace.
+//
+// When set, every config namespace maps to this Kubernetes namespace and
+// Watch is scoped to it. When empty (the default), the config namespace name
+// is used directly as the Kubernetes namespace; an empty config namespace
+// falls back to the Kubernetes "default" namespace.
 func WithK8sNamespace(ns string) Option {
 	return func(o *storeOptions) {
 		o.k8sNamespace = ns
@@ -38,6 +35,7 @@ func WithK8sNamespace(ns string) Option {
 
 // WithSecretKeyPrefix sets the config key prefix that routes to Kubernetes Secrets.
 // Keys with this prefix are stored in/read from Secrets; all others use ConfigMaps.
+// Set to "" to disable secret routing entirely.
 // Default is "secret/".
 func WithSecretKeyPrefix(prefix string) Option {
 	return func(o *storeOptions) {
@@ -45,18 +43,8 @@ func WithSecretKeyPrefix(prefix string) Option {
 	}
 }
 
-// WithResyncPeriod sets the informer resync period.
-// Default is 10 minutes.
-func WithResyncPeriod(d time.Duration) Option {
-	return func(o *storeOptions) {
-		if d > 0 {
-			o.resyncPeriod = d
-		}
-	}
-}
-
-// WithWatchBufferSize sets the buffer size for watch event channels.
-// Default is 100.
+// WithWatchBufferSize sets the per-subscriber buffer size for Store.Watch
+// channels. Default is 100.
 func WithWatchBufferSize(n int) Option {
 	return func(o *storeOptions) {
 		if n > 0 {

@@ -78,14 +78,20 @@ func TestParseResourceVersion(t *testing.T) {
 
 func TestStore_ConfigNamespace(t *testing.T) {
 	s := &Store{}
-	if got := s.configNamespace("any", "config-prod"); got != "prod" {
-		t.Errorf("got %q", got)
+	cases := []struct {
+		ev   Event
+		want string
+	}{
+		{Event{New: &Resource{Name: "config-prod"}}, "prod"},
+		{Event{New: &Resource{Name: "config-secrets-prod"}}, "prod"},
+		{Event{Old: &Resource{Name: "config-prod"}}, "prod"},
+		{Event{New: &Resource{Name: "unrelated-cm"}}, ""},
+		{Event{}, ""},
 	}
-	if got := s.configNamespace("any", "config-secrets-prod"); got != "prod" {
-		t.Errorf("got %q", got)
-	}
-	if got := s.configNamespace("any", "unrelated-cm"); got != "" {
-		t.Errorf("unmanaged name should return empty, got %q", got)
+	for _, c := range cases {
+		if got := s.configNamespace(c.ev); got != c.want {
+			t.Errorf("configNamespace(%+v) = %q, want %q", c.ev, got, c.want)
+		}
 	}
 }
 
@@ -106,6 +112,16 @@ func TestStore_K8sNamespace(t *testing.T) {
 	}
 }
 
+func TestStore_ResourceFor(t *testing.T) {
+	s := &Store{opts: storeOptions{secretPrefix: "secret/"}}
+	if kind, name := s.resourceFor("prod", "db/host"); kind != KindConfigMap || name != "config-prod" {
+		t.Errorf("expected configmap, got %v %q", kind, name)
+	}
+	if kind, name := s.resourceFor("prod", "secret/db-password"); kind != KindSecret || name != "config-secrets-prod" {
+		t.Errorf("expected secret, got %v %q", kind, name)
+	}
+}
+
 func TestDefaultOptions(t *testing.T) {
 	o := defaultOptions()
 	if o.secretPrefix != defaultSecretPrefix {
@@ -113,9 +129,6 @@ func TestDefaultOptions(t *testing.T) {
 	}
 	if o.watchBufSize != defaultWatchBufSize {
 		t.Errorf("watchBufSize: %d", o.watchBufSize)
-	}
-	if o.resyncPeriod != defaultResyncPeriod {
-		t.Errorf("resyncPeriod: %v", o.resyncPeriod)
 	}
 }
 
@@ -129,10 +142,6 @@ func TestOptions(t *testing.T) {
 	if o.secretPrefix != "sec/" {
 		t.Error("secretPrefix not set")
 	}
-	WithResyncPeriod(0)(&o)
-	if o.resyncPeriod != defaultResyncPeriod {
-		t.Error("zero resync should be ignored")
-	}
 	WithWatchBufferSize(-1)(&o)
 	if o.watchBufSize != defaultWatchBufSize {
 		t.Error("negative bufSize should be ignored")
@@ -140,5 +149,17 @@ func TestOptions(t *testing.T) {
 	WithWatchBufferSize(250)(&o)
 	if o.watchBufSize != 250 {
 		t.Error("bufSize not updated")
+	}
+}
+
+func TestKindString(t *testing.T) {
+	if KindConfigMap.String() != "configmap" {
+		t.Errorf("KindConfigMap: %q", KindConfigMap.String())
+	}
+	if KindSecret.String() != "secret" {
+		t.Errorf("KindSecret: %q", KindSecret.String())
+	}
+	if Kind(99).String() != "unknown" {
+		t.Errorf("unknown kind: %q", Kind(99).String())
 	}
 }
