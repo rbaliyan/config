@@ -64,7 +64,10 @@ type Event struct {
 	Kind Kind
 	// Namespace is the Kubernetes namespace of the resource.
 	Namespace string
-	// Old is the previous resource state. Set on EventUpdate and EventDelete.
+	// Old is the previous resource state. Best-effort: adapters may set it on
+	// EventUpdate and EventDelete to enable minimal-diff dispatch by the Store,
+	// but a nil Old is supported — the Store treats every key in New as
+	// changed and skips delete inference, which is safe but noisier.
 	Old *Resource
 	// New is the new resource state. Set on EventAdd and EventUpdate.
 	New *Resource
@@ -93,15 +96,17 @@ type Client interface {
 	Upsert(ctx context.Context, kind Kind, namespace string, r *Resource) (*Resource, error)
 
 	// Watch starts a watch over both ConfigMaps and Secrets in namespace
-	// (or all namespaces when namespace is ""). The returned channel must:
+	// (or all namespaces when namespace is "").
 	//
-	//   - Emit one Event per observed add/update/delete.
-	//   - Be closed when ctx is cancelled or the underlying watch terminates.
-	//   - Reconnect transparently on transient errors.
+	// Required: emit one Event per observed add/update/delete; close the
+	// returned channel when ctx is cancelled or the underlying watch
+	// terminates. The Store ignores events for resources whose names do not
+	// match its managed prefixes ("config-" and "config-secrets-"), so
+	// adapters do not need to filter.
 	//
-	// Adapters typically filter to resources whose names begin with the Store's
-	// managed prefixes ("config-" and "config-secrets-") to avoid noisy events;
-	// the Store also filters events on its side.
+	// Recommended: reconnect transparently on transient API errors (e.g., via
+	// k8s.io/client-go/tools/watch.NewRetryWatcher). The bundled reference
+	// adapter does not, and closes the channel on the first upstream error.
 	Watch(ctx context.Context, namespace string) (<-chan Event, error)
 
 	// Health performs a lightweight liveness check (e.g., listing namespaces).

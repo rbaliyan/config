@@ -21,9 +21,12 @@ func defaultOptions() storeOptions {
 // Option configures the k8s store.
 type Option func(*storeOptions)
 
-// WithK8sNamespace restricts the store to a single Kubernetes namespace.
-// When empty (the default), the store operates across all namespaces and the
-// config namespace name is used directly as the Kubernetes namespace.
+// WithK8sNamespace pins all reads and writes to a single Kubernetes namespace.
+//
+// When set, every config namespace maps to this Kubernetes namespace and
+// Watch is scoped to it. When empty (the default), the config namespace name
+// is used directly as the Kubernetes namespace; an empty config namespace
+// falls back to the Kubernetes "default" namespace.
 func WithK8sNamespace(ns string) Option {
 	return func(o *storeOptions) {
 		o.k8sNamespace = ns

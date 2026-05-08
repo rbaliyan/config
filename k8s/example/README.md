@@ -23,11 +23,15 @@ mongodb stores behave.
 
 ```go
 import (
+    "context"
+
     "github.com/rbaliyan/config/k8s"
     kubeclient "github.com/rbaliyan/config/k8s/example"
     "k8s.io/client-go/kubernetes"
     "k8s.io/client-go/rest"
 )
+
+ctx := context.Background()
 
 cfg, _ := rest.InClusterConfig()           // or clientcmd.BuildConfigFromFlags(...)
 cs, _  := kubernetes.NewForConfig(cfg)

@@ -109,6 +109,8 @@ func (s *Store) BackendName() string { return "k8s" }
 
 // Connect starts the background watch loop. The first read after Connect
 // hits the Kubernetes API via the Client; there is no initial cache sync.
+// The watch lifetime is bounded by Close, not by ctx — ctx is only used for
+// validation prior to starting the watch.
 func (s *Store) Connect(ctx context.Context) error {
 	if s.closed.Load() {
 		return config.ErrStoreClosed
@@ -275,7 +277,12 @@ func (s *Store) Delete(ctx context.Context, namespace, key string) error {
 }
 
 // Find returns a page of configuration entries matching the filter.
-// ConfigMap entries are returned; Secret entries are not enumerated by Find.
+//
+// In Keys mode (filter.Keys() non-empty), each key is resolved individually
+// and secret-prefixed keys are read from the namespace Secret as expected.
+// In Prefix/cursor mode, only the namespace ConfigMap is scanned; Secret
+// data keys are not enumerated. Use Keys mode to read secret-prefixed keys
+// in bulk.
 func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter) (config.Page, error) {
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
@@ -356,6 +363,9 @@ func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter
 }
 
 // Watch returns a channel that receives change events for matching keys.
+// Returns ErrStoreNotConnected if called before Connect. Events are dropped
+// when the per-subscriber buffer is full (size set via WithWatchBufferSize).
+// The channel is closed when ctx is cancelled or the Store is closed.
 func (s *Store) Watch(ctx context.Context, filter config.WatchFilter) (<-chan config.ChangeEvent, error) {
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed

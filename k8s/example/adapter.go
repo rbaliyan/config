@@ -129,10 +129,13 @@ func (a *Adapter) upsertSecret(ctx context.Context, namespace string, r *k8s.Res
 }
 
 // Watch starts watching ConfigMaps and Secrets in namespace and forwards
-// add/update/delete events on a single channel. The channel is closed when ctx
-// is cancelled or when both upstream watches end. Transient watch errors are
-// ignored — re-establishing the watch is the caller's responsibility (or wire
-// in client-go's watch.NewRetryWatcher for automatic recovery).
+// add/update/delete events on a single channel. The channel is closed when
+// ctx is cancelled or when either upstream watch terminates. This adapter
+// does NOT auto-reconnect on transient errors — wrap the upstream watches
+// with k8s.io/client-go/tools/watch.NewRetryWatcher for resilient operation.
+// Old is left nil on every Event; the Store treats every key in New as
+// changed and skips delete inference, which is correct but noisier than a
+// minimal-diff implementation.
 func (a *Adapter) Watch(ctx context.Context, namespace string) (<-chan k8s.Event, error) {
 	cmW, err := a.cs.CoreV1().ConfigMaps(namespace).Watch(ctx, metav1.ListOptions{})
 	if err != nil {
