@@ -445,8 +445,9 @@ func TestMongoDBStore_SecretValue(t *testing.T) {
 
 // Compile-time interface checks
 var (
-	_ config.Store         = (*mongodb.Store)(nil)
-	_ config.HealthChecker = (*mongodb.Store)(nil)
-	_ config.StatsProvider = (*mongodb.Store)(nil)
-	_ config.BulkStore     = (*mongodb.Store)(nil)
+	_ config.Store          = (*mongodb.Store)(nil)
+	_ config.HealthChecker  = (*mongodb.Store)(nil)
+	_ config.StatsProvider  = (*mongodb.Store)(nil)
+	_ config.BulkStore      = (*mongodb.Store)(nil)
+	_ config.VersionedStore = (*mongodb.Store)(nil)
 )
