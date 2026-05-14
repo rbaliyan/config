@@ -66,6 +66,16 @@ var (
 	// ErrAliasChain is returned when an alias target is itself an alias,
 	// which would create a chain. Aliases are single-hop only.
 	ErrAliasChain = errors.New("config: alias chain not allowed")
+
+	// ErrInvalidCursor indicates a pagination cursor is malformed, expired,
+	// originated from a different store backend, or uses a protocol version
+	// the current backend does not understand. Returned by paginated APIs
+	// that use opaque cursors, such as [NamespaceLister.ListNamespaces].
+	// Callers should treat this as an invalid-argument condition and either
+	// retry from the first page (empty cursor) or surface it to the user.
+	// See the cursor envelope in package internal/cursor for the wire-level
+	// failure modes that produce this sentinel.
+	ErrInvalidCursor = errors.New("config: invalid cursor")
 )
 
 // KeyNotFoundError provides details about a missing key.
@@ -336,4 +346,12 @@ func (e *AliasExistsError) Unwrap() error {
 // IsAliasExists checks if an error indicates an alias already exists.
 func IsAliasExists(err error) bool {
 	return errors.Is(err, ErrAliasExists)
+}
+
+// IsInvalidCursor checks if an error indicates a malformed or
+// backend-incompatible pagination cursor. This is the canonical predicate
+// for handling pagination errors from [NamespaceLister.ListNamespaces] and
+// from cursor decoding in package internal/cursor.
+func IsInvalidCursor(err error) bool {
+	return errors.Is(err, ErrInvalidCursor)
 }
