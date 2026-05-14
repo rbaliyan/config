@@ -56,14 +56,14 @@ jobs:
           gosec -fmt sarif -out ../../gosec-k8s-example-results.sarif -severity medium -confidence medium ./...
 
       - name: Upload SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v3
+        uses: github/codeql-action/upload-sarif@68bde559dea0fdcac2102bfdf6230c5f70eb485e # v3
         if: always()
         with:
           sarif_file: gosec-results.sarif
           category: gosec
 
       - name: Upload SARIF (k8s example) to GitHub Security
-        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v3
+        uses: github/codeql-action/upload-sarif@68bde559dea0fdcac2102bfdf6230c5f70eb485e # v3
         if: always()
         with:
           sarif_file: gosec-k8s-example-results.sarif
