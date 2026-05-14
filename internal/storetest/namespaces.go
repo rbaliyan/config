@@ -110,14 +110,17 @@ func RunNamespaceListerSuite(t *testing.T, factory Factory) {
 		t.Parallel()
 		store := factory(t)
 		ctx := context.Background()
-		seed(t, store, "prod/us", "prod/eu", "stage/us", "dev")
+		// Namespace names obey config.ValidateNamespace: alphanumeric plus
+		// the connector chars [_.-:]. Slash is NOT permitted, so the
+		// suite uses dot-separated hierarchical names.
+		seed(t, store, "prod.us", "prod.eu", "stage.us", "dev")
 
 		lister := mustList(t, store)
-		got, err := paginate(ctx, lister, "prod/", 10)
+		got, err := paginate(ctx, lister, "prod.", 10)
 		if err != nil {
 			t.Fatalf("paginate: %v", err)
 		}
-		assertSortedEqual(t, got, []string{"prod/eu", "prod/us"})
+		assertSortedEqual(t, got, []string{"prod.eu", "prod.us"})
 	})
 
 	t.Run("PrefixMatchesNothing", func(t *testing.T) {
@@ -169,16 +172,22 @@ func RunNamespaceListerSuite(t *testing.T, factory Factory) {
 		}
 	})
 
-	t.Run("UnicodeSortIsByteWise", func(t *testing.T) {
+	t.Run("ByteWiseSortOrder", func(t *testing.T) {
 		t.Parallel()
 		store := factory(t)
 		ctx := context.Background()
-		// These names exercise multi-byte UTF-8 ordering. Byte-wise sort
-		// places ASCII before any multi-byte sequence; the implementation
-		// must agree.
-		input := []string{"naïve", "z-ascii", "a-ascii", "πι", "naive"}
-		// Confirm the input itself is valid UTF-8 so the test stays
-		// honest about what it's measuring.
+		// Byte-wise UTF-8 sort puts uppercase before lowercase
+		// ('A' = 0x41 < 'a' = 0x61), digits before letters
+		// ('0' = 0x30 < 'A'), and dots before dashes ('.' = 0x2E,
+		// '-' = 0x2D, so '-' actually sorts BEFORE '.'). The test
+		// inputs intentionally span those ranges so a backend that
+		// uses locale-aware collation (e.g. Postgres' default
+		// `varchar` LC_COLLATE) will fail loudly.
+		//
+		// Namespace names obey config.ValidateNamespace, which excludes
+		// non-ASCII bytes. The byte-wise contract is therefore
+		// exercised exclusively through ASCII variants.
+		input := []string{"Zebra", "abc", "ABC", "a.b", "a-b", "10", "9"}
 		for _, s := range input {
 			if !utf8.ValidString(s) {
 				t.Fatalf("test input %q is not valid UTF-8", s)

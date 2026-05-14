@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rbaliyan/config"
+	cursorpkg "github.com/rbaliyan/config/internal/cursor"
 )
 
 // validIdentifier matches valid SQLite identifiers (alphanumeric and underscore, not starting with digit).
@@ -149,10 +150,11 @@ func NewStore(db *sql.DB, opts ...Option) *Store {
 
 // Compile-time interface checks
 var (
-	_ config.Store         = (*Store)(nil)
-	_ config.HealthChecker = (*Store)(nil)
-	_ config.StatsProvider = (*Store)(nil)
-	_ config.BulkStore     = (*Store)(nil)
+	_ config.Store           = (*Store)(nil)
+	_ config.HealthChecker   = (*Store)(nil)
+	_ config.StatsProvider   = (*Store)(nil)
+	_ config.BulkStore       = (*Store)(nil)
+	_ config.NamespaceLister = (*Store)(nil)
 )
 
 // BackendName returns the stable backend identifier used in error messages.
@@ -1025,3 +1027,108 @@ func (s *Store) log() *slog.Logger {
 	return slog.Default()
 }
 
+// namespaceListerBackendTag is the [internal/cursor] backend identifier
+// for this store. It MUST differ from every other backend's tag so a
+// caller that switches stores while holding a cursor sees ErrInvalidCursor
+// instead of a silently misinterpreted token.
+const namespaceListerBackendTag = "sqlite"
+
+// ListNamespaces returns a page of namespace names currently containing at
+// least one non-expired entry. See [config.NamespaceLister] for the full
+// contract on ordering, prefix matching, and cursor opacity.
+//
+// Query strategy: a keyset-paginated
+// `SELECT DISTINCT namespace ... ORDER BY namespace LIMIT n+1`. The
+// trailing +1 row is dropped after detecting whether a next page exists.
+//
+// Limit policy: limit <= 0 is a caller error and returns
+// [config.ErrInvalidValue] (no silent fallback).
+//
+// Cursor policy: opaque base64-url envelopes from [internal/cursor]; the
+// payload is the last-emitted namespace name. Foreign or malformed
+// cursors return an error wrapping [config.ErrInvalidCursor]; check with
+// [config.IsInvalidCursor].
+//
+// TTL: matches [Store.Get] and [Store.Find] read semantics
+// (`expires_at IS NULL OR expires_at > datetime('now')`), so namespaces
+// whose entries have all expired (but have not yet been Deleted) do not
+// appear.
+//
+// Coverage: served by idx_{table}_namespace (the (namespace) single-column
+// index) and the (namespace, key) composite. The expires_at predicate is
+// covered by the partial index on (expires_at) WHERE expires_at IS NOT NULL.
+func (s *Store) ListNamespaces(ctx context.Context, prefix string, limit int, cursor string) ([]string, string, error) {
+	if s.closed.Load() {
+		return nil, "", config.ErrStoreClosed
+	}
+	if limit <= 0 {
+		return nil, "", fmt.Errorf("sqlite: ListNamespaces requires limit > 0: %w", config.ErrInvalidValue)
+	}
+
+	var after string
+	if cursor != "" {
+		decoded, err := cursorpkg.UnmarshalString(namespaceListerBackendTag, cursor)
+		if err != nil {
+			return nil, "", err
+		}
+		after = decoded
+	}
+
+	// Keyset query. Prefix is matched with LIKE using a literal-escaped
+	// pattern so user-supplied prefixes containing %, _, or \ are treated
+	// as literals. The "$2 = ''" branch lets us short-circuit when no
+	// prefix is requested without binding a separate query.
+	query := fmt.Sprintf(`
+		SELECT DISTINCT namespace
+		FROM %s
+		WHERE namespace > $1
+		  AND ($2 = '' OR namespace LIKE $3 ESCAPE '\')
+		  AND (expires_at IS NULL OR expires_at > datetime('now'))
+		ORDER BY namespace
+		LIMIT $4
+	`, s.cfg.Table)
+
+	rows, err := s.db.QueryContext(ctx, query, after, prefix, escapeLikePattern(prefix)+"%", int64(limit+1))
+	if err != nil {
+		return nil, "", config.WrapStoreError("list_namespaces", "sqlite", "", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	names := make([]string, 0, limit)
+	for rows.Next() {
+		var ns string
+		if err := rows.Scan(&ns); err != nil {
+			return nil, "", config.WrapStoreError("list_namespaces", "sqlite", "", err)
+		}
+		names = append(names, ns)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", config.WrapStoreError("list_namespaces", "sqlite", "", err)
+	}
+
+	if len(names) > limit {
+		emitted := names[:limit]
+		next, err := cursorpkg.MarshalString(namespaceListerBackendTag, emitted[len(emitted)-1])
+		if err != nil {
+			return nil, "", err
+		}
+		return emitted, next, nil
+	}
+	return names, "", nil
+}
+
+// escapeLikePattern escapes the LIKE-metacharacters in s so a user-supplied
+// prefix containing %, _, or \ is matched literally rather than as a
+// pattern. The accompanying query specifies ESCAPE '\' so the backslash
+// inserted here is the escape character.
+func escapeLikePattern(s string) string {
+	if s == "" {
+		return ""
+	}
+	r := strings.NewReplacer(
+		`\`, `\\`,
+		`%`, `\%`,
+		`_`, `\_`,
+	)
+	return r.Replace(s)
+}

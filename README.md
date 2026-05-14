@@ -332,6 +332,52 @@ if len(page.Results()) == page.Limit() {
 }
 ```
 
+### Listing Namespaces
+
+Stores that implement `NamespaceLister` expose efficient, server-side
+paginated enumeration of namespace names. Memory, SQLite, PostgreSQL, and
+MongoDB ship with native implementations; Redis is intentionally excluded
+and falls back to `StatsProvider`.
+
+```go
+// Type-assert against the underlying store (the Manager does not expose
+// NamespaceLister directly — type-assert the store you pass into the Manager).
+if nl, ok := store.(config.NamespaceLister); ok {
+    cursor := ""
+    for {
+        names, next, err := nl.ListNamespaces(ctx, "prod-", 50, cursor)
+        if err != nil {
+            if config.IsInvalidCursor(err) {
+                // Cursor was malformed, expired, or from a different store.
+                // Retry from the first page.
+                cursor = ""
+                continue
+            }
+            return err
+        }
+        for _, ns := range names {
+            handle(ns)
+        }
+        if next == "" {
+            break
+        }
+        cursor = next
+    }
+}
+```
+
+Contract highlights (see `config.NamespaceLister` godoc for the full
+contract): namespaces are returned in ascending byte-wise UTF-8 order;
+cursors are opaque and **not portable across backends** (a cursor from
+the postgres store passed to the mongodb store returns
+`ErrInvalidCursor`); `limit <= 0` is a caller error on every backend
+shipped today (no silent default-fallback).
+
+> **Wrapper note:** the `otel`, `multi`, `transform`, and `expand`
+> wrapper stores do not currently forward `NamespaceLister`. A type
+> assertion against a wrapped store returns `ok == false`; callers that
+> need direct enumeration must unwrap to the underlying backend.
+
 ### Version History
 
 Stores that implement `VersionedStore` retain historical versions of config entries. Use `GetVersions` to retrieve them:

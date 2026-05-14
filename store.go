@@ -276,8 +276,15 @@ type BulkStore interface {
 //
 // # Implementations
 //
-// None in the public v0 surface yet; phase-1 ships the interface and
-// conformance suite ahead of per-backend implementations.
+// Implemented by the memory, sqlite, postgres, and mongodb stores in this
+// module. Redis is intentionally excluded; redis callers fall back to the
+// [StatsProvider] path in the service layer. Each backend uses a distinct
+// cursor envelope tag so a cursor produced by one store and replayed
+// against another returns [ErrInvalidCursor]. Wrapper stores (otel, multi,
+// transform, expand) do not currently forward this interface — a type
+// assertion against a wrapped store returns `ok == false`, and callers
+// should unwrap to the underlying store if they need direct
+// NamespaceLister access.
 //
 // Use type assertion to check if a store supports namespace enumeration:
 //
