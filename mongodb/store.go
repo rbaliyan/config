@@ -93,6 +93,24 @@ type Config struct {
 	// When the limit is reached, the cache is cleared. Default is 10000.
 	MaxIDCacheSize int
 
+	// EnableVersioning enables version history tracking.
+	// When enabled, every successful Set/SetMany writes a snapshot to a
+	// separate versions collection, and Delete/DeleteMany removes snapshots
+	// for the deleted keys. When disabled (default), GetVersions returns
+	// ErrVersioningNotSupported.
+	EnableVersioning bool
+
+	// VersionsCollection is the name of the versions collection.
+	// Defaults to "{Collection}_versions" (e.g., "entries_versions").
+	// Only used when EnableVersioning is true.
+	VersionsCollection string
+
+	// MaxHistory limits the number of past versions retained per key.
+	// The current version is always retained, so total snapshots stored
+	// per key are bounded by MaxHistory + 1. 0 means unlimited (default).
+	// Only used when EnableVersioning is true.
+	MaxHistory int
+
 	// Logger is the logger for the store. If nil, uses slog.Default().
 	Logger *slog.Logger
 }
@@ -217,6 +235,13 @@ func WithConfig(cfg Config) Option {
 		if cfg.CappedMaxDocuments > 0 {
 			s.cfg.CappedMaxDocuments = cfg.CappedMaxDocuments
 		}
+		s.cfg.EnableVersioning = cfg.EnableVersioning
+		if cfg.VersionsCollection != "" {
+			s.cfg.VersionsCollection = cfg.VersionsCollection
+		}
+		if cfg.MaxHistory > 0 {
+			s.cfg.MaxHistory = cfg.MaxHistory
+		}
 		if cfg.Logger != nil {
 			s.cfg.Logger = cfg.Logger
 		}
@@ -300,6 +325,43 @@ func WithMaxIDCacheSize(size int) Option {
 	}
 }
 
+// WithVersioning enables version history tracking.
+//
+// When enabled, every successful Set / SetMany also writes a snapshot to a
+// separate versions collection (see [WithVersionsCollection]). Delete and
+// DeleteMany remove all snapshots for the affected keys. Version history is
+// retrieved through the [config.VersionedStore] interface via GetVersions.
+//
+// Versioning is disabled by default to avoid silent write amplification on
+// existing deployments. When disabled, GetVersions returns
+// [config.ErrVersioningNotSupported].
+func WithVersioning(enabled bool) Option {
+	return func(s *Store) {
+		s.cfg.EnableVersioning = enabled
+	}
+}
+
+// WithVersionsCollection sets the name of the collection used to store version
+// snapshots. Defaults to "{Collection}_versions". Only effective when
+// versioning is enabled via [WithVersioning].
+func WithVersionsCollection(name string) Option {
+	return func(s *Store) {
+		s.cfg.VersionsCollection = name
+	}
+}
+
+// WithMaxHistory limits the number of past versions retained per key.
+// The current version is always retained, so the total snapshots stored per
+// key are bounded by n + 1. n = 0 means unlimited (default). Negative values
+// are ignored. Only effective when versioning is enabled via [WithVersioning].
+func WithMaxHistory(n int) Option {
+	return func(s *Store) {
+		if n >= 0 {
+			s.cfg.MaxHistory = n
+		}
+	}
+}
+
 // NewStore creates a new MongoDB store with the provided client.
 // The client must be connected and ready to use.
 // The store does not manage the client lifecycle - the caller is responsible
@@ -327,6 +389,7 @@ var (
 	_ config.StatsProvider  = (*Store)(nil)
 	_ config.BulkStore      = (*Store)(nil)
 	_ config.CodecValidator = (*Store)(nil)
+	_ config.VersionedStore = (*Store)(nil)
 )
 
 // SupportsCodec reports whether the MongoDB store supports the given codec.
@@ -369,6 +432,11 @@ func (s *Store) Connect(ctx context.Context) error {
 		if err := s.EnsureIndexes(ctx); err != nil {
 			return config.WrapStoreError("create_indexes", "mongodb", "", err)
 		}
+		if s.cfg.EnableVersioning {
+			if err := s.ensureVersionsIndexes(ctx); err != nil {
+				return config.WrapStoreError("create_indexes", "mongodb", "", err)
+			}
+		}
 	}
 
 	// Start change stream listener
@@ -380,6 +448,7 @@ func (s *Store) Connect(ctx context.Context) error {
 		"collection", s.cfg.Collection,
 		"capped", s.cfg.Capped,
 		"preImages", s.cfg.EnablePreImages,
+		"versioning", s.cfg.EnableVersioning,
 	)
 
 	return nil
@@ -719,6 +788,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		if oid, ok := result.InsertedID.(bson.ObjectID); ok {
 			doc.ID = oid
 		}
+		s.writeVersionSnapshot(ctx, &doc)
 		return doc.toValue(ctx)
 
 	case config.WriteModeUpdate:
@@ -757,6 +827,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 			}
 			return nil, config.WrapStoreError("set", "mongodb", key, err)
 		}
+		s.writeVersionSnapshot(ctx, &doc)
 		return doc.toValue(ctx)
 
 	default:
@@ -793,6 +864,7 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		if err != nil {
 			return nil, config.WrapStoreError("set", "mongodb", key, err)
 		}
+		s.writeVersionSnapshot(ctx, &doc)
 		return doc.toValue(ctx)
 	}
 }
@@ -819,6 +891,7 @@ func (s *Store) Delete(ctx context.Context, namespace, key string) error {
 		return &config.KeyNotFoundError{Key: key, Namespace: namespace}
 	}
 
+	s.deleteAllVersions(ctx, namespace, key)
 	return nil
 }
 
@@ -1194,6 +1267,10 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 		}
 	}
 
+	if len(succeeded) > 0 {
+		s.snapshotKeys(ctx, namespace, succeeded)
+	}
+
 	if len(keyErrors) > 0 {
 		return &config.BulkWriteError{
 			Errors:    keyErrors,
@@ -1226,6 +1303,9 @@ func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string)
 		return 0, config.WrapStoreError("delete_many", "mongodb", "", err)
 	}
 
+	if result.DeletedCount > 0 {
+		s.deleteAllVersions(ctx, namespace, keys...)
+	}
 	return result.DeletedCount, nil
 }
 
