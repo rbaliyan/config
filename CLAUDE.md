@@ -353,6 +353,7 @@ Optional (for specific backends):
 
 ## Recent Changes
 
+- **MongoDB version history (opt-in)**: The `mongodb` store now implements `config.VersionedStore`. Enable via `WithVersioning(true)`; snapshots are written to a separate `{Collection}_versions` collection (override with `WithVersionsCollection`). `WithMaxHistory(n)` bounds retention (n + 1 snapshots per key). `Set` and `SetMany` capture per-write snapshots (SetMany uses per-key `FindOneAndUpdate` when versioning is on to avoid races). `Delete`/`DeleteMany` discard history. `Store.CleanupOrphans(ctx)` reclaims snapshots whose live entry no longer exists, and `WithOnVersionError(...)` hooks best-effort failures for metrics/alerts. When versioning is disabled, `GetVersions` returns `ErrVersioningNotSupported`.
 - **k8s store decoupled from k8s.io/***: The `k8s` package now depends only on a `Client` interface (Get/Upsert/Watch/Health) instead of `kubernetes.Interface`. The previous `k8s/go.mod` is gone — k8s ships in the main module. A reference adapter using `kubernetes.Interface` lives at `k8s/example/` with its own `go.mod`. The store no longer maintains an informer cache; reads call straight through to the Client.
 - **Removed deprecated `live.Binding`**: Use `live.Ref[T]` instead for lock-free atomic reads. `DefaultPollInterval` and `ErrInvalidTarget` remain in the `live` package.
 - **Unexported `otel.Metrics`**: The metrics struct and fields are now unexported (`metrics`, `operationCount`, `errorCount`, `operationLatency`)
