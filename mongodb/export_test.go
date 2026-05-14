@@ -7,6 +7,12 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+// VersionsCollectionName exposes the resolved versions collection name for
+// tests that need to seed snapshots directly (e.g. orphan cleanup).
+func (s *Store) VersionsCollectionName() string {
+	return s.versionsCollectionName()
+}
+
 // InsertLegacyDocument inserts a document with []byte Value (legacy BinData format)
 // for testing migration from old format. This bypasses the native BSON conversion.
 func (s *Store) InsertLegacyDocument(ctx context.Context, namespace, key string, value []byte, codecName string) error {

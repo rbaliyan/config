@@ -41,6 +41,13 @@ type Store struct {
 	idMapMu sync.RWMutex
 	idToKey map[bson.ObjectID]docIdentity
 
+	// connectOnce ensures Connect's collection setup and watch goroutine
+	// run at most once even if Connect is invoked multiple times (the
+	// Manager calls it as part of its own Connect, in addition to any
+	// explicit caller-driven connect).
+	connectOnce sync.Once
+	connectErr  error
+
 	cfg Config
 }
 
@@ -110,6 +117,14 @@ type Config struct {
 	// per key are bounded by MaxHistory + 1. 0 means unlimited (default).
 	// Only used when EnableVersioning is true.
 	MaxHistory int
+
+	// OnVersionError is invoked when a best-effort versioning operation
+	// fails — snapshot write, history trim, snapshot cleanup, or orphan
+	// scan. The op argument is one of "snapshot", "trim", "delete",
+	// "cleanup". Version is 0 when not applicable (e.g. cleanup). Use
+	// this hook to plug in counters or alerts; failures are also logged.
+	// The callback is invoked synchronously and must be fast.
+	OnVersionError func(op, namespace, key string, version int64, err error)
 
 	// Logger is the logger for the store. If nil, uses slog.Default().
 	Logger *slog.Logger
@@ -239,8 +254,11 @@ func WithConfig(cfg Config) Option {
 		if cfg.VersionsCollection != "" {
 			s.cfg.VersionsCollection = cfg.VersionsCollection
 		}
-		if cfg.MaxHistory > 0 {
+		if cfg.MaxHistory >= 0 {
 			s.cfg.MaxHistory = cfg.MaxHistory
+		}
+		if cfg.OnVersionError != nil {
+			s.cfg.OnVersionError = cfg.OnVersionError
 		}
 		if cfg.Logger != nil {
 			s.cfg.Logger = cfg.Logger
@@ -335,6 +353,17 @@ func WithMaxIDCacheSize(size int) Option {
 // Versioning is disabled by default to avoid silent write amplification on
 // existing deployments. When disabled, GetVersions returns
 // [config.ErrVersioningNotSupported].
+//
+// # Durability and atomicity
+//
+// Snapshot writes are best-effort and not transactional with the live entry
+// write. A snapshot insert may fail (network error, write concern violation)
+// after the entry has already been written; the live entry remains the
+// source of truth and the operation returns success. Likewise, snapshot
+// cleanup on Delete is best-effort — see [Store.CleanupOrphans] for a
+// recovery path. Subscribe to [WithOnVersionError] to observe these
+// failures, and prefer MongoDB transactions in calling code if your
+// workload cannot tolerate occasional history gaps.
 func WithVersioning(enabled bool) Option {
 	return func(s *Store) {
 		s.cfg.EnableVersioning = enabled
@@ -359,6 +388,17 @@ func WithMaxHistory(n int) Option {
 		if n >= 0 {
 			s.cfg.MaxHistory = n
 		}
+	}
+}
+
+// WithOnVersionError installs a callback invoked when a best-effort
+// versioning operation fails. Use this hook to plug in counters or alerts;
+// failures are otherwise only surfaced through slog warnings. The callback
+// is invoked synchronously and must be fast. See [Config.OnVersionError]
+// for the meaning of the op argument.
+func WithOnVersionError(fn func(op, namespace, key string, version int64, err error)) Option {
+	return func(s *Store) {
+		s.cfg.OnVersionError = fn
 	}
 }
 
@@ -404,7 +444,19 @@ func (s *Store) BackendName() string { return "mongodb" }
 
 // Connect initializes the store (optionally creates collection/indexes and starts change stream listener).
 // The MongoDB client must already be connected.
+//
+// Connect is idempotent: repeated calls return the original result without
+// reinitializing the collection or starting another watch goroutine. The
+// Manager calls Connect on the store during its own Connect, so callers
+// that pre-connect for setup do not need to coordinate.
 func (s *Store) Connect(ctx context.Context) error {
+	s.connectOnce.Do(func() {
+		s.connectErr = s.doConnect(ctx)
+	})
+	return s.connectErr
+}
+
+func (s *Store) doConnect(ctx context.Context) error {
 	if s.client == nil {
 		return config.WrapStoreError("connect", "mongodb", "", fmt.Errorf("client is nil"))
 	}
@@ -1158,6 +1210,12 @@ func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (m
 // SetMany creates or updates multiple values in a single operation.
 // Returns an error if any individual set fails. Successfully set values
 // are still persisted even if some fail.
+//
+// When versioning is enabled, SetMany uses one FindOneAndUpdate per key so
+// each write captures its own post-update version for snapshotting. This
+// trades the single-RTT bulk write for race-free history at N round-trips.
+// Disable versioning if maximum bulk throughput matters more than history
+// completeness.
 func (s *Store) SetMany(ctx context.Context, namespace string, values map[string]config.Value) error {
 	if s.closed.Load() {
 		return config.ErrStoreClosed
@@ -1169,13 +1227,21 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 		return nil
 	}
 
+	if s.cfg.EnableVersioning {
+		return s.setManyVersioned(ctx, namespace, values)
+	}
+	return s.setManyBulk(ctx, namespace, values)
+}
+
+// setManyBulk implements the high-throughput SetMany path used when
+// versioning is disabled. One BulkWrite round-trip; no snapshot writes.
+func (s *Store) setManyBulk(ctx context.Context, namespace string, values map[string]config.Value) error {
 	keyErrors := make(map[string]error)
 	succeeded := make([]string, 0, len(values))
 	now := time.Now().UTC()
 
-	// Use bulk write for efficiency
 	var models []mongo.WriteModel
-	indexToKey := make([]string, 0, len(values)) // Track which key is at which index
+	indexToKey := make([]string, 0, len(values))
 
 	for key, value := range values {
 		if key == "" {
@@ -1234,15 +1300,12 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 		indexToKey = append(indexToKey, key)
 	}
 
-	// Execute bulk write if we have valid operations
 	if len(models) > 0 {
-		opts := options.BulkWrite().SetOrdered(false) // Continue on error
+		opts := options.BulkWrite().SetOrdered(false)
 		_, err := s.collection.BulkWrite(ctx, models, opts)
 		if err != nil {
-			// Check for bulk write exception with partial failures
 			var bulkErr mongo.BulkWriteException
 			if errors.As(err, &bulkErr) {
-				// Mark failed keys based on WriteError index
 				failedIndices := make(map[int]bool)
 				for _, writeErr := range bulkErr.WriteErrors {
 					if writeErr.Index < len(indexToKey) {
@@ -1251,24 +1314,91 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 						failedIndices[writeErr.Index] = true
 					}
 				}
-				// Mark succeeded keys (those not in failedIndices)
 				for i, key := range indexToKey {
 					if !failedIndices[i] {
 						succeeded = append(succeeded, key)
 					}
 				}
 			} else {
-				// Complete failure - all keys failed
 				return config.WrapStoreError("set_many", "mongodb", "", err)
 			}
 		} else {
-			// All operations succeeded
 			succeeded = append(succeeded, indexToKey...)
 		}
 	}
 
-	if len(succeeded) > 0 {
-		s.snapshotKeys(ctx, namespace, succeeded)
+	if len(keyErrors) > 0 {
+		return &config.BulkWriteError{
+			Errors:    keyErrors,
+			Succeeded: succeeded,
+		}
+	}
+	return nil
+}
+
+// setManyVersioned implements SetMany when versioning is enabled. Each key
+// gets its own FindOneAndUpdate(returnDocument=After) so the resulting doc
+// — including the bumped version — is available for an immediate snapshot
+// write. This eliminates the read-back race that an aggregate BulkWrite
+// would create.
+func (s *Store) setManyVersioned(ctx context.Context, namespace string, values map[string]config.Value) error {
+	keyErrors := make(map[string]error)
+	succeeded := make([]string, 0, len(values))
+	now := time.Now().UTC()
+
+	for key, value := range values {
+		if key == "" {
+			keyErrors[key] = &config.InvalidKeyError{Key: key, Reason: "key cannot be empty"}
+			continue
+		}
+
+		data, err := value.Marshal(ctx)
+		if err != nil {
+			keyErrors[key] = config.WrapStoreError("marshal", "mongodb", key, err)
+			continue
+		}
+
+		c := codec.Get(value.Codec())
+		if c == nil {
+			keyErrors[key] = config.WrapStoreError("set_many", "mongodb", key, fmt.Errorf("codec %q not registered", value.Codec()))
+			continue
+		}
+		bsonVal, err := toBSONValue(c, data)
+		if err != nil {
+			keyErrors[key] = config.WrapStoreError("set_many", "mongodb", key, err)
+			continue
+		}
+
+		setFields := bson.M{
+			"key":        key,
+			"namespace":  namespace,
+			"value":      bsonVal,
+			"codec":      value.Codec(),
+			"type":       value.Type(),
+			"updated_at": now,
+		}
+		expiry := config.GetExpiresAt(value)
+		if !expiry.IsZero() {
+			setFields["expires_at"] = expiry
+		}
+
+		filter := bson.M{"namespace": namespace, "key": key}
+		update := bson.M{
+			"$set":         setFields,
+			"$inc":         bson.M{"version": int64(1)},
+			"$setOnInsert": bson.M{"created_at": now},
+		}
+		opts := options.FindOneAndUpdate().
+			SetUpsert(true).
+			SetReturnDocument(options.After)
+
+		var doc mongoEntry
+		if err := s.collection.FindOneAndUpdate(ctx, filter, update, opts).Decode(&doc); err != nil {
+			keyErrors[key] = config.WrapStoreError("set_many", "mongodb", key, err)
+			continue
+		}
+		s.writeVersionSnapshot(ctx, &doc)
+		succeeded = append(succeeded, key)
 	}
 
 	if len(keyErrors) > 0 {

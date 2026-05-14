@@ -103,10 +103,26 @@ func (s *Store) ensureVersionsIndexes(ctx context.Context) error {
 	return nil
 }
 
+// reportVersionError logs a versioning failure and invokes the configured
+// callback when present. Centralizing this keeps the slog payload identical
+// to what the hook sees.
+func (s *Store) reportVersionError(op, namespace, key string, version int64, err error) {
+	s.logger().Warn("mongodb: version operation failed",
+		"op", op,
+		"namespace", namespace,
+		"key", key,
+		"version", version,
+		"error", err,
+	)
+	if cb := s.cfg.OnVersionError; cb != nil {
+		cb(op, namespace, key, version, err)
+	}
+}
+
 // writeVersionSnapshot inserts a snapshot of doc into the versions collection
 // and trims the history to MaxHistory when configured. Best-effort: failures
-// are logged but do not propagate to the caller, since the source-of-truth
-// entry has already been written successfully.
+// are reported via [Store.reportVersionError] but do not propagate to the
+// caller, since the source-of-truth entry has already been written.
 func (s *Store) writeVersionSnapshot(ctx context.Context, doc *mongoEntry) {
 	coll := s.versionsCollection()
 	if coll == nil {
@@ -124,109 +140,63 @@ func (s *Store) writeVersionSnapshot(ctx context.Context, doc *mongoEntry) {
 		ExpiresAt: doc.ExpiresAt,
 	}
 	if _, err := coll.InsertOne(ctx, snap); err != nil {
-		// A duplicate-key error can happen if SetMany's read-back races with
-		// another writer and reads back a version already snapshotted. Treat
-		// duplicates as a no-op; surface all other errors as warnings.
-		if !mongo.IsDuplicateKeyError(err) {
-			s.logger().Warn("mongodb: failed to write version snapshot",
-				"namespace", doc.Namespace,
-				"key", doc.Key,
-				"version", doc.Version,
-				"error", err,
-			)
+		// Duplicate-key on (ns, key, version) means the snapshot was already
+		// written by a concurrent path (e.g. SetMany's per-key fallback).
+		// Idempotent: not an error, but skip the trim since the other writer
+		// will run it.
+		if mongo.IsDuplicateKeyError(err) {
 			return
 		}
+		s.reportVersionError("snapshot", doc.Namespace, doc.Key, doc.Version, err)
+		return
 	}
 	if s.cfg.MaxHistory > 0 {
 		s.trimVersions(ctx, doc.Namespace, doc.Key)
 	}
 }
 
-// snapshotKeys reads back the live entries for the given keys and writes a
-// version snapshot for each. Used by SetMany after a successful bulk write,
-// where the per-key new version is not returned by the driver.
-//
-// Concurrency note: between BulkWrite and this read-back, another writer
-// could bump the version. In that case we snapshot the newer version instead
-// of the one we wrote — still monotonic and consistent, but a rare snapshot
-// gap is possible under high contention. This is acceptable for an opt-in
-// history feature.
-func (s *Store) snapshotKeys(ctx context.Context, namespace string, keys []string) {
-	coll := s.versionsCollection()
-	if coll == nil || len(keys) == 0 {
-		return
-	}
-	filter := bson.M{
-		"namespace": namespace,
-		"key":       bson.M{"$in": keys},
-	}
-	cur, err := s.collection.Find(ctx, filter)
-	if err != nil {
-		s.logger().Warn("mongodb: snapshot read-back failed",
-			"namespace", namespace, "error", err)
-		return
-	}
-	defer func() { _ = cur.Close(ctx) }()
-	for cur.Next(ctx) {
-		var doc mongoEntry
-		if err := cur.Decode(&doc); err != nil {
-			s.logger().Warn("mongodb: snapshot decode failed",
-				"namespace", namespace, "error", err)
-			continue
-		}
-		s.writeVersionSnapshot(ctx, &doc)
-	}
-}
-
 // trimVersions deletes snapshots older than the MaxHistory+1 most recent
-// versions for the given key. Best-effort.
+// versions for the given key. Two round-trips: one findOne to locate the
+// cutoff version (the (MaxHistory+1)-th newest), one DeleteMany($lte) to
+// drop everything at or below it. Best-effort.
 func (s *Store) trimVersions(ctx context.Context, namespace, key string) {
 	coll := s.versionsCollection()
 	if coll == nil || s.cfg.MaxHistory <= 0 {
 		return
 	}
-	keep := int64(s.cfg.MaxHistory + 1)
 
-	findOpts := options.Find().
+	// Find the cutoff: the first document we want to *drop* in descending
+	// version order, after skipping the (MaxHistory+1) we keep.
+	findOpts := options.FindOne().
 		SetSort(bson.D{{Key: "version", Value: -1}}).
-		SetSkip(keep).
+		SetSkip(int64(s.cfg.MaxHistory + 1)).
 		SetProjection(bson.M{"version": 1})
 
-	cur, err := coll.Find(ctx, bson.M{"namespace": namespace, "key": key}, findOpts)
+	var cutoff struct {
+		Version int64 `bson:"version"`
+	}
+	err := coll.FindOne(ctx, bson.M{"namespace": namespace, "key": key}, findOpts).Decode(&cutoff)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return // history already within limit
+	}
 	if err != nil {
-		s.logger().Warn("mongodb: trim versions find failed",
-			"namespace", namespace, "key", key, "error", err)
-		return
-	}
-	defer func() { _ = cur.Close(ctx) }()
-
-	var toDelete []int64
-	for cur.Next(ctx) {
-		var d struct {
-			Version int64 `bson:"version"`
-		}
-		if err := cur.Decode(&d); err != nil {
-			continue
-		}
-		toDelete = append(toDelete, d.Version)
-	}
-	if len(toDelete) == 0 {
+		s.reportVersionError("trim", namespace, key, 0, err)
 		return
 	}
 	delFilter := bson.M{
 		"namespace": namespace,
 		"key":       key,
-		"version":   bson.M{"$in": toDelete},
+		"version":   bson.M{"$lte": cutoff.Version},
 	}
 	if _, err := coll.DeleteMany(ctx, delFilter); err != nil {
-		s.logger().Warn("mongodb: trim versions delete failed",
-			"namespace", namespace, "key", key, "error", err)
+		s.reportVersionError("trim", namespace, key, cutoff.Version, err)
 	}
 }
 
 // deleteAllVersions removes every snapshot for the given keys. Best-effort:
 // a failure here only leaves orphan snapshots — GetVersions filters them out
-// by checking the live entry first.
+// by checking the live entry first. Use [Store.CleanupOrphans] to reclaim
+// the storage.
 func (s *Store) deleteAllVersions(ctx context.Context, namespace string, keys ...string) {
 	coll := s.versionsCollection()
 	if coll == nil || len(keys) == 0 {
@@ -237,8 +207,14 @@ func (s *Store) deleteAllVersions(ctx context.Context, namespace string, keys ..
 		"key":       bson.M{"$in": keys},
 	}
 	if _, err := coll.DeleteMany(ctx, filter); err != nil {
-		s.logger().Warn("mongodb: failed to delete version snapshots",
-			"namespace", namespace, "keys", keys, "error", err)
+		// Report the failure once per call (not once per key) — the keys
+		// are visible via the hook's key argument only when there is a
+		// single one, which is the Delete-path case worth tracking.
+		k := ""
+		if len(keys) == 1 {
+			k = keys[0]
+		}
+		s.reportVersionError("delete", namespace, k, 0, err)
 	}
 }
 
@@ -354,4 +330,112 @@ func (s *Store) GetVersions(ctx context.Context, namespace, key string, filter c
 	}
 
 	return config.NewVersionPage(versions, nextCursor, limit), nil
+}
+
+// CleanupOrphans deletes version snapshots whose live entry no longer
+// exists. Orphans accumulate when [Store.Delete] or [Store.DeleteMany]
+// succeeds on the entries collection but the matching snapshot cleanup
+// fails (network blip, write concern violation). Snapshots tied to a TTL
+// expiry are reclaimed automatically by the sparse TTL index; this method
+// covers the non-TTL case.
+//
+// The implementation walks unique (namespace, key) pairs in the versions
+// collection and emits a $lookup against the entries collection to
+// identify orphans, then drops them with a single DeleteMany. Returns the
+// number of snapshot documents removed.
+//
+// Returns ErrVersioningNotSupported when versioning is disabled.
+func (s *Store) CleanupOrphans(ctx context.Context) (int64, error) {
+	if s.closed.Load() {
+		return 0, config.ErrStoreClosed
+	}
+	if !s.cfg.EnableVersioning {
+		return 0, config.ErrVersioningNotSupported
+	}
+	coll := s.versionsCollection()
+	if coll == nil {
+		return 0, config.ErrVersioningNotSupported
+	}
+
+	pipeline := mongo.Pipeline{
+		{{Key: "$group", Value: bson.M{
+			"_id": bson.M{"namespace": "$namespace", "key": "$key"},
+		}}},
+		{{Key: "$lookup", Value: bson.M{
+			"from": s.cfg.Collection,
+			"let":  bson.M{"ns": "$_id.namespace", "k": "$_id.key"},
+			"pipeline": bson.A{
+				bson.M{"$match": bson.M{"$expr": bson.M{"$and": bson.A{
+					bson.M{"$eq": bson.A{"$namespace", "$$ns"}},
+					bson.M{"$eq": bson.A{"$key", "$$k"}},
+				}}}},
+				bson.M{"$limit": 1},
+				bson.M{"$project": bson.M{"_id": 1}},
+			},
+			"as": "entry",
+		}}},
+		{{Key: "$match", Value: bson.M{"entry": bson.M{"$size": 0}}}},
+	}
+
+	cur, err := coll.Aggregate(ctx, pipeline)
+	if err != nil {
+		s.reportVersionError("cleanup", "", "", 0, err)
+		return 0, config.WrapStoreError("cleanup_orphans", "mongodb", "", err)
+	}
+	defer func() { _ = cur.Close(ctx) }()
+
+	// Collect orphan (namespace, key) tuples and delete in batches to keep
+	// any single DeleteMany filter bounded.
+	type orphan struct {
+		Namespace string
+		Key       string
+	}
+	var batch []orphan
+	const batchSize = 500
+	var deleted int64
+
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		ors := make(bson.A, 0, len(batch))
+		for _, o := range batch {
+			ors = append(ors, bson.M{"namespace": o.Namespace, "key": o.Key})
+		}
+		res, err := coll.DeleteMany(ctx, bson.M{"$or": ors})
+		if err != nil {
+			s.reportVersionError("cleanup", "", "", 0, err)
+			return err
+		}
+		deleted += res.DeletedCount
+		batch = batch[:0]
+		return nil
+	}
+
+	for cur.Next(ctx) {
+		var doc struct {
+			ID struct {
+				Namespace string `bson:"namespace"`
+				Key       string `bson:"key"`
+			} `bson:"_id"`
+		}
+		if err := cur.Decode(&doc); err != nil {
+			s.reportVersionError("cleanup", "", "", 0, err)
+			return deleted, config.WrapStoreError("cleanup_orphans", "mongodb", "", err)
+		}
+		batch = append(batch, orphan{Namespace: doc.ID.Namespace, Key: doc.ID.Key})
+		if len(batch) >= batchSize {
+			if err := flush(); err != nil {
+				return deleted, config.WrapStoreError("cleanup_orphans", "mongodb", "", err)
+			}
+		}
+	}
+	if err := cur.Err(); err != nil {
+		s.reportVersionError("cleanup", "", "", 0, err)
+		return deleted, config.WrapStoreError("cleanup_orphans", "mongodb", "", err)
+	}
+	if err := flush(); err != nil {
+		return deleted, config.WrapStoreError("cleanup_orphans", "mongodb", "", err)
+	}
+	return deleted, nil
 }
