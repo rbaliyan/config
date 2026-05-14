@@ -123,6 +123,10 @@ type HealthChecker interface {
 }
 
 // StatsProvider is an optional interface for stores that provide statistics.
+//
+// For paginated namespace enumeration, prefer [NamespaceLister]: StatsProvider
+// recomputes the full namespace set per call, while NamespaceLister can use
+// the backend's native pagination primitive.
 type StatsProvider interface {
 	// Stats returns store statistics.
 	Stats(ctx context.Context) (*StoreStats, error)
@@ -224,6 +228,83 @@ type BulkStore interface {
 	// DeleteMany removes multiple values in a single operation.
 	// Returns the number of entries actually deleted.
 	DeleteMany(ctx context.Context, namespace string, keys []string) (int64, error)
+}
+
+// NamespaceLister is an optional interface a Store may implement to expose
+// efficient, server-side paginated enumeration of namespace names.
+//
+// Stores that don't implement this can still be enumerated via [StatsProvider],
+// but every page recomputes the full stats payload — an O(namespaces) cost
+// paid per page request. Paginating N namespaces at P entries per page
+// performs ⌈N/P⌉ full-store scans for one logical enumeration. Do not rely
+// on the StatsProvider fallback for backends expected to exceed a few
+// hundred namespaces; implement NamespaceLister directly using the backend's
+// natural pagination primitive (SQL DISTINCT ... ORDER BY ... LIMIT/OFFSET,
+// MongoDB aggregation, in-memory sorted index, Redis ZRANGEBYLEX, etc.).
+//
+// # Contract
+//
+//   - Sort order: ascending, lexicographic byte-wise on UTF-8; stable across calls.
+//   - Prefix filter: applied before the cursor cut; results are sorted byte-wise.
+//     Empty prefix matches all namespaces.
+//   - Limit: honored as a maximum. Implementations MAY cap to a backend-specific
+//     ceiling but MUST NOT return more than `limit` entries. Callers SHOULD pass
+//     `limit > 0`. Backends MAY treat `limit <= 0` as "apply backend default"
+//     rather than erroring, but MUST document the choice in their godoc and MUST
+//     NOT panic.
+//   - Cursor opacity: cursors are opaque to callers. They are NOT portable
+//     across backends; implementations are free to choose offsets, last-seen
+//     names, B-tree positions, etc. Backend authors should use the
+//     [config/internal/cursor] envelope to tag cursors with a backend identifier
+//     so a swapped store can detect foreign cursors.
+//   - First page: an empty cursor string signals "start at the beginning."
+//     Backends MUST NOT pass the empty string to [config/internal/cursor.Unmarshal]
+//     (which rejects empty input); decode only when the caller supplied a
+//     non-empty cursor.
+//   - Stability under concurrent writes: best-effort. A namespace added or
+//     removed mid-pagination may be skipped or repeated across pages, but
+//     never duplicated within a single page.
+//   - Empty namespaces: namespace inclusion when no entries currently exist
+//     under it is implementation-defined; backends document their choice
+//     (most reflect current state and omit empties).
+//   - Watch events: namespace appearance and disappearance are implicit side
+//     effects of [Store.Set] and [Store.Delete] on the contained keys. No
+//     dedicated [ChangeEvent] is emitted for namespace lifecycle.
+//   - Invalid cursor: must return an error that wraps [ErrInvalidCursor]
+//     (use [IsInvalidCursor] to check). Causes include malformed encoding,
+//     expired tokens, foreign-backend cursors, and protocol-version mismatch.
+//
+// # Implementations
+//
+// None in the public v0 surface yet; phase-1 ships the interface and
+// conformance suite ahead of per-backend implementations.
+//
+// Use type assertion to check if a store supports namespace enumeration:
+//
+//	if nl, ok := store.(config.NamespaceLister); ok {
+//	    cursor := ""
+//	    for {
+//	        names, next, err := nl.ListNamespaces(ctx, "prod-", 50, cursor)
+//	        if err != nil {
+//	            return err
+//	        }
+//	        for _, ns := range names {
+//	            handle(ns)
+//	        }
+//	        if next == "" {
+//	            break
+//	        }
+//	        cursor = next
+//	    }
+//	}
+type NamespaceLister interface {
+	// ListNamespaces returns a page of namespace names. See the
+	// [NamespaceLister] interface godoc for the full contract on ordering,
+	// filtering, limits, cursor opacity, concurrency, and which namespaces
+	// are eligible for inclusion (implementation-defined).
+	//
+	// nextCursor is empty iff there are no further pages.
+	ListNamespaces(ctx context.Context, prefix string, limit int, cursor string) (names []string, nextCursor string, err error)
 }
 
 // Filter defines criteria for listing configuration entries.

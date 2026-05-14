@@ -171,6 +171,7 @@ filter := config.NewFilter().
 - `HealthChecker`: `Health(ctx) error`
 - `StatsProvider`: `Stats(ctx) (*StoreStats, error)`
 - `BulkStore`: `GetMany`, `SetMany`, `DeleteMany` (implemented by memory, postgres, mongodb stores)
+- `NamespaceLister`: `ListNamespaces(ctx, prefix, limit, cursor) ([]string, nextCursor, error)` — efficient paginated enumeration of namespace names. No backend implements it yet (phase-1 ships the interface + conformance suite in `internal/storetest`); backends should adopt it via the cursor envelope in `internal/cursor` to avoid the O(namespaces) StatsProvider fallback path.
 
 ### Multi-Store
 
@@ -353,6 +354,8 @@ Optional (for specific backends):
 
 ## Recent Changes
 
+- **NamespaceLister interface (phase 1)**: New optional `config.NamespaceLister` interface for efficient, server-side paginated enumeration of namespace names. Phase 1 lands the interface, the `ErrInvalidCursor` / `IsInvalidCursor` sentinel pair, a versioned + backend-tagged cursor envelope at `internal/cursor`, and a conformance suite at `internal/storetest`. No production backend implements it yet; the existing `StatsProvider` fallback in the service layer continues to work. Per-backend implementations (memory, sqlite, postgres, mongodb, redis) land in follow-up PRs.
+- **MongoDB version history (opt-in)**: The `mongodb` store now implements `config.VersionedStore`. Enable via `WithVersioning(true)`; snapshots are written to a separate `{Collection}_versions` collection (override with `WithVersionsCollection`). `WithMaxHistory(n)` bounds retention (n + 1 snapshots per key). `Set` and `SetMany` capture per-write snapshots (SetMany uses per-key `FindOneAndUpdate` when versioning is on to avoid races). `Delete`/`DeleteMany` discard history. `Store.CleanupOrphans(ctx)` reclaims snapshots whose live entry no longer exists, and `WithOnVersionError(...)` hooks best-effort failures for metrics/alerts. When versioning is disabled, `GetVersions` returns `ErrVersioningNotSupported`.
 - **k8s store decoupled from k8s.io/***: The `k8s` package now depends only on a `Client` interface (Get/Upsert/Watch/Health) instead of `kubernetes.Interface`. The previous `k8s/go.mod` is gone — k8s ships in the main module. A reference adapter using `kubernetes.Interface` lives at `k8s/example/` with its own `go.mod`. The store no longer maintains an informer cache; reads call straight through to the Client.
 - **Removed deprecated `live.Binding`**: Use `live.Ref[T]` instead for lock-free atomic reads. `DefaultPollInterval` and `ErrInvalidTarget` remain in the `live` package.
 - **Unexported `otel.Metrics`**: The metrics struct and fields are now unexported (`metrics`, `operationCount`, `errorCount`, `operationLatency`)
