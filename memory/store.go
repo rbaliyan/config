@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rbaliyan/config"
+	cursorpkg "github.com/rbaliyan/config/internal/cursor"
 )
 
 // historyEntry stores a snapshot of a value at a specific version.
@@ -30,7 +31,7 @@ type entry struct {
 	version   int64
 	createdAt time.Time
 	updatedAt time.Time
-	expiresAt time.Time // zero = no TTL
+	expiresAt time.Time      // zero = no TTL
 	history   []historyEntry // all versions ordered by version ascending
 }
 
@@ -206,12 +207,13 @@ func NewStore(opts ...Option) *Store {
 
 // Compile-time interface checks
 var (
-	_ config.Store          = (*Store)(nil)
-	_ config.HealthChecker  = (*Store)(nil)
-	_ config.StatsProvider  = (*Store)(nil)
-	_ config.BulkStore      = (*Store)(nil)
-	_ config.VersionedStore = (*Store)(nil)
-	_ config.AliasStore     = (*Store)(nil)
+	_ config.Store           = (*Store)(nil)
+	_ config.HealthChecker   = (*Store)(nil)
+	_ config.StatsProvider   = (*Store)(nil)
+	_ config.BulkStore       = (*Store)(nil)
+	_ config.VersionedStore  = (*Store)(nil)
+	_ config.AliasStore      = (*Store)(nil)
+	_ config.NamespaceLister = (*Store)(nil)
 )
 
 // keySeparator uses null byte to avoid collisions.
@@ -1042,4 +1044,86 @@ func (s *Store) ListAliases(ctx context.Context) (map[string]config.Value, error
 		result[k] = ae.toValue()
 	}
 	return result, nil
+}
+
+// namespaceListerBackendTag is the [internal/cursor] backend identifier
+// used by this store. It MUST differ from every other backend's tag so a
+// caller that switches stores while holding a cursor sees ErrInvalidCursor
+// instead of a silently misinterpreted token.
+const namespaceListerBackendTag = "memory"
+
+// ListNamespaces returns a page of namespace names currently containing at
+// least one non-expired entry. See [config.NamespaceLister] for the full
+// contract on ordering, prefix matching, and cursor opacity.
+//
+// Query strategy: the entries map is snapshot under RLock into a
+// deduplicated namespace slice, then sort/filter/paginate happens outside
+// the lock so a long page does not stall concurrent writers.
+//
+// Limit policy: limit <= 0 is treated as a caller error and returns
+// [config.ErrInvalidValue]; the store does not silently fall back to a
+// default. This matches the "limit > 0" SHOULD in the interface contract
+// and surfaces the mistake loudly during development.
+//
+// Cursor policy: opaque, base64-url-encoded envelopes from
+// [internal/cursor] carrying the last-emitted name. Foreign or malformed
+// cursors return an error wrapping [config.ErrInvalidCursor]; check with
+// [config.IsInvalidCursor].
+//
+// TTL: matches [Store.Get] and [Store.Find] read semantics — expired
+// entries are filtered before the namespace set is built, so a namespace
+// whose entries have all expired (but have not yet been Deleted) does not
+// appear in the page.
+func (s *Store) ListNamespaces(ctx context.Context, prefix string, limit int, cursor string) ([]string, string, error) {
+	if s.closed.Load() {
+		return nil, "", config.ErrStoreClosed
+	}
+	if limit <= 0 {
+		return nil, "", fmt.Errorf("memory: ListNamespaces requires limit > 0: %w", config.ErrInvalidValue)
+	}
+
+	var after string
+	if cursor != "" {
+		decoded, err := cursorpkg.UnmarshalString(namespaceListerBackendTag, cursor)
+		if err != nil {
+			return nil, "", err
+		}
+		after = decoded
+	}
+
+	// Snapshot the distinct namespace set under RLock. The lock is held only
+	// long enough to copy the keys; sort + filter + slice happen below in
+	// uncontended local state.
+	now := time.Now().UTC()
+	seen := make(map[string]struct{}, 8)
+	s.mu.RLock()
+	for _, e := range s.entries {
+		if e.isExpired(now) {
+			continue
+		}
+		seen[e.namespace] = struct{}{}
+	}
+	s.mu.RUnlock()
+
+	all := make([]string, 0, len(seen))
+	for ns := range seen {
+		if prefix != "" && !strings.HasPrefix(ns, prefix) {
+			continue
+		}
+		if after != "" && ns <= after {
+			continue
+		}
+		all = append(all, ns)
+	}
+	sort.Strings(all)
+
+	if len(all) > limit {
+		emitted := all[:limit]
+		next, err := cursorpkg.MarshalString(namespaceListerBackendTag, emitted[len(emitted)-1])
+		if err != nil {
+			return nil, "", err
+		}
+		return emitted, next, nil
+	}
+	return all, "", nil
 }

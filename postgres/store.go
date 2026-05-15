@@ -17,6 +17,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/rbaliyan/config"
+	cursorpkg "github.com/rbaliyan/config/internal/cursor"
 )
 
 // validIdentifier matches valid PostgreSQL identifiers (alphanumeric and underscore, not starting with digit)
@@ -170,10 +171,11 @@ func NewStore(db *sql.DB, listener *pq.Listener, opts ...Option) *Store {
 
 // Compile-time interface checks
 var (
-	_ config.Store         = (*Store)(nil)
-	_ config.HealthChecker = (*Store)(nil)
-	_ config.StatsProvider = (*Store)(nil)
-	_ config.BulkStore     = (*Store)(nil)
+	_ config.Store           = (*Store)(nil)
+	_ config.HealthChecker   = (*Store)(nil)
+	_ config.StatsProvider   = (*Store)(nil)
+	_ config.BulkStore       = (*Store)(nil)
+	_ config.NamespaceLister = (*Store)(nil)
 )
 
 // BackendName returns the stable backend identifier used in error messages.
@@ -234,7 +236,16 @@ func (s *Store) createSchema(ctx context.Context) error {
 		CREATE INDEX IF NOT EXISTS idx_%s_updated_at ON %s(updated_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_%s_key_prefix ON %s(key text_pattern_ops);
 		CREATE INDEX IF NOT EXISTS idx_%s_expires_at ON %s(expires_at) WHERE expires_at IS NOT NULL;
+		-- Expression index on (namespace COLLATE "C") covers ListNamespaces.
+		-- ListNamespaces forces COLLATE "C" on every namespace comparison so
+		-- the result order is byte-wise UTF-8 (matching the NamespaceLister
+		-- contract) regardless of the database's default LC_COLLATE. Without
+		-- this index, those collation-coerced predicates and ORDER BY fall
+		-- back to a sequential scan on databases whose default collation
+		-- differs from "C".
+		CREATE INDEX IF NOT EXISTS idx_%s_namespace_c ON %s ((namespace COLLATE "C"));
 	`, s.cfg.Table,
+		s.cfg.Table, s.cfg.Table,
 		s.cfg.Table, s.cfg.Table,
 		s.cfg.Table, s.cfg.Table,
 		s.cfg.Table, s.cfg.Table,
@@ -1067,3 +1078,120 @@ func (s *Store) log() *slog.Logger {
 	return slog.Default()
 }
 
+// namespaceListerBackendTag is the [internal/cursor] backend identifier
+// for this store. It MUST differ from every other backend's tag so a
+// caller that switches stores while holding a cursor sees ErrInvalidCursor
+// instead of a silently misinterpreted token.
+const namespaceListerBackendTag = "postgres"
+
+// ListNamespaces returns a page of namespace names currently containing at
+// least one non-expired entry. See [config.NamespaceLister] for the full
+// contract on ordering, prefix matching, and cursor opacity.
+//
+// Query strategy: a keyset-paginated
+// `SELECT DISTINCT namespace ... ORDER BY namespace LIMIT n+1` with every
+// namespace comparison coerced to `COLLATE "C"`. The collation override
+// forces byte-wise comparison regardless of the database's default
+// LC_COLLATE, which is required to honour the
+// [config.NamespaceLister] ordering contract.
+//
+// Limit policy: limit <= 0 is a caller error and returns
+// [config.ErrInvalidValue] (no silent fallback).
+//
+// Cursor policy: opaque base64-url envelopes from [internal/cursor]; the
+// payload is the last-emitted namespace name. Foreign or malformed
+// cursors return an error wrapping [config.ErrInvalidCursor]; check with
+// [config.IsInvalidCursor].
+//
+// TTL: matches [Store.Get] and [Store.Find] read semantics
+// (`expires_at IS NULL OR expires_at > NOW()`), so namespaces whose
+// entries have all expired (but have not yet been Deleted) do not appear.
+//
+// Coverage: served by idx_{table}_namespace_c — an expression index on
+// (namespace COLLATE "C") created alongside the standard indexes in
+// createSchema. The collation-agnostic plain-text index
+// idx_{table}_namespace is insufficient on databases whose default
+// LC_COLLATE differs from "C": the planner refuses to use it when every
+// namespace predicate is wrapped in COLLATE "C". The expires_at
+// predicate is covered by idx_{table}_expires_at.
+func (s *Store) ListNamespaces(ctx context.Context, prefix string, limit int, cursor string) ([]string, string, error) {
+	if s.closed.Load() {
+		return nil, "", config.ErrStoreClosed
+	}
+	if limit <= 0 {
+		return nil, "", fmt.Errorf("postgres: ListNamespaces requires limit > 0: %w", config.ErrInvalidValue)
+	}
+
+	var after string
+	if cursor != "" {
+		decoded, err := cursorpkg.UnmarshalString(namespaceListerBackendTag, cursor)
+		if err != nil {
+			return nil, "", err
+		}
+		after = decoded
+	}
+
+	// Build the keyset query. The prefix uses LIKE with a literal-escaped
+	// pattern so user-supplied prefixes containing % or _ are matched
+	// verbatim. ORDER BY namespace + LIMIT n+1 lets us detect whether a
+	// next page exists in a single round-trip.
+	//
+	// COLLATE "C" forces byte-wise comparison everywhere namespace is
+	// compared. PostgreSQL's default collation is locale-aware (e.g.
+	// en_US.UTF-8 sorts dash before alphabetics in some locales and is
+	// case-insensitive in others); the [config.NamespaceLister] contract
+	// requires ascending byte-wise UTF-8 sort, and "C" is the standard
+	// way to get it.
+	query := fmt.Sprintf(`
+		SELECT DISTINCT namespace COLLATE "C"
+		FROM %s
+		WHERE namespace COLLATE "C" > $1 COLLATE "C"
+		  AND ($2 = '' OR namespace COLLATE "C" LIKE $3 COLLATE "C" ESCAPE '\')
+		  AND (expires_at IS NULL OR expires_at > NOW())
+		ORDER BY namespace COLLATE "C"
+		LIMIT $4
+	`, s.cfg.Table) // #nosec G201 -- table name validated by validIdentifier regex in Connect
+
+	rows, err := s.db.QueryContext(ctx, query, after, prefix, escapeLikePattern(prefix)+"%", int64(limit+1))
+	if err != nil {
+		return nil, "", config.WrapStoreError("list_namespaces", "postgres", "", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	names := make([]string, 0, limit)
+	for rows.Next() {
+		var ns string
+		if err := rows.Scan(&ns); err != nil {
+			return nil, "", config.WrapStoreError("list_namespaces", "postgres", "", err)
+		}
+		names = append(names, ns)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", config.WrapStoreError("list_namespaces", "postgres", "", err)
+	}
+
+	if len(names) > limit {
+		emitted := names[:limit]
+		next, err := cursorpkg.MarshalString(namespaceListerBackendTag, emitted[len(emitted)-1])
+		if err != nil {
+			return nil, "", err
+		}
+		return emitted, next, nil
+	}
+	return names, "", nil
+}
+
+// escapeLikePattern escapes the LIKE-metacharacters in s so a user-supplied
+// prefix containing %, _, or \ is matched verbatim rather than as a pattern.
+// The query specifies ESCAPE '\' so the backslash here is the escape char.
+func escapeLikePattern(s string) string {
+	if s == "" {
+		return ""
+	}
+	r := strings.NewReplacer(
+		`\`, `\\`,
+		`%`, `\%`,
+		`_`, `\_`,
+	)
+	return r.Replace(s)
+}

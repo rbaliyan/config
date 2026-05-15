@@ -144,6 +144,18 @@ tools:
 vulncheck:
     go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+# Run gosec SAST scan with the same flags CI uses (.github/workflows/security.yml).
+# Filters to medium-severity / medium-confidence findings to match the CI gate so
+# anything green locally is also green in CI. Use `just gosec-all` to inspect the
+# longer tail of low-confidence findings.
+gosec:
+    gosec -severity medium -confidence medium -exclude-dir k8s/example ./...
+
+# Run gosec with default severity/confidence to surface low-priority findings
+# the CI gate ignores. Useful when reviewing legacy code, not for CI parity.
+gosec-all:
+    gosec -exclude-dir k8s/example ./...
+
 # Check for outdated dependencies
 depcheck:
     go list -m -u all | grep '\[' || echo "All dependencies are up to date"

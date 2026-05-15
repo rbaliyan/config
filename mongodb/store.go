@@ -17,6 +17,7 @@ import (
 
 	"github.com/rbaliyan/config"
 	"github.com/rbaliyan/config/codec"
+	cursorpkg "github.com/rbaliyan/config/internal/cursor"
 )
 
 // Store is a MongoDB configuration store implementation.
@@ -424,12 +425,13 @@ func NewStore(client *mongo.Client, opts ...Option) *Store {
 
 // Compile-time interface checks
 var (
-	_ config.Store          = (*Store)(nil)
-	_ config.HealthChecker  = (*Store)(nil)
-	_ config.StatsProvider  = (*Store)(nil)
-	_ config.BulkStore      = (*Store)(nil)
-	_ config.CodecValidator = (*Store)(nil)
-	_ config.VersionedStore = (*Store)(nil)
+	_ config.Store           = (*Store)(nil)
+	_ config.HealthChecker   = (*Store)(nil)
+	_ config.StatsProvider   = (*Store)(nil)
+	_ config.BulkStore       = (*Store)(nil)
+	_ config.CodecValidator  = (*Store)(nil)
+	_ config.VersionedStore  = (*Store)(nil)
+	_ config.NamespaceLister = (*Store)(nil)
 )
 
 // SupportsCodec reports whether the MongoDB store supports the given codec.
@@ -1650,4 +1652,164 @@ func escapeRegex(s string) string {
 		result = strings.ReplaceAll(result, char, "\\"+char)
 	}
 	return result
+}
+
+// namespaceListerBackendTag is the [internal/cursor] backend identifier
+// for this store. It MUST differ from every other backend's tag so a
+// caller that switches stores while holding a cursor sees ErrInvalidCursor
+// instead of a silently misinterpreted token.
+const namespaceListerBackendTag = "mongodb"
+
+// ListNamespaces returns a page of namespace names currently containing at
+// least one non-expired entry. See [config.NamespaceLister] for the full
+// contract on ordering, prefix matching, and cursor opacity.
+//
+// Query strategy: a `$match` + `$group` + `$sort` + `$limit` aggregation
+// over the entries collection, bounded by limit+1 so a next-page cursor
+// can be detected in one round-trip. Prefix matching uses a byte range
+// (`$gte` / `$lt`) rather than `$regex` so the predicate maps directly
+// onto the (namespace, _id) compound index and avoids the empty-result
+// quirk seen with `bson.Regex` in operator-combined expressions.
+//
+// Limit policy: limit <= 0 is a caller error and returns
+// [config.ErrInvalidValue] (no silent fallback).
+//
+// Cursor policy: opaque base64-url envelopes from [internal/cursor]; the
+// payload is the last-emitted namespace name. Foreign or malformed
+// cursors return an error wrapping [config.ErrInvalidCursor]; check with
+// [config.IsInvalidCursor].
+//
+// TTL: matches [Store.Get] and [Store.Find] read semantics
+// (`expires_at` missing OR `> now`), so namespaces whose entries have
+// all expired (but have not yet been Deleted) do not appear.
+//
+// Coverage: the (namespace, _id) compound index (see [Store.EnsureIndexes])
+// covers both the prefix range and the `$group` key. The TTL filter is
+// served by the sparse `expires_at` index.
+func (s *Store) ListNamespaces(ctx context.Context, prefix string, limit int, cursor string) ([]string, string, error) {
+	if s.closed.Load() {
+		return nil, "", config.ErrStoreClosed
+	}
+	if limit <= 0 {
+		return nil, "", fmt.Errorf("mongodb: ListNamespaces requires limit > 0: %w", config.ErrInvalidValue)
+	}
+
+	var after string
+	if cursor != "" {
+		decoded, err := cursorpkg.UnmarshalString(namespaceListerBackendTag, cursor)
+		if err != nil {
+			return nil, "", err
+		}
+		after = decoded
+	}
+
+	// Build the $match stage. We filter out expired entries first so they
+	// do not pollute the namespace set; the same predicate is used by Get
+	// and Find, keeping enumeration consistent with read semantics.
+	//
+	// Prefix matching uses a byte range ([prefix, prefix + 0xFF)) rather
+	// than a $regex, for two reasons: (a) the range form maps directly
+	// onto the (namespace, _id) compound index — both bounds are
+	// covered scans — while a $regex requires either an anchored
+	// pattern with PCRE2 affine-prefix optimisations that are version-
+	// dependent, or a full collection scan; (b) bson.Regex inside a
+	// bson.M-combined operator on the same field has been observed to
+	// silently produce empty result sets on some driver/server pairs.
+	// Byte ranges side-step both.
+	//
+	// When both prefix and cursor are supplied, the lower bound is the
+	// larger of the two. This keeps the prefix filter applied on every
+	// page (matching sqlite/postgres behaviour) so a caller cannot leak
+	// out-of-prefix results by feeding a hand-rolled cursor that
+	// predates the prefix range.
+	nsBounds := bson.M{}
+	switch {
+	case prefix != "" && after != "":
+		lo := prefix
+		if after > lo {
+			lo = after
+			nsBounds["$gt"] = lo
+		} else {
+			nsBounds["$gte"] = lo
+		}
+		nsBounds["$lt"] = prefixUpperBound(prefix)
+	case prefix != "":
+		nsBounds["$gte"] = prefix
+		nsBounds["$lt"] = prefixUpperBound(prefix)
+	case after != "":
+		nsBounds["$gt"] = after
+	}
+
+	match := bson.M{
+		"$or": bson.A{
+			bson.M{"expires_at": bson.M{"$exists": false}},
+			bson.M{"expires_at": bson.M{"$gt": time.Now().UTC()}},
+		},
+	}
+	if len(nsBounds) > 0 {
+		match["namespace"] = nsBounds
+	}
+
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: match}},
+		{{Key: "$group", Value: bson.M{"_id": "$namespace"}}},
+		{{Key: "$sort", Value: bson.M{"_id": 1}}},
+		{{Key: "$limit", Value: int64(limit + 1)}},
+	}
+
+	cur, err := s.collection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, "", config.WrapStoreError("list_namespaces", "mongodb", "", err)
+	}
+	defer func() { _ = cur.Close(ctx) }()
+
+	names := make([]string, 0, limit)
+	for cur.Next(ctx) {
+		var doc struct {
+			ID string `bson:"_id"`
+		}
+		if err := cur.Decode(&doc); err != nil {
+			return nil, "", config.WrapStoreError("list_namespaces", "mongodb", "", err)
+		}
+		names = append(names, doc.ID)
+	}
+	if err := cur.Err(); err != nil {
+		return nil, "", config.WrapStoreError("list_namespaces", "mongodb", "", err)
+	}
+
+	if len(names) > limit {
+		emitted := names[:limit]
+		next, err := cursorpkg.MarshalString(namespaceListerBackendTag, emitted[len(emitted)-1])
+		if err != nil {
+			return nil, "", err
+		}
+		return emitted, next, nil
+	}
+	return names, "", nil
+}
+
+// prefixUpperBound returns the smallest string that sorts strictly after
+// every string starting with prefix, under byte-wise comparison. It is
+// used as an exclusive `$lt` upper bound to translate a prefix match into
+// a range scan: `namespace >= prefix AND namespace < prefixUpperBound`.
+//
+// The construction increments the last byte of the prefix by one; if
+// the last byte is already 0xFF, it appends 0x00 to a copy ending one
+// position later. The result is always lexicographically greater than
+// `prefix + <anything>` and tighter than the "+ \xff" sentinel used
+// elsewhere.
+func prefixUpperBound(prefix string) string {
+	if prefix == "" {
+		return ""
+	}
+	b := []byte(prefix)
+	for i := len(b) - 1; i >= 0; i-- {
+		if b[i] < 0xFF {
+			b[i]++
+			return string(b[:i+1])
+		}
+	}
+	// Every byte is 0xFF — extend by one zero byte. This is unreachable
+	// for ASCII namespace names but keeps the function total.
+	return prefix + "\x00"
 }
