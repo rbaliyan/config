@@ -136,12 +136,16 @@ func (s *Store) Health(ctx context.Context) error {
 	return nil
 }
 
-// Stats delegates to the inner store.
-func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
+// Stats delegates to the inner store if it implements
+// [config.StatsProvider]. When the inner store does not, returns
+// (nil, nil) — matching [otel.InstrumentedStore.Stats] and the
+// multi-store "no provider" path so wrapper composition stays
+// transitive.
+func (s *Store) Stats(ctx context.Context) (config.StoreStats, error) {
 	if sp, ok := s.inner.(config.StatsProvider); ok {
 		return sp.Stats(ctx)
 	}
-	return &config.StoreStats{}, nil
+	return nil, nil
 }
 
 // expandValue applies configured expansions to v if it is a TypeString value.

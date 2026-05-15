@@ -279,8 +279,8 @@ func TestStore_Stats(t *testing.T) {
 		t.Fatalf("Stats failed: %v", err)
 	}
 
-	if stats.TotalEntries != 3 {
-		t.Errorf("TotalEntries = %d, want 3", stats.TotalEntries)
+	if stats.TotalEntries() != 3 {
+		t.Errorf("TotalEntries = %d, want 3", stats.TotalEntries())
 	}
 }
 

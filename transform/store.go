@@ -25,9 +25,9 @@ type transformStore struct {
 
 // Compile-time interface checks.
 var (
-	_ config.Store         = (*transformStore)(nil)
-	_ config.HealthChecker = (*transformStore)(nil)
-	_ config.StatsProvider = (*transformStore)(nil)
+	_ config.Store          = (*transformStore)(nil)
+	_ config.HealthChecker  = (*transformStore)(nil)
+	_ config.StatsProvider  = (*transformStore)(nil)
 	_ config.CodecValidator = (*transformStore)(nil)
 	_ config.BulkStore      = (*transformStore)(nil)
 	_ config.VersionedStore = (*transformStore)(nil)
@@ -169,8 +169,11 @@ func (s *transformStore) Health(ctx context.Context) error {
 	return nil
 }
 
-// Stats delegates to the inner store if it implements StatsProvider.
-func (s *transformStore) Stats(ctx context.Context) (*config.StoreStats, error) {
+// Stats delegates to the inner store if it implements
+// [config.StatsProvider]. When the inner store does not, returns
+// (nil, nil) — matching the other wrapper stores so composition
+// (e.g. otel(transform(memory))) stays transitive.
+func (s *transformStore) Stats(ctx context.Context) (config.StoreStats, error) {
 	if provider, ok := s.store.(config.StatsProvider); ok {
 		return provider.Stats(ctx)
 	}

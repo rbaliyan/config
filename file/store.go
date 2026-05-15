@@ -544,7 +544,7 @@ func (s *Store) Health(ctx context.Context) error {
 }
 
 // Stats returns store statistics.
-func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
+func (s *Store) Stats(ctx context.Context) (config.StoreStats, error) {
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
 	}
@@ -552,20 +552,19 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	stats := &config.StoreStats{
-		EntriesByType:      make(map[config.Type]int64),
-		EntriesByNamespace: make(map[string]int64),
-	}
+	var total int64
+	byType := make(map[config.Type]int64)
+	byNamespace := make(map[string]int64)
 
 	for ns, entries := range s.entries {
 		for _, e := range entries {
-			stats.TotalEntries++
-			stats.EntriesByType[e.valueType]++
-			stats.EntriesByNamespace[ns]++
+			total++
+			byType[e.valueType]++
+			byNamespace[ns]++
 		}
 	}
 
-	return stats, nil
+	return config.NewStoreStats(total, byType, byNamespace), nil
 }
 
 // Namespaces returns all namespace names in the store.
