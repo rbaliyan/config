@@ -603,7 +603,7 @@ func (s *Store) Health(ctx context.Context) error {
 }
 
 // Stats returns store statistics.
-func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
+func (s *Store) Stats(ctx context.Context) (config.StoreStats, error) {
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
 	}
@@ -611,18 +611,14 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	stats := &config.StoreStats{
-		TotalEntries:       int64(len(s.entries)),
-		EntriesByType:      make(map[config.Type]int64),
-		EntriesByNamespace: make(map[string]int64),
-	}
-
+	byType := make(map[config.Type]int64)
+	byNamespace := make(map[string]int64)
 	for _, e := range s.entries {
-		stats.EntriesByType[e.value.Type()]++
-		stats.EntriesByNamespace[e.namespace]++
+		byType[e.value.Type()]++
+		byNamespace[e.namespace]++
 	}
 
-	return stats, nil
+	return config.NewStoreStats(int64(len(s.entries)), byType, byNamespace), nil
 }
 
 // notifyWatchers sends an event to all matching watchers.

@@ -310,43 +310,46 @@ func (ms *Store) Health(ctx context.Context) error {
 }
 
 // Stats aggregates statistics from all underlying stores.
-// Returns combined stats from all stores that implement StatsProvider.
-func (ms *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
+// Returns combined stats from all stores that implement
+// [config.StatsProvider]. Aggregation rule: each metric takes the max
+// across stores, because the stores typically hold overlapping copies
+// of the same data rather than disjoint shards.
+//
+// When no underlying store implements [config.StatsProvider], returns
+// (nil, nil) to match the wrapper-store contract — composition of
+// multi-store inside otel/expand/transform/replica stays transitive.
+func (ms *Store) Stats(ctx context.Context) (config.StoreStats, error) {
 	if len(ms.stores) == 0 {
 		return nil, config.ErrStoreNotConnected
 	}
 
-	combined := &config.StoreStats{
-		EntriesByType:      make(map[config.Type]int64),
-		EntriesByNamespace: make(map[string]int64),
-	}
+	var total int64
+	byType := make(map[config.Type]int64)
+	byNamespace := make(map[string]int64)
 
 	var hasStats bool
 	for _, s := range ms.stores {
-		if sp, ok := s.(config.StatsProvider); ok {
-			stats, err := sp.Stats(ctx)
-			if err != nil {
-				continue
-			}
-			hasStats = true
+		sp, ok := s.(config.StatsProvider)
+		if !ok {
+			continue
+		}
+		stats, err := sp.Stats(ctx)
+		if err != nil || stats == nil {
+			continue
+		}
+		hasStats = true
 
-			// Aggregate stats (use max of total entries since stores may have same data)
-			if stats.TotalEntries > combined.TotalEntries {
-				combined.TotalEntries = stats.TotalEntries
+		if v := stats.TotalEntries(); v > total {
+			total = v
+		}
+		for t, count := range stats.EntriesByType() {
+			if count > byType[t] {
+				byType[t] = count
 			}
-
-			// Merge type counts (use max since stores may overlap)
-			for t, count := range stats.EntriesByType {
-				if count > combined.EntriesByType[t] {
-					combined.EntriesByType[t] = count
-				}
-			}
-
-			// Merge namespace counts (use max since stores may overlap)
-			for ns, count := range stats.EntriesByNamespace {
-				if count > combined.EntriesByNamespace[ns] {
-					combined.EntriesByNamespace[ns] = count
-				}
+		}
+		for ns, count := range stats.EntriesByNamespace() {
+			if count > byNamespace[ns] {
+				byNamespace[ns] = count
 			}
 		}
 	}
@@ -354,8 +357,7 @@ func (ms *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 	if !hasStats {
 		return nil, nil
 	}
-
-	return combined, nil
+	return config.NewStoreStats(total, byType, byNamespace), nil
 }
 
 // GetMany retrieves multiple values in a single operation.

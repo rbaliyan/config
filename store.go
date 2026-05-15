@@ -2,6 +2,9 @@ package config
 
 import (
 	"context"
+	"encoding/json"
+	"iter"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -128,15 +131,146 @@ type HealthChecker interface {
 // recomputes the full namespace set per call, while NamespaceLister can use
 // the backend's native pagination primitive.
 type StatsProvider interface {
-	// Stats returns store statistics.
-	Stats(ctx context.Context) (*StoreStats, error)
+	// Stats returns an immutable snapshot of store statistics.
+	// The returned [StoreStats] is safe to share across goroutines —
+	// the interface exposes no mutation surface, so callers cannot
+	// accidentally invalidate a value cached by a shared layer.
+	Stats(ctx context.Context) (StoreStats, error)
 }
 
-// StoreStats contains storage statistics.
-type StoreStats struct {
+// StoreStats is an immutable snapshot of storage statistics returned by
+// [StatsProvider.Stats]. The interface is deliberately read-only:
+// mutation is unreachable through any exported method, so a snapshot
+// can be held by a cache and observed by many goroutines without
+// defensive copying.
+//
+// Implementations are produced by [NewStoreStats] (when building a
+// snapshot from raw counts) or [UnmarshalStoreStats] (when decoding
+// from JSON). The canonical implementation in this package is
+// unexported; backends should not type-assert against it.
+//
+// To get a private mutable copy of a map, use [maps.Collect] on the
+// iterator returned by [StoreStats.EntriesByType] or
+// [StoreStats.EntriesByNamespace].
+type StoreStats interface {
+	// TotalEntries returns the total number of entries across all
+	// namespaces and types.
+	TotalEntries() int64
+
+	// EntriesByType yields (Type, count) pairs. The iterator can be
+	// ranged over directly:
+	//
+	//	for t, n := range stats.EntriesByType() { ... }
+	//
+	// The underlying snapshot is immutable; the iterator yields fresh
+	// pairs and does not expose the backing map.
+	EntriesByType() iter.Seq2[Type, int64]
+
+	// EntriesByNamespace yields (namespace, count) pairs. Same
+	// immutability guarantee as [StoreStats.EntriesByType].
+	EntriesByNamespace() iter.Seq2[string, int64]
+
+	// CountForType returns the entry count for t, or 0 if absent.
+	// O(1) point lookup that avoids constructing an iterator.
+	CountForType(t Type) int64
+
+	// CountForNamespace returns the entry count for ns, or 0 if absent.
+	// O(1) point lookup that avoids constructing an iterator.
+	CountForNamespace(ns string) int64
+
+	// MarshalJSON serializes the stats in the canonical wire format —
+	// keys total_entries, entries_by_type, entries_by_namespace. The
+	// output round-trips through [UnmarshalStoreStats].
+	//
+	// The interface deliberately does NOT embed [json.Unmarshaler]
+	// because there is no portable way to unmarshal into an interface
+	// value — the canonical impl is unexported, so callers cannot
+	// construct a zero-value implementation to fill. Use
+	// [UnmarshalStoreStats] for the decode side.
+	json.Marshaler
+}
+
+// storeStats is the canonical immutable implementation of [StoreStats].
+// Construct via [NewStoreStats] or [UnmarshalStoreStats]; the type
+// itself is unexported because all interaction goes through the
+// interface.
+type storeStats struct {
+	totalEntries       int64
+	entriesByType      map[Type]int64
+	entriesByNamespace map[string]int64
+}
+
+// storeStatsWire is the JSON wire format. Field names are preserved
+// from the previous (pre-v0.8.0) struct so dashboards and HTTP/JSON
+// clients continue to interoperate without changes.
+type storeStatsWire struct {
 	TotalEntries       int64            `json:"total_entries"`
 	EntriesByType      map[Type]int64   `json:"entries_by_type"`
 	EntriesByNamespace map[string]int64 `json:"entries_by_namespace"`
+}
+
+// NewStoreStats builds an immutable [StoreStats] snapshot (the return
+// type of [StatsProvider.Stats]) from raw counts. Both maps are cloned
+// on construction so the caller's later mutations do not leak into the
+// snapshot — a snapshot can be safely shared across goroutines and
+// cached behind a single-flight layer.
+//
+// nil maps are accepted and treated as empty; the resulting snapshot
+// returns 0 from [StoreStats.CountForType] / [StoreStats.CountForNamespace]
+// and yields no pairs from the iterators.
+func NewStoreStats(totalEntries int64, byType map[Type]int64, byNamespace map[string]int64) StoreStats {
+	return &storeStats{
+		totalEntries:       totalEntries,
+		entriesByType:      maps.Clone(byType),
+		entriesByNamespace: maps.Clone(byNamespace),
+	}
+}
+
+// UnmarshalStoreStats parses the canonical JSON wire format into a
+// fresh, immutable [StoreStats] (the same shape produced by
+// [StoreStats.MarshalJSON]). Used by the gRPC/HTTP client side to
+// reconstruct a snapshot received over the wire from a remote
+// [StatsProvider]. Internally delegates to [NewStoreStats], so the
+// returned snapshot has the same map-clone immutability guarantee.
+//
+// Expected JSON shape:
+//
+//	{
+//	  "total_entries": <int64>,
+//	  "entries_by_type": {"<Type-as-int>": <int64>, ...},
+//	  "entries_by_namespace": {"<namespace>": <int64>, ...}
+//	}
+//
+// [Type] keys are encoded as the decimal-string form of their numeric
+// value (Go's default for integer map keys). The package does not
+// define MarshalText on [Type], so the wire encoding is the int — keep
+// [Type] a numeric named type to preserve compatibility.
+func UnmarshalStoreStats(data []byte) (StoreStats, error) {
+	var w storeStatsWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return nil, err
+	}
+	return NewStoreStats(w.TotalEntries, w.EntriesByType, w.EntriesByNamespace), nil
+}
+
+func (s *storeStats) TotalEntries() int64               { return s.totalEntries }
+func (s *storeStats) CountForType(t Type) int64         { return s.entriesByType[t] }
+func (s *storeStats) CountForNamespace(ns string) int64 { return s.entriesByNamespace[ns] }
+func (s *storeStats) EntriesByType() iter.Seq2[Type, int64] {
+	return maps.All(s.entriesByType)
+}
+func (s *storeStats) EntriesByNamespace() iter.Seq2[string, int64] {
+	return maps.All(s.entriesByNamespace)
+}
+
+// MarshalJSON emits the canonical wire format. Marshaling reads the
+// underlying maps directly; safe because storeStats is immutable.
+func (s *storeStats) MarshalJSON() ([]byte, error) {
+	return json.Marshal(storeStatsWire{
+		TotalEntries:       s.totalEntries,
+		EntriesByType:      s.entriesByType,
+		EntriesByNamespace: s.entriesByNamespace,
+	})
 }
 
 // CodecValidator is an optional interface for stores that restrict supported codecs.

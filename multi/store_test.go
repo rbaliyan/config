@@ -65,15 +65,11 @@ func (f *failStore) Health(ctx context.Context) error {
 	return f.healthErr
 }
 
-func (f *failStore) Stats(ctx context.Context) (*config.StoreStats, error) {
+func (f *failStore) Stats(ctx context.Context) (config.StoreStats, error) {
 	if f.statsErr != nil {
 		return nil, f.statsErr
 	}
-	return &config.StoreStats{
-		TotalEntries:       5,
-		EntriesByType:      map[config.Type]int64{},
-		EntriesByNamespace: map[string]int64{},
-	}, nil
+	return config.NewStoreStats(5, nil, nil), nil
 }
 
 type noWatchStore struct {
@@ -465,8 +461,8 @@ func TestMultiStore_Stats(t *testing.T) {
 		t.Fatal("Expected stats, got nil")
 	}
 
-	if stats.TotalEntries < 3 {
-		t.Errorf("Expected at least 3 entries, got %d", stats.TotalEntries)
+	if stats.TotalEntries() < 3 {
+		t.Errorf("Expected at least 3 entries, got %d", stats.TotalEntries())
 	}
 }
 
@@ -871,14 +867,14 @@ func TestMultiStore_Stats_Aggregation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stats failed: %v", err)
 	}
-	if stats.TotalEntries != 3 {
-		t.Errorf("Expected TotalEntries=3 (max across stores), got %d", stats.TotalEntries)
+	if stats.TotalEntries() != 3 {
+		t.Errorf("Expected TotalEntries=3 (max across stores), got %d", stats.TotalEntries())
 	}
-	if stats.EntriesByNamespace["ns1"] != 2 {
-		t.Errorf("Expected ns1 count=2, got %d", stats.EntriesByNamespace["ns1"])
+	if got := stats.CountForNamespace("ns1"); got != 2 {
+		t.Errorf("Expected ns1 count=2, got %d", got)
 	}
-	if stats.EntriesByNamespace["ns2"] != 1 {
-		t.Errorf("Expected ns2 count=1, got %d", stats.EntriesByNamespace["ns2"])
+	if got := stats.CountForNamespace("ns2"); got != 1 {
+		t.Errorf("Expected ns2 count=1, got %d", got)
 	}
 }
 
@@ -899,8 +895,8 @@ func TestMultiStore_Stats_StatsErrorSkipped(t *testing.T) {
 	if stats == nil {
 		t.Fatal("Expected non-nil stats from second store")
 	}
-	if stats.TotalEntries != 1 {
-		t.Errorf("Expected 1 entry from second store, got %d", stats.TotalEntries)
+	if stats.TotalEntries() != 1 {
+		t.Errorf("Expected 1 entry from second store, got %d", stats.TotalEntries())
 	}
 }
 

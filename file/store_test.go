@@ -281,13 +281,10 @@ func TestStore_Stats(t *testing.T) {
 		t.Fatalf("Stats() error: %v", err)
 	}
 
-	if stats.TotalEntries == 0 {
+	if stats.TotalEntries() == 0 {
 		t.Error("Stats().TotalEntries = 0, want > 0")
 	}
-	if len(stats.EntriesByNamespace) == 0 {
-		t.Error("Stats().EntriesByNamespace is empty")
-	}
-	if _, ok := stats.EntriesByNamespace["db"]; !ok {
+	if stats.CountForNamespace("db") == 0 {
 		t.Error("Stats() missing 'db' namespace")
 	}
 }

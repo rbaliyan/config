@@ -327,8 +327,12 @@ func (s *InstrumentedStore) Health(ctx context.Context) error {
 	return nil
 }
 
-// Stats returns store statistics.
-func (s *InstrumentedStore) Stats(ctx context.Context) (*config.StoreStats, error) {
+// Stats delegates to the inner store if it implements
+// [config.StatsProvider]. When the inner store does not, returns
+// (nil, nil) — matching [expand.Store.Stats], [replica.Store.Stats],
+// [transform.Store.Stats], and the multi-store "no provider" path so
+// wrapper composition stays transitive.
+func (s *InstrumentedStore) Stats(ctx context.Context) (config.StoreStats, error) {
 	if provider, ok := s.store.(config.StatsProvider); ok {
 		return provider.Stats(ctx)
 	}

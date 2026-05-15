@@ -644,7 +644,12 @@ func (s *Store) Health(ctx context.Context) error {
 	return s.client.Ping(ctx).Err()
 }
 
-func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
+// Stats returns store statistics. Uses Redis SCAN to enumerate hash keys,
+// TYPE-checks each one to skip non-hash entries (e.g. the pubsub channel
+// key), then HLEN per hash. Cost is O(keys) — for very large deployments
+// prefer a precomputed counter; the implementation is intentionally
+// straightforward and avoids maintaining a parallel index.
+func (s *Store) Stats(ctx context.Context) (config.StoreStats, error) {
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
 	}
@@ -652,10 +657,9 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 		return nil, config.ErrStoreNotConnected
 	}
 
-	stats := &config.StoreStats{
-		EntriesByType:      make(map[config.Type]int64),
-		EntriesByNamespace: make(map[string]int64),
-	}
+	byType := make(map[config.Type]int64)
+	byNamespace := make(map[string]int64)
+	var total int64
 
 	// Restrict SCAN to the hash pattern so the pubsub channel key
 	// ("{prefix}:changes") is not returned, and TYPE-check each key
@@ -682,8 +686,8 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 			if err != nil {
 				continue
 			}
-			stats.TotalEntries += count
-			stats.EntriesByNamespace[ns] += count
+			total += count
+			byNamespace[ns] += count
 		}
 
 		cursor = nextCursor
@@ -692,7 +696,7 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 		}
 	}
 
-	return stats, nil
+	return config.NewStoreStats(total, byType, byNamespace), nil
 }
 
 // runPubSub subscribes to the change channel and relays messages to

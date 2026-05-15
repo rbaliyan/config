@@ -230,8 +230,8 @@ func TestMongoDBStore_Stats(t *testing.T) {
 		t.Fatalf("Stats failed: %v", err)
 	}
 
-	if stats.TotalEntries < 1 {
-		t.Errorf("Expected at least 1 entry, got %d", stats.TotalEntries)
+	if stats.TotalEntries() < 1 {
+		t.Errorf("Expected at least 1 entry, got %d", stats.TotalEntries())
 	}
 }
 

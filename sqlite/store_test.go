@@ -208,20 +208,20 @@ func TestSQLiteStore_Stats(t *testing.T) {
 		t.Fatalf("Stats failed: %v", err)
 	}
 
-	if stats.TotalEntries != 2 {
-		t.Errorf("Expected 2 entries, got %d", stats.TotalEntries)
+	if stats.TotalEntries() != 2 {
+		t.Errorf("Expected 2 entries, got %d", stats.TotalEntries())
 	}
 
-	if stats.EntriesByType[config.TypeInt] != 1 {
-		t.Errorf("Expected 1 int entry, got %d", stats.EntriesByType[config.TypeInt])
+	if stats.CountForType(config.TypeInt) != 1 {
+		t.Errorf("Expected 1 int entry, got %d", stats.CountForType(config.TypeInt))
 	}
 
-	if stats.EntriesByType[config.TypeString] != 1 {
-		t.Errorf("Expected 1 string entry, got %d", stats.EntriesByType[config.TypeString])
+	if stats.CountForType(config.TypeString) != 1 {
+		t.Errorf("Expected 1 string entry, got %d", stats.CountForType(config.TypeString))
 	}
 
-	if stats.EntriesByNamespace["statstest"] != 2 {
-		t.Errorf("Expected 2 entries in 'statstest' namespace, got %d", stats.EntriesByNamespace["statstest"])
+	if stats.CountForNamespace("statstest") != 2 {
+		t.Errorf("Expected 2 entries in 'statstest' namespace, got %d", stats.CountForNamespace("statstest"))
 	}
 }
 

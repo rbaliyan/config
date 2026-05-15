@@ -1103,7 +1103,7 @@ func (s *Store) Health(ctx context.Context) error {
 }
 
 // Stats returns store statistics.
-func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
+func (s *Store) Stats(ctx context.Context) (config.StoreStats, error) {
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
 	}
@@ -1114,11 +1114,8 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 		return nil, config.WrapStoreError("stats", "mongodb", "", err)
 	}
 
-	stats := &config.StoreStats{
-		TotalEntries:       total,
-		EntriesByType:      make(map[config.Type]int64),
-		EntriesByNamespace: make(map[string]int64),
-	}
+	byType := make(map[config.Type]int64)
+	byNamespace := make(map[string]int64)
 
 	// Single collection scan via $facet instead of two separate aggregation passes.
 	pipeline := mongo.Pipeline{
@@ -1148,16 +1145,16 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 			}
 			if err := cursor.Decode(&result); err == nil {
 				for _, r := range result.ByType {
-					stats.EntriesByType[r.ID] = r.Count
+					byType[r.ID] = r.Count
 				}
 				for _, r := range result.ByNamespace {
-					stats.EntriesByNamespace[r.ID] = r.Count
+					byNamespace[r.ID] = r.Count
 				}
 			}
 		}
 	}
 
-	return stats, nil
+	return config.NewStoreStats(total, byType, byNamespace), nil
 }
 
 // GetMany retrieves multiple values in a single operation.

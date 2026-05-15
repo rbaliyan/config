@@ -589,8 +589,11 @@ func (s *Store) Health(ctx context.Context) error {
 	return nil
 }
 
-// Stats returns statistics from the primary.
-func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
+// Stats delegates to the primary store if it implements
+// [config.StatsProvider]. When the primary does not, returns
+// (nil, nil) — matching the other wrapper stores so composition
+// stays transitive.
+func (s *Store) Stats(ctx context.Context) (config.StoreStats, error) {
 	if sp, ok := s.primary.(config.StatsProvider); ok {
 		return sp.Stats(ctx)
 	}

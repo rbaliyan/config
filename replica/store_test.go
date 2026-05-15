@@ -399,8 +399,8 @@ func TestStore_Stats_DelegatesToPrimary(t *testing.T) {
 	if stats == nil {
 		t.Fatal("Expected non-nil stats")
 	}
-	if stats.TotalEntries < 1 {
-		t.Errorf("Expected at least 1 entry, got %d", stats.TotalEntries)
+	if stats.TotalEntries() < 1 {
+		t.Errorf("Expected at least 1 entry, got %d", stats.TotalEntries())
 	}
 }
 

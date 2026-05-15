@@ -670,23 +670,20 @@ func (s *Store) Health(ctx context.Context) error {
 }
 
 // Stats returns store statistics.
-func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
+func (s *Store) Stats(ctx context.Context) (config.StoreStats, error) {
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
 	}
 
-	stats := &config.StoreStats{
-		EntriesByType:      make(map[config.Type]int64),
-		EntriesByNamespace: make(map[string]int64),
-	}
+	byType := make(map[config.Type]int64)
+	byNamespace := make(map[string]int64)
+	var total int64
 
-	// Count total entries
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
-	if err := s.db.QueryRowContext(ctx, countQuery).Scan(&stats.TotalEntries); err != nil {
+	if err := s.db.QueryRowContext(ctx, countQuery).Scan(&total); err != nil {
 		return nil, config.WrapStoreError("stats", "sqlite", "", err)
 	}
 
-	// Count by type
 	typeQuery := fmt.Sprintf(`SELECT type, COUNT(*) FROM %s GROUP BY type`, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 	typeRows, err := s.db.QueryContext(ctx, typeQuery)
 	if err == nil {
@@ -695,12 +692,11 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 			var t config.Type
 			var count int64
 			if err := typeRows.Scan(&t, &count); err == nil {
-				stats.EntriesByType[t] = count
+				byType[t] = count
 			}
 		}
 	}
 
-	// Count by namespace
 	nsQuery := fmt.Sprintf(`SELECT namespace, COUNT(*) FROM %s GROUP BY namespace`, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
 	nsRows, err := s.db.QueryContext(ctx, nsQuery)
 	if err == nil {
@@ -709,12 +705,12 @@ func (s *Store) Stats(ctx context.Context) (*config.StoreStats, error) {
 			var ns string
 			var count int64
 			if err := nsRows.Scan(&ns, &count); err == nil {
-				stats.EntriesByNamespace[ns] = count
+				byNamespace[ns] = count
 			}
 		}
 	}
 
-	return stats, nil
+	return config.NewStoreStats(total, byType, byNamespace), nil
 }
 
 // GetMany retrieves multiple values in a single operation.
