@@ -62,7 +62,7 @@ func Marshal(backend string, payload []byte) (string, error) {
 	}
 	buf := make([]byte, 0, 2+len(backend)+len(payload))
 	buf = append(buf, currentVersion)
-	buf = append(buf, byte(len(backend)))
+	buf = append(buf, byte(len(backend))) // #nosec G115 -- bounded by the len(backend) > maxBackendLen check above (255)
 	buf = append(buf, backend...)
 	buf = append(buf, payload...)
 	return base64.RawURLEncoding.EncodeToString(buf), nil

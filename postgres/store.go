@@ -1150,7 +1150,7 @@ func (s *Store) ListNamespaces(ctx context.Context, prefix string, limit int, cu
 		  AND (expires_at IS NULL OR expires_at > NOW())
 		ORDER BY namespace COLLATE "C"
 		LIMIT $4
-	`, s.cfg.Table)
+	`, s.cfg.Table) // #nosec G201 -- table name validated by validIdentifier regex in Connect
 
 	rows, err := s.db.QueryContext(ctx, query, after, prefix, escapeLikePattern(prefix)+"%", int64(limit+1))
 	if err != nil {
