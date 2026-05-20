@@ -18,6 +18,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/rbaliyan/config"
+	"github.com/rbaliyan/config/internal/storetest"
 	configredis "github.com/rbaliyan/config/redis"
 )
 
@@ -301,22 +302,67 @@ func TestRedisStore_Mini_Watch(t *testing.T) {
 	}
 }
 
-// TestRedisStore_Mini_BulkStoreNotImplemented pins the documented fact
-// that the Redis Store deliberately does not implement BulkStore today —
-// see the integration evaluator's gap analysis. A type assertion must
-// return ok=false so wrapper stores (otel, multi) take the fallback path
-// instead of calling through to nil methods.
-//
-// If/when BulkStore is added to the Redis backend, flip this test to a
-// positive happy-path round-trip covering GetMany/SetMany/DeleteMany
-// against miniredis.
-func TestRedisStore_Mini_BulkStoreNotImplemented(t *testing.T) {
+// TestRedisStore_Mini_BulkStore is a positive happy-path round-trip
+// across GetMany / SetMany / DeleteMany. The conformance suite at
+// internal/storetest/bulk.go covers the contract; this test catches
+// redis-specific wiring regressions (HMGET decode path, the pipelined
+// upsert script, the HDEL count semantics) without spinning up the
+// full suite.
+func TestRedisStore_Mini_BulkStore(t *testing.T) {
 	t.Parallel()
 	store, _ := newMiniStore(t)
+	ctx := t.Context()
 
-	if _, ok := any(store).(config.BulkStore); ok {
-		t.Fatal("Redis store now implements BulkStore — convert this test to a positive Bulk round-trip")
+	bs, ok := any(store).(config.BulkStore)
+	if !ok {
+		t.Fatal("redis store does not implement BulkStore")
 	}
+
+	in := map[string]config.Value{
+		"a": config.NewValue(1),
+		"b": config.NewValue(2),
+		"c": config.NewValue(3),
+	}
+	if err := bs.SetMany(ctx, "bulk", in); err != nil {
+		t.Fatalf("SetMany: %v", err)
+	}
+
+	got, err := bs.GetMany(ctx, "bulk", []string{"a", "b", "missing"})
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("GetMany returned %d, want 2 (missing must be absent)", len(got))
+	}
+	for k, want := range map[string]int64{"a": 1, "b": 2} {
+		v, ok := got[k]
+		if !ok {
+			t.Errorf("missing %q in GetMany result", k)
+			continue
+		}
+		n, _ := v.Int64()
+		if n != want {
+			t.Errorf("GetMany[%q] = %d, want %d", k, n, want)
+		}
+	}
+
+	n, err := bs.DeleteMany(ctx, "bulk", []string{"a", "b", "missing"})
+	if err != nil {
+		t.Fatalf("DeleteMany: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("DeleteMany returned %d, want 2 (missing must not count)", n)
+	}
+}
+
+// TestRedisStore_Mini_BulkStoreConformance drives the shared
+// [config.BulkStore] contract suite against a miniredis-backed store.
+// Subtests are parallelizable thanks to per-test key prefixes.
+func TestRedisStore_Mini_BulkStoreConformance(t *testing.T) {
+	storetest.RunBulkStoreSuite(t, func(t *testing.T) config.Store {
+		s, _ := newMiniStore(t)
+		return s
+	})
 }
 
 func TestRedisStore_Mini_ClosedStoreOps(t *testing.T) {

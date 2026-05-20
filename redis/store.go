@@ -160,6 +160,7 @@ var (
 	_ config.Store         = (*Store)(nil)
 	_ config.HealthChecker = (*Store)(nil)
 	_ config.StatsProvider = (*Store)(nil)
+	_ config.BulkStore     = (*Store)(nil)
 )
 
 // NewStore creates a Redis-backed config store. Call Connect before using
@@ -464,6 +465,231 @@ func (s *Store) Delete(ctx context.Context, namespace, key string) error {
 	_ = s.client.Publish(ctx, s.chanKey(), cpJSON)
 
 	return nil
+}
+
+// GetMany retrieves multiple values from one namespace in a single round-trip
+// to Redis using HMGET. Missing keys are omitted from the result (per the
+// [config.BulkStore] contract); keys whose stored payload has past the
+// stored expires_at are also omitted, matching Get's read-time TTL filter.
+//
+// HMGET preserves the order of inputs but here we discard it: callers iterate
+// the returned map by key, not by request order.
+func (s *Store) GetMany(ctx context.Context, namespace string, keys []string) (map[string]config.Value, error) {
+	if s.closed.Load() {
+		return nil, config.ErrStoreClosed
+	}
+	if s.client == nil {
+		return nil, config.ErrStoreNotConnected
+	}
+	if err := config.ValidateNamespace(namespace); err != nil {
+		return nil, err
+	}
+	if len(keys) == 0 {
+		return map[string]config.Value{}, nil
+	}
+
+	raws, err := s.client.HMGet(ctx, s.hashKey(namespace), keys...).Result()
+	if err != nil {
+		return nil, config.WrapStoreError("get_many", "redis", "", err)
+	}
+
+	now := time.Now().UTC()
+	out := make(map[string]config.Value, len(keys))
+	for i, raw := range raws {
+		if raw == nil {
+			continue
+		}
+		s2, ok := raw.(string)
+		if !ok {
+			// HMGET returns string for found fields; anything else is a
+			// driver-level surprise that should not silently corrupt the
+			// caller's map.
+			return nil, config.WrapStoreError("get_many", "redis", keys[i],
+				fmt.Errorf("unexpected hmget value type %T", raw))
+		}
+		var ep entryPayload
+		if err := json.Unmarshal([]byte(s2), &ep); err != nil {
+			continue
+		}
+		if ep.ExpiresAt != nil && now.After(*ep.ExpiresAt) {
+			continue
+		}
+		var expiresAt time.Time
+		if ep.ExpiresAt != nil {
+			expiresAt = *ep.ExpiresAt
+		}
+		v, err := config.NewValueFromBytes(ctx, ep.Value, ep.Codec,
+			config.WithValueType(config.Type(ep.Type)),
+			config.WithValueMetadata(ep.Version, ep.CreatedAt, ep.UpdatedAt),
+			config.WithValueEntryID(ep.EntryID),
+			config.WithValueExpiresAt(expiresAt),
+		)
+		if err != nil {
+			continue
+		}
+		out[keys[i]] = v
+	}
+	return out, nil
+}
+
+// SetMany writes multiple values to one namespace using the existing per-key
+// upsert Lua script in a pipeline. SetMany always uses upsert semantics
+// regardless of any [config.WriteMode] hint on individual values — the
+// [config.BulkStore] contract requires this, and the per-key WriteMode
+// scripts would yield surprising partial failures.
+//
+// Validation, marshal, and script execution failures are collected into a
+// [config.BulkWriteError]. Successfully written keys are persisted even when
+// other keys in the batch fail, matching the memory/postgres/mongodb
+// implementations.
+func (s *Store) SetMany(ctx context.Context, namespace string, values map[string]config.Value) error {
+	if s.closed.Load() {
+		return config.ErrStoreClosed
+	}
+	if s.client == nil {
+		return config.ErrStoreNotConnected
+	}
+	if err := config.ValidateNamespace(namespace); err != nil {
+		return err
+	}
+	if len(values) == 0 {
+		return nil
+	}
+
+	hashKey := s.hashKey(namespace)
+	channel := s.chanKey()
+	now := time.Now().UTC()
+	nowNanoStr := strconv.FormatInt(now.UnixNano(), 10)
+
+	keyErrors := make(map[string]error)
+	succeeded := make([]string, 0, len(values))
+
+	// Pipelined EVALSHA does NOT auto-fall-back to EVAL on NOSCRIPT — the
+	// fallback only runs for single-command Script.Run. Load the script
+	// once before pipelining so every EVALSHA in the batch hits a cached
+	// SHA on the server. One extra round-trip in exchange for keeping the
+	// per-key writes batched.
+	if err := upsertPublishScript.Load(ctx, s.client).Err(); err != nil {
+		return config.WrapStoreError("set_many", "redis", "", err)
+	}
+
+	// Pipeline the script calls into one TCP round-trip; each script still
+	// executes atomically per-key on the server. We deliberately do NOT
+	// wrap the writes in MULTI/EXEC: cross-key atomicity is not required by
+	// the BulkStore contract and the per-key upsert script already
+	// preserves the prior createdAt/entryID under concurrent writers.
+	pipe := s.client.Pipeline()
+	type pending struct {
+		key string
+		cmd *goredis.Cmd
+	}
+	pendingCmds := make([]pending, 0, len(values))
+
+	for key, value := range values {
+		if err := config.ValidateKey(key); err != nil {
+			keyErrors[key] = err
+			continue
+		}
+		data, err := value.Marshal(ctx)
+		if err != nil {
+			keyErrors[key] = config.WrapStoreError("marshal", "redis", key, err)
+			continue
+		}
+		cand := s.buildEntryPayload(data, value, 1, now, now, s.makeEntryID())
+		candJSON, err := json.Marshal(cand)
+		if err != nil {
+			keyErrors[key] = config.WrapStoreError("set_many", "redis", key, err)
+			continue
+		}
+		cpPrefix, cpSuffix, err := changePayloadFrames(namespace, key)
+		if err != nil {
+			keyErrors[key] = config.WrapStoreError("set_many", "redis", key, err)
+			continue
+		}
+		candExpNano := int64(0)
+		if cand.ExpiresAt != nil {
+			candExpNano = cand.ExpiresAt.UnixNano()
+		}
+		cmd := upsertPublishScript.Run(ctx, pipe, []string{hashKey},
+			key, string(candJSON), channel, cpPrefix, cpSuffix,
+			strconv.FormatInt(candExpNano, 10),
+			nowNanoStr,
+		)
+		pendingCmds = append(pendingCmds, pending{key: key, cmd: cmd})
+	}
+
+	if len(pendingCmds) > 0 {
+		// Pipeline.Exec returns the first error encountered but still queues
+		// every command. We inspect per-command errors below so individual
+		// failures land in keyErrors rather than aborting the whole batch.
+		_, _ = pipe.Exec(ctx)
+		for _, p := range pendingCmds {
+			res, err := p.cmd.Result()
+			if err != nil && err != goredis.Nil {
+				keyErrors[p.key] = config.WrapStoreError("set_many", "redis", p.key, err)
+				continue
+			}
+			if res == nil {
+				// Lua script returned nil — should never happen for the
+				// upsert path which always returns the persisted payload.
+				keyErrors[p.key] = config.WrapStoreError("set_many", "redis", p.key,
+					fmt.Errorf("upsert script returned nil"))
+				continue
+			}
+			succeeded = append(succeeded, p.key)
+		}
+	}
+
+	if len(keyErrors) > 0 {
+		return &config.BulkWriteError{Errors: keyErrors, Succeeded: succeeded}
+	}
+	return nil
+}
+
+// DeleteMany removes multiple keys from one namespace in a single HDEL
+// round-trip. Returns the number of fields actually removed (matching
+// Redis HDEL semantics and the [config.BulkStore] contract). Change
+// notifications are published as a best-effort pipelined batch — a publish
+// failure for one key does not roll back the HDEL or block siblings.
+func (s *Store) DeleteMany(ctx context.Context, namespace string, keys []string) (int64, error) {
+	if s.closed.Load() {
+		return 0, config.ErrStoreClosed
+	}
+	if s.client == nil {
+		return 0, config.ErrStoreNotConnected
+	}
+	if err := config.ValidateNamespace(namespace); err != nil {
+		return 0, err
+	}
+	if len(keys) == 0 {
+		return 0, nil
+	}
+
+	// Validate keys up front so a single malformed key fails the batch
+	// rather than corrupting the HDEL count.
+	for _, k := range keys {
+		if err := config.ValidateKey(k); err != nil {
+			return 0, err
+		}
+	}
+
+	n, err := s.client.HDel(ctx, s.hashKey(namespace), keys...).Result()
+	if err != nil {
+		return 0, config.WrapStoreError("delete_many", "redis", "", err)
+	}
+
+	// Best-effort publish per deleted-or-not key; watchers are responsible
+	// for de-duplicating spurious events against their local cache.
+	pipe := s.client.Pipeline()
+	channel := s.chanKey()
+	for _, k := range keys {
+		cp := changePayload{Type: "delete", Namespace: namespace, Key: k}
+		cpJSON, _ := json.Marshal(cp)
+		pipe.Publish(ctx, channel, cpJSON)
+	}
+	_, _ = pipe.Exec(ctx)
+
+	return n, nil
 }
 
 func (s *Store) Find(ctx context.Context, namespace string, filter config.Filter) (config.Page, error) {
