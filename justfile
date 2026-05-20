@@ -34,6 +34,22 @@ test-v:
 test-cover:
     go test -cover ./...
 
+# Run the smoke suite: hermetic in-process tests + godoc Examples.
+# Used as the fast pre-merge gate before slower integration runs.
+smoke:
+    go test -run '^TestSmoke|^Example' -timeout 30s ./...
+
+# Run unit tests with coverage and fail if total coverage drops below 80%.
+# Excludes integration paths (postgres/, mongodb/, etcd integration, redis live)
+# that need external services. Use `just test-integration` for those.
+test-cover-gate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    go test -coverprofile=coverage.out -covermode=atomic ./... 2>&1
+    pct=$(go tool cover -func=coverage.out | awk '/^total:/ { gsub("%","",$3); print $3 }')
+    echo "Total coverage: ${pct}%"
+    awk -v p="$pct" 'BEGIN { if (p+0 < 80.0) { print "coverage below 80% gate"; exit 1 } }'
+
 # Run all integration tests (MongoDB + PostgreSQL)
 test-integration: mongo-start pg-start
     #!/usr/bin/env bash
