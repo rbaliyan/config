@@ -9,6 +9,7 @@ import (
 
 	"github.com/rbaliyan/config"
 	"github.com/rbaliyan/config/bind"
+	"github.com/rbaliyan/config/internal/testutil"
 	"github.com/rbaliyan/config/memory"
 )
 
@@ -107,8 +108,13 @@ func TestRef_AutoReload(t *testing.T) {
 	_ = cfg.Set(ctx, "database/host", "remotehost")
 	_ = cfg.Set(ctx, "database/port", 5433)
 
-	// Wait for poll cycle
-	time.Sleep(200 * time.Millisecond)
+	// Wait for the next poll cycle to pick up the new values. Bound at 2s
+	// (40× the configured poll interval) so a wedged background goroutine
+	// fails fast under load.
+	testutil.WaitUntil(t, 2*time.Second, func() bool {
+		s := ref.Load()
+		return s.Host == "remotehost" && s.Port == 5433
+	}, "expected ref to reflect updated host/port after poll")
 
 	snap = ref.Load()
 	if snap.Host != "remotehost" {
@@ -152,12 +158,10 @@ func TestRef_OnChange(t *testing.T) {
 	_ = cfg.Set(ctx, "database/host", "newhost")
 	_ = cfg.Set(ctx, "database/port", 9999)
 
-	// Wait for change detection
-	time.Sleep(200 * time.Millisecond)
-
-	if callCount.Load() < 1 {
-		t.Fatal("expected OnChange to be called at least once")
-	}
+	// Wait for the OnChange callback to fire. Bound at 2s.
+	testutil.WaitUntil(t, 2*time.Second,
+		func() bool { return callCount.Load() >= 1 },
+		"expected OnChange to be called after Set")
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -199,8 +203,10 @@ func TestRef_OnError(t *testing.T) {
 	_ = cfg.Delete(ctx, "database/host")
 	_ = cfg.Delete(ctx, "database/port")
 
-	// Wait for poll
-	time.Sleep(200 * time.Millisecond)
+	// Wait for the next poll cycle to observe the error.
+	testutil.WaitUntil(t, 2*time.Second,
+		func() bool { return ref.LastError() != nil },
+		"expected LastError after deleting backing keys")
 
 	// Old snapshot should be preserved
 	snap := ref.Load()
@@ -209,11 +215,6 @@ func TestRef_OnError(t *testing.T) {
 	}
 	if snap.Host != "localhost" {
 		t.Errorf("expected preserved host=localhost, got %s", snap.Host)
-	}
-
-	// LastError should be set
-	if ref.LastError() == nil {
-		t.Error("expected LastError to be set after reload failure")
 	}
 }
 

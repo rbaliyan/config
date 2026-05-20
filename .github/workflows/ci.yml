@@ -9,9 +9,25 @@ on:
 permissions: read-all
 
 jobs:
+  smoke:
+    name: Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Smoke tests
+        run: go test -run '^TestSmoke|^Example' -timeout 60s ./...
+
   test:
     name: Test
     runs-on: ubuntu-latest
+    needs: smoke
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -26,6 +42,86 @@ jobs:
 
       - name: Test
         run: go test -v -race ./...
+
+  integration:
+    name: Integration (mongo+postgres+sqlite)
+    runs-on: ubuntu-latest
+    needs: smoke
+    # MongoDB is NOT a service container because mongo's change-stream tests
+    # need `--replSet rs0` on the mongod CMD, and GHA service containers
+    # cannot override an image's CMD. We start mongo manually via docker run.
+    # PostgreSQL is fine as a service container and uses the standard
+    # postgres init env vars to create the test role + database.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: config_test
+          POSTGRES_PASSWORD: config_test
+          POSTGRES_DB: config_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U config_test -d config_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Start MongoDB replica set
+        run: |
+          set -euo pipefail
+          # Start mongo with --replSet so rs.initiate() can promote it to a
+          # single-node replica set. Bind to all interfaces so the runner
+          # can reach it on localhost:27019.
+          docker run -d --name mongo \
+            -p 27019:27017 \
+            mongo:6.0 --replSet rs0 --bind_ip_all
+
+          # Wait for mongod to accept connections before initiating.
+          for i in $(seq 1 30); do
+            if docker exec mongo mongosh --quiet --eval "db.runCommand({ping:1}).ok" 2>/dev/null | grep -q "^1$"; then
+              echo "mongod accepting connections"
+              break
+            fi
+            sleep 1
+          done
+
+          # Initiate the replica set. Use the container's own hostname so the
+          # primary advertises an address reachable from inside the container
+          # (the test client connects through the host's port mapping with
+          # directConnection=true, so the advertised address only needs to be
+          # resolvable from within the container).
+          docker exec mongo mongosh --quiet --eval "rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'localhost:27017'}]})"
+
+          # Wait for primary election.
+          for i in $(seq 1 30); do
+            if docker exec mongo mongosh --quiet --eval "rs.status().myState" 2>/dev/null | grep -q "^1$"; then
+              echo "replica set primary elected"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "replica set primary failed to elect within 30s"
+          docker logs mongo | tail -50
+          exit 1
+
+      - name: Integration tests
+        env:
+          MONGO_URI: mongodb://localhost:27019/?directConnection=true
+          POSTGRES_DSN: postgres://config_test:config_test@localhost:5433/config_test?sslmode=disable
+        run: go test -v -race -count=1 ./mongodb/... ./postgres/... ./sqlite/...
+
+      - name: Stop MongoDB
+        if: always()
+        run: docker rm -f mongo || true
 
   lint:
     name: Lint
