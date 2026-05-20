@@ -19,13 +19,12 @@ import (
 // parallel subtests cannot share documents.
 var mongoConformanceSeq atomic.Int64
 
-// mongoFactory builds a fresh, connected, empty MongoDB store on a
-// uniquely-named collection. Skips when MongoDB is not reachable so the
-// file behaves identically to namespace_lister_test.go under CI without
-// a service container.
-func mongoFactory(t *testing.T) config.Store {
+// probeMongoOnce skips the parent test when MongoDB is unreachable. Per-subtest
+// factories then assume connectivity and only connect; this avoids paying the
+// 3s probe timeout once per subtest when CI runs without a mongo container.
+func probeMongoOnce(t *testing.T) {
 	t.Helper()
-	probeCtx, probeCancel := context.WithTimeout(t.Context(), 3*time.Second)
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer probeCancel()
 	probeClient, err := mongo.Connect(options.Client().ApplyURI(getMongoURI()))
 	if err != nil {
@@ -36,7 +35,13 @@ func mongoFactory(t *testing.T) config.Store {
 		t.Skipf("MongoDB not available: %v", err)
 	}
 	_ = probeClient.Disconnect(probeCtx)
+}
 
+// mongoFactory builds a fresh, connected, empty MongoDB store on a
+// uniquely-named collection. Assumes [probeMongoOnce] has already
+// verified connectivity at the parent test level.
+func mongoFactory(t *testing.T) config.Store {
+	t.Helper()
 	seq := mongoConformanceSeq.Add(1)
 	coll := fmt.Sprintf("entries_conf_%d_%d", time.Now().UnixNano(), seq)
 
@@ -66,23 +71,10 @@ func mongoFactory(t *testing.T) config.Store {
 }
 
 // mongoVersionedFactory mirrors mongoFactory but enables snapshot
-// versioning via WithVersioning(true); used to drive the
-// VersionedStore conformance suite without disturbing the non-versioning
-// tests.
+// versioning via WithVersioning(true). Assumes [probeMongoOnce] has
+// already verified connectivity.
 func mongoVersionedFactory(t *testing.T) config.Store {
 	t.Helper()
-	probeCtx, probeCancel := context.WithTimeout(t.Context(), 3*time.Second)
-	defer probeCancel()
-	probeClient, err := mongo.Connect(options.Client().ApplyURI(getMongoURI()))
-	if err != nil {
-		t.Skipf("MongoDB not available: %v", err)
-	}
-	if err := probeClient.Ping(probeCtx, nil); err != nil {
-		_ = probeClient.Disconnect(probeCtx)
-		t.Skipf("MongoDB not available: %v", err)
-	}
-	_ = probeClient.Disconnect(probeCtx)
-
 	seq := mongoConformanceSeq.Add(1)
 	coll := fmt.Sprintf("entries_conf_ver_%d_%d", time.Now().UnixNano(), seq)
 
@@ -115,12 +107,14 @@ func mongoVersionedFactory(t *testing.T) config.Store {
 
 // TestMongoDB_StoreConformance runs the shared [config.Store] suite.
 func TestMongoDB_StoreConformance(t *testing.T) {
+	probeMongoOnce(t)
 	storetest.RunStoreConformanceSuite(t, mongoFactory)
 }
 
 // TestMongoDB_BulkStoreConformance runs the shared [config.BulkStore]
 // suite.
 func TestMongoDB_BulkStoreConformance(t *testing.T) {
+	probeMongoOnce(t)
 	storetest.RunBulkStoreSuite(t, mongoFactory)
 }
 
@@ -130,5 +124,6 @@ func TestMongoDB_BulkStoreConformance(t *testing.T) {
 // MaxHistory, CleanupOrphans, OnVersionError hook) live in
 // version_store_test.go.
 func TestMongoDB_VersionedStoreConformance(t *testing.T) {
+	probeMongoOnce(t)
 	storetest.RunVersionedStoreSuite(t, mongoVersionedFactory)
 }

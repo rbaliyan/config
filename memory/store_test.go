@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rbaliyan/config"
+	"github.com/rbaliyan/config/internal/testutil"
 )
 
 func TestNewStore(t *testing.T) {
@@ -608,13 +609,12 @@ func TestStore_DroppedEvents(t *testing.T) {
 		_, _ = store.Set(ctx, "ns", key, config.NewValue(i))
 	}
 
-	// Wait for async notifications to complete
-	time.Sleep(200 * time.Millisecond)
-
-	dropped := store.DroppedEvents()
-	if dropped == 0 {
-		t.Error("Expected some dropped events due to full channel buffer, got 0")
-	}
+	// Wait for the async notifier to drop at least one event. Bound the
+	// wait at 2s so a stuck dispatcher fails fast under load; the early
+	// exit avoids burning the full timeout on the common case.
+	testutil.WaitUntil(t, 2*time.Second,
+		func() bool { return store.DroppedEvents() > 0 },
+		"expected dropped events after overflowing watch buffer")
 }
 
 func TestStore_DroppedEventsCallback(t *testing.T) {
@@ -646,16 +646,13 @@ func TestStore_DroppedEventsCallback(t *testing.T) {
 		_, _ = store.Set(ctx, "ns", key, config.NewValue(i))
 	}
 
-	// Wait for async notifications
-	time.Sleep(200 * time.Millisecond)
-
-	mu.Lock()
-	numDropped := len(droppedKeys)
-	mu.Unlock()
-
-	if numDropped == 0 {
-		t.Error("Expected onDropped callback to be invoked at least once")
-	}
+	// Wait for the onDropped callback to fire at least once. Bound the
+	// wait at 2s so a stuck dispatcher fails fast.
+	testutil.WaitUntil(t, 2*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(droppedKeys) > 0
+	}, "expected onDropped callback to be invoked")
 }
 
 func TestStore_FindWithEmptyPrefix(t *testing.T) {
