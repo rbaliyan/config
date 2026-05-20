@@ -5,6 +5,8 @@ go 1.26.3
 require (
 	github.com/AdamKorcz/go-118-fuzz-build v0.0.0-20250520111509-a70c2aa677fa
 	github.com/BurntSushi/toml v1.6.0
+	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/lib/pq v1.12.3
@@ -42,6 +44,7 @@ require (
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.6.11 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
