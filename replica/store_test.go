@@ -317,7 +317,15 @@ func TestStore_Find_ReadSecondary(t *testing.T) {
 	secondary := memory.NewStore()
 
 	ctx := context.Background()
+	// WithReplicationMode(ModeSync) disables the async watcher goroutine
+	// that would otherwise race the direct primary.Set below — the watcher
+	// replicates app/k1 into secondary and breaks the "ReadSecondary sees
+	// only what secondary has" assertion. The test is about Find's
+	// read-preference routing, not replication, so the async path is
+	// irrelevant here. Pinned by CI run #76901802010 (1/10 flake locally
+	// without this fix).
 	s := NewStore(primary, []config.Store{secondary},
+		WithReplicationMode(ModeSync),
 		WithReadPreference(ReadSecondary),
 	)
 	_ = s.Connect(ctx)
