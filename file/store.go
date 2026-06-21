@@ -53,6 +53,9 @@ type Store struct {
 	watchers map[*watchEntry]struct{}
 	pollStop chan struct{}
 	pollWg   sync.WaitGroup
+
+	// droppedEvents counts watch events dropped due to full subscriber buffers.
+	droppedEvents atomic.Int64
 }
 
 type storeEntry struct {
@@ -719,8 +722,18 @@ func (s *Store) sendToWatcher(we *watchEntry, event config.ChangeEvent) {
 	select {
 	case we.ch <- event:
 	default:
-		// drop event (buffer full)
+		// Channel full; drop the event and record it for observability.
+		s.droppedEvents.Add(1)
+		if s.opts.onDropped != nil {
+			s.opts.onDropped(event)
+		}
 	}
+}
+
+// DroppedEvents returns the total number of watch events dropped due to full
+// subscriber channel buffers since the store was created.
+func (s *Store) DroppedEvents() int64 {
+	return s.droppedEvents.Load()
 }
 
 // flattenMap recursively flattens a map into store entries.

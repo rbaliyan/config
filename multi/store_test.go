@@ -594,6 +594,57 @@ func TestMultiStore_Set_PartialFailure(t *testing.T) {
 	}
 }
 
+func TestMultiStore_PartialWrite_CounterAndHook(t *testing.T) {
+	f1 := &failStore{setErr: errMock}
+	store2 := memory.NewStore()
+
+	var captured *PartialWriteError
+	ms := NewStore([]config.Store{f1, store2}, WithOnWriteError(func(pe *PartialWriteError) {
+		captured = pe
+	}))
+	ctx := context.Background()
+	_ = ms.Connect(ctx)
+
+	if _, err := ms.Set(ctx, "ns", "key", config.NewValue("val")); err != nil {
+		t.Fatalf("Set should succeed (non-strict) when one store accepts the write, got %v", err)
+	}
+	if got := ms.PartialWrites(); got != 1 {
+		t.Errorf("PartialWrites() = %d, want 1", got)
+	}
+	if captured == nil {
+		t.Fatal("onWriteError hook was not invoked on partial failure")
+	}
+	if captured.Op != "set" || captured.Failed != 1 || captured.Stores != 2 {
+		t.Errorf("unexpected PartialWriteError: %+v", captured)
+	}
+	if !errors.Is(captured, errMock) {
+		t.Errorf("PartialWriteError should wrap the underlying error; got %v", captured)
+	}
+}
+
+func TestMultiStore_StrictWrites_ReturnsPartialError(t *testing.T) {
+	f1 := &failStore{setErr: errMock}
+	store2 := memory.NewStore()
+
+	ms := NewStore([]config.Store{f1, store2}, WithStrictWrites())
+	ctx := context.Background()
+	_ = ms.Connect(ctx)
+
+	result, err := ms.Set(ctx, "ns", "key", config.NewValue("val"))
+	var pe *PartialWriteError
+	if !errors.As(err, &pe) {
+		t.Fatalf("strict Set should return *PartialWriteError on partial failure, got %v", err)
+	}
+	// The value is still returned so callers can observe what was written.
+	if result == nil {
+		t.Error("expected the successfully-written value to be returned alongside the error")
+	}
+	// The write must still have reached the healthy store.
+	if _, gerr := store2.Get(ctx, "ns", "key"); gerr != nil {
+		t.Errorf("healthy store should still have received the write, got %v", gerr)
+	}
+}
+
 func TestMultiStore_Delete_EmptyStores(t *testing.T) {
 	ms := NewStore(nil)
 	ctx := context.Background()

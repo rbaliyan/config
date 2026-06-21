@@ -1,3 +1,12 @@
+// Package live keeps a typed configuration struct automatically synchronized
+// with a config.Config source.
+//
+// Ref[T] binds a struct to a key prefix and refreshes it in the background by
+// polling at a configurable interval, swapping the snapshot atomically so that
+// Load returns the latest value with lock-free, zero-contention reads. Optional
+// OnChange and OnError callbacks observe updates and reload failures; on a
+// failed reload the last good snapshot is preserved. Construct a Ref with New
+// and release its background goroutine with Close.
 package live
 
 import (

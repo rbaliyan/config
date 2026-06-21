@@ -1,3 +1,15 @@
+// Package codec defines the encoding/decoding abstraction for configuration
+// values and a global registry of named codecs.
+//
+// A Codec serializes values to and from bytes under a stable name (e.g. "json",
+// "yaml", "toml"). This package contains no concrete codec implementations;
+// importing a sub-package such as codec/json, codec/yaml, or codec/toml
+// registers that codec via its init function. Use Register to add a codec,
+// Get to look one up by name, and Default for the default codec.
+//
+// The package also defines Transformer, a reversible byte-level transformation
+// (such as encryption or compression) that composes via NewChain and underpins
+// the transform store decorator.
 package codec
 
 import (

@@ -10,6 +10,23 @@
 // For Delete operations, NotFound errors from individual stores are ignored
 // since the key may not exist in all stores (eventual consistency).
 //
+// # Partial write failures
+//
+// Because a write only needs one store to succeed, it is possible for some
+// replicas to diverge (e.g. store[0] accepts the write while store[1] is
+// unreachable). Such a partial failure is never silently discarded:
+//
+//   - [Store.PartialWrites] counts every partial-write occurrence.
+//   - [WithOnWriteError] registers a callback that receives a
+//     [*PartialWriteError] describing which replicas failed.
+//   - [WithStrictWrites] makes Set/SetMany/Delete/DeleteMany return the
+//     [*PartialWriteError] when any replica fails, trading availability for
+//     a strict all-replicas-or-fail contract.
+//
+// The default (non-strict) behavior still returns success when at least one
+// store accepts the write, so existing callers keep their availability
+// guarantee while gaining visibility into divergence.
+//
 // # Observability
 //
 // Multi-store implements HealthChecker and StatsProvider interfaces when the
@@ -20,6 +37,8 @@ package multi
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync/atomic"
 
 	"github.com/rbaliyan/config"
 )
@@ -57,7 +76,39 @@ const (
 type Store struct {
 	stores   []config.Store
 	strategy Strategy
+
+	strictWrites bool
+	onWriteError func(*PartialWriteError)
+
+	// partialWrites counts write operations that succeeded on at least one
+	// store but failed on one or more others.
+	partialWrites atomic.Int64
 }
+
+// PartialWriteError reports that a write succeeded on at least one underlying
+// store but failed on one or more others, leaving replicas potentially
+// divergent. It wraps the per-store errors so callers can inspect them with
+// errors.Is / errors.As.
+type PartialWriteError struct {
+	Op        string // operation name: "set", "set_many", "delete", "delete_many"
+	Namespace string
+	Key       string // empty for bulk operations
+	Stores    int    // total number of underlying stores
+	Failed    int    // number of stores that failed
+	Errs      []error
+}
+
+func (e *PartialWriteError) Error() string {
+	target := e.Namespace
+	if e.Key != "" {
+		target = e.Namespace + "/" + e.Key
+	}
+	return fmt.Sprintf("multi: partial %s on %q: %d of %d stores failed: %v",
+		e.Op, target, e.Failed, e.Stores, errors.Join(e.Errs...))
+}
+
+// Unwrap exposes the per-store errors for errors.Is / errors.As.
+func (e *PartialWriteError) Unwrap() []error { return e.Errs }
 
 // Option configures the multi-store.
 type Option func(*Store)
@@ -67,6 +118,60 @@ func WithStrategy(s Strategy) Option {
 	return func(ms *Store) {
 		ms.strategy = s
 	}
+}
+
+// WithStrictWrites makes write operations (Set, SetMany, Delete, DeleteMany)
+// return a [*PartialWriteError] whenever any underlying store fails, even if
+// others succeed. This trades the default availability behavior (success when
+// at least one store accepts the write) for a strict all-replicas-or-fail
+// contract. The write is still attempted against every store before the error
+// is returned.
+func WithStrictWrites() Option {
+	return func(ms *Store) {
+		ms.strictWrites = true
+	}
+}
+
+// WithOnWriteError registers a callback invoked whenever a write partially
+// fails — succeeding on at least one store while failing on others. It is
+// invoked regardless of WithStrictWrites and runs synchronously on the write
+// path, so it must be fast and must not block. Use it for logging or metrics.
+func WithOnWriteError(fn func(*PartialWriteError)) Option {
+	return func(ms *Store) {
+		ms.onWriteError = fn
+	}
+}
+
+// PartialWrites returns the number of write operations that succeeded on at
+// least one store but failed on one or more others since the store was created.
+func (ms *Store) PartialWrites() int64 {
+	return ms.partialWrites.Load()
+}
+
+// reportPartial records a partial write (succeeded somewhere, failed somewhere).
+// It increments the partial-write counter, invokes the onWriteError callback if
+// set, and returns a non-nil error only when strict writes are enabled. When
+// errs is empty it is a no-op returning nil.
+func (ms *Store) reportPartial(op, namespace, key string, errs []error) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	ms.partialWrites.Add(1)
+	pe := &PartialWriteError{
+		Op:        op,
+		Namespace: namespace,
+		Key:       key,
+		Stores:    len(ms.stores),
+		Failed:    len(errs),
+		Errs:      errs,
+	}
+	if ms.onWriteError != nil {
+		ms.onWriteError(pe)
+	}
+	if ms.strictWrites {
+		return pe
+	}
+	return nil
 }
 
 // NewStore creates a multi-store from the given stores with optional configuration.
@@ -186,6 +291,9 @@ func (ms *Store) Set(ctx context.Context, namespace, key string, value config.Va
 	if result == nil && len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
+	if err := ms.reportPartial("set", namespace, key, errs); err != nil {
+		return result, err
+	}
 	return result, nil
 }
 
@@ -223,7 +331,7 @@ func (ms *Store) Delete(ctx context.Context, namespace, key string) error {
 	if !succeeded && len(errs) > 0 {
 		return errors.Join(errs...)
 	}
-	return nil
+	return ms.reportPartial("delete", namespace, key, errs)
 }
 
 // Find searches for values in the primary store only.
@@ -448,7 +556,7 @@ func (ms *Store) SetMany(ctx context.Context, namespace string, values map[strin
 	if !succeeded && len(errs) > 0 {
 		return errors.Join(errs...)
 	}
-	return nil
+	return ms.reportPartial("set_many", namespace, "", errs)
 }
 
 // DeleteMany removes multiple values from all stores.
@@ -496,6 +604,9 @@ func (ms *Store) DeleteMany(ctx context.Context, namespace string, keys []string
 
 	if !succeeded && len(errs) > 0 {
 		return 0, errors.Join(errs...)
+	}
+	if err := ms.reportPartial("delete_many", namespace, "", errs); err != nil {
+		return maxDeleted, err
 	}
 	return maxDeleted, nil
 }

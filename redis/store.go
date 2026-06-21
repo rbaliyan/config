@@ -154,6 +154,9 @@ type Store struct {
 	watchers map[*watchEntry]struct{}
 	stopChan chan struct{}
 	stopWg   sync.WaitGroup
+
+	// droppedEvents counts watch events dropped due to full subscriber buffers.
+	droppedEvents atomic.Int64
 }
 
 var (
