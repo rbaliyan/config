@@ -11,7 +11,7 @@ A type-safe, namespace-aware configuration library for Go with support for multi
 
 ## Features
 
-- **Multiple Storage Backends**: Memory, PostgreSQL, MongoDB, SQLite, File, Redis, Kubernetes (ConfigMaps/Secrets)
+- **Multiple Storage Backends**: Memory, PostgreSQL, MongoDB, SQLite, File, Redis, etcd, Kubernetes (ConfigMaps/Secrets)
 - **Version History**: Retrieve and paginate historical versions of any config key
 - **Multi-Store**: Combine stores for caching, fallback, or replication patterns
 - **Namespace Isolation**: Organize configuration by environment, tenant, or service
@@ -84,7 +84,7 @@ func main() {
 
     // Unmarshal into a typed variable
     var timeout int
-    if err := val.Unmarshal(&timeout); err != nil {
+    if err := val.Unmarshal(ctx, &timeout); err != nil {
         log.Fatal(err)
     }
 
@@ -147,10 +147,22 @@ store := mongodb.NewStore(client,
 
 Lightweight persistent storage with no external dependencies.
 
-```go
-import "github.com/rbaliyan/config/sqlite"
+The store does not manage the database connection lifecycle: open the `*sql.DB`
+yourself and pass it in.
 
-store := sqlite.NewStore("config.db",
+```go
+import (
+    "database/sql"
+
+    "github.com/rbaliyan/config/sqlite"
+)
+
+db, err := sql.Open("sqlite3", "config.db")
+if err != nil {
+    log.Fatal(err)
+}
+
+store := sqlite.NewStore(db,
     sqlite.WithTable("config_entries"),
 )
 ```
@@ -197,19 +209,49 @@ cluster := redis.NewStore(
 )
 ```
 
+### etcd Store
+
+Persistent storage backed by etcd v3. Values are stored as JSON envelopes that
+preserve the codec name and metadata across round-trips, and the namespace is
+used as the etcd key prefix (`/<namespace>/<key>`, or `/<key>` for the default
+empty namespace). Real-time `Watch` is served by etcd's native watch API.
+
+```go
+import (
+    clientv3 "go.etcd.io/etcd/client/v3"
+
+    "github.com/rbaliyan/config/etcd"
+)
+
+client, err := clientv3.New(clientv3.Config{
+    Endpoints: []string{"etcd.internal:2379"},
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+store, err := etcd.New(client, "prod",     // namespace = etcd key prefix
+    etcd.WithWatchBufferSize(128),         // Watch channel buffer (default 64)
+)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
 ### Kubernetes Store
 
-Persistent storage backed by Kubernetes ConfigMaps and Secrets, with real-time `Watch` via informers. Config namespaces map to Kubernetes namespaces (or a single fixed namespace via `WithK8sNamespace`). Each config namespace is backed by one ConfigMap named `config-{namespace}`; keys prefixed with `secret/` (configurable via `WithSecretKeyPrefix`) are routed to a Secret named `config-secrets-{namespace}` instead.
+Persistent storage backed by Kubernetes ConfigMaps and Secrets, with real-time `Watch`. Config namespaces map to Kubernetes namespaces (or a single fixed namespace via `WithK8sNamespace`). Each config namespace is backed by one ConfigMap named `config-{namespace}`; keys prefixed with `secret/` (configurable via `WithSecretKeyPrefix`) are routed to a Secret named `config-secrets-{namespace}` instead.
 
-This store is in a separate Go module (`github.com/rbaliyan/config/k8s`) to keep `client-go` out of the core module.
+The k8s store ships in the main module and imports no `k8s.io/*` packages. Instead of a `kubernetes.Clientset`, `NewStore` takes a narrow `Client` interface (Get/Upsert/Watch/Health) that the caller supplies. A reference adapter built on `kubernetes.Interface` lives in a separate module at `k8s/example` (so `client-go` stays out of the core module); import it directly or copy it into your project.
 
 ```bash
-go get github.com/rbaliyan/config/k8s
+go get github.com/rbaliyan/config/k8s/example
 ```
 
 ```go
 import (
     "github.com/rbaliyan/config/k8s"
+    kubeclient "github.com/rbaliyan/config/k8s/example"
     "k8s.io/client-go/kubernetes"
     "k8s.io/client-go/tools/clientcmd"
 )
@@ -217,12 +259,12 @@ import (
 clientConfig, _ := clientcmd.BuildConfigFromFlags("", "/path/to/kubeconfig")
 clientset, _ := kubernetes.NewForConfig(clientConfig)
 
-store := k8s.NewStore(clientset,
+adapter := kubeclient.New(clientset) // kubernetes.Interface -> k8s.Client
+store := k8s.NewStore(adapter,
     k8s.WithK8sNamespace("my-app"),       // restrict to one k8s namespace
     k8s.WithSecretKeyPrefix("secret/"),   // keys with this prefix -> Secrets
-    k8s.WithResyncPeriod(10*time.Minute),
 )
-if err := store.Connect(ctx); err != nil { // waits for informer cache sync
+if err := store.Connect(ctx); err != nil { // establishes the Client and starts the watch (no cache sync)
     return err
 }
 defer store.Close(ctx)
@@ -251,7 +293,7 @@ num, err := val.Float64()
 
 // Unmarshal into any type
 var dbConfig DatabaseConfig
-if err := val.Unmarshal(&dbConfig); err != nil {
+if err := val.Unmarshal(ctx, &dbConfig); err != nil {
     return err
 }
 
@@ -470,17 +512,17 @@ import "github.com/rbaliyan/config/multi"
 // Cache + Backend pattern
 cacheStore := memory.NewStore()
 backendStore := postgres.NewStore(db, listener)
-store := multi.NewStoreWithOptions(
+store := multi.NewStore(
     []config.Store{cacheStore, backendStore},
-    []multi.Option{multi.WithStrategy(multi.StrategyReadThrough)},
+    multi.WithStrategy(multi.StrategyReadThrough),
 )
 
 // Primary + Backup pattern
 primaryStore := postgres.NewStore(primaryDB, primaryListener)
 backupStore := postgres.NewStore(backupDB, backupListener)
-store := multi.NewStoreWithOptions(
+store := multi.NewStore(
     []config.Store{primaryStore, backupStore},
-    []multi.Option{multi.WithStrategy(multi.StrategyFallback)},
+    multi.WithStrategy(multi.StrategyFallback),
 )
 
 mgr, _ := config.New(config.WithStore(store))
@@ -508,9 +550,32 @@ if err := store.Health(ctx); err != nil {
 // Statistics (if underlying stores implement StatsProvider)
 stats, err := store.Stats(ctx)
 if err == nil {
-    log.Printf("Total entries: %d", stats.TotalEntries)
+    log.Printf("Total entries: %d", stats.TotalEntries())
 }
 ```
+
+Because a write only needs one store to succeed, replicas can diverge when some
+stores are temporarily unavailable. Such partial failures are never silently
+discarded:
+
+```go
+store := multi.NewStore(
+    []config.Store{primaryStore, backupStore},
+    // Surface partial write failures via a callback (logging/metrics).
+    multi.WithOnWriteError(func(e *multi.PartialWriteError) {
+        log.Printf("partial write %s %s/%s: %d of %d replicas failed",
+            e.Op, e.Namespace, e.Key, e.Failed, e.Stores)
+    }),
+    // Optionally fail the write outright when any replica fails,
+    // trading availability for an all-replicas-or-fail contract.
+    multi.WithStrictWrites(),
+)
+
+// Count partial writes observed since the store was created.
+log.Printf("partial writes: %d", store.PartialWrites())
+```
+
+For primary/secondary replication with synchronous or asynchronous propagation and configurable read preferences, see the dedicated `replica` package (`replica.NewStore(primary, secondaries, ...)`).
 
 ## OpenTelemetry Instrumentation
 
@@ -534,6 +599,33 @@ Metrics exported:
 - `config.operations.total` - Counter of all operations
 - `config.errors.total` - Counter of errors by type
 - `config.operation.duration` - Histogram of operation latency
+
+## Transform Store
+
+`transform.WrapStore` decorates any `config.Store` with a `codec.Transformer` — a
+reversible byte-level transformation such as encryption or compression. The
+forward transform is applied on `Set` (before writing) and the reverse on `Get`
+(after reading), so values are stored transformed and returned in their original
+form. The wrapper transparently forwards the optional `HealthChecker`,
+`StatsProvider`, `BulkStore`, and `VersionedStore` interfaces to the inner store,
+and exposes `Unwrap()` to retrieve it.
+
+```go
+import (
+    "github.com/rbaliyan/config/codec"
+    "github.com/rbaliyan/config/transform"
+)
+
+// transformer implements codec.Transformer (Name/Transform/Reverse).
+store, err := transform.WrapStore(backendStore, transformer,
+    transform.WithWatchBufferSize(128), // Watch output channel buffer (default 100)
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+mgr, _ := config.New(config.WithStore(store))
+```
 
 ## Struct Binding
 
@@ -608,7 +700,7 @@ type DatabaseConfig struct {
 }
 
 ref, err := live.New[DatabaseConfig](ctx, cfg, "database",
-    live.PollInterval(10*time.Second),
+    live.WithRefPollInterval[DatabaseConfig](10*time.Second),
     live.OnChange(func(old, new DatabaseConfig) {
         log.Printf("config changed: %s -> %s", old.Host, new.Host)
     }),
@@ -629,7 +721,7 @@ http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 ```
 
 Options:
-- `PollInterval(d)` - Set polling interval (default: 30s)
+- `WithRefPollInterval(d)` - Set polling interval (default: 30s)
 - `OnChange(fn)` - Callback with old and new values on change
 - `OnError(fn)` - Callback on reload error
 
@@ -746,7 +838,10 @@ database:
 ```go
 import "github.com/rbaliyan/config/expand"
 
-inner, _ := memory.NewStore(), inner.Connect(ctx)
+inner := memory.NewStore()
+if err := inner.Connect(ctx); err != nil {
+    log.Fatal(err)
+}
 
 s, err := expand.NewStore(inner,
     expand.WithDollarExpander(expand.EnvExpander()),  // ${VAR}
@@ -769,15 +864,18 @@ type AppConfig struct {
 }
 
 var cfg AppConfig
-// Decode from YAML/JSON/TOML: Secret.Value() holds the real string.
+// Decode from YAML/JSON/TOML: Bytes() holds the real plaintext.
 yaml.Unmarshal(data, &cfg)
 
-fmt.Println(cfg.DBPassword)        // ******
-log.Info("config loaded", "cfg", cfg) // *** no leak ***
-realPwd := cfg.DBPassword.Value()  // "actual-password"
+fmt.Println(cfg.DBPassword)                  // ******
+log.Info("config loaded", "cfg", cfg)        // *** no leak ***
+realPwd := string(cfg.DBPassword.Bytes())    // "actual-password"
 
-// Marshal back to YAML/JSON: non-zero Secret writes "******", zero writes "".
-out, _ := yaml.Marshal(cfg)
+// Marshal to JSON always masks: a Secret marshals as "******" whether zero or not.
+out, _ := json.Marshal(cfg)
+// Marshal to text (YAML/TOML) is zero-aware: a non-zero Secret writes "******",
+// while a zero Secret writes "" so round-tripped files are not polluted.
+yamlOut, _ := yaml.Marshal(cfg)
 
 // IsZero reports whether no value has been set.
 if cfg.APIKey.IsZero() {

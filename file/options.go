@@ -59,6 +59,7 @@ import (
 	"time"
 
 	"github.com/go-viper/mapstructure/v2"
+	"github.com/rbaliyan/config"
 )
 
 // LoaderOption configures a Loader.
@@ -129,6 +130,7 @@ type storeOptions struct {
 	watchBufSize     int           // default 100
 	expander         ExpanderFunc  // nil means no ${VAR} expansion
 	angleExpander    ExpanderFunc  // nil means no <VAR> expansion
+	onDropped        func(event config.ChangeEvent) // optional callback when a watch event is dropped
 }
 
 // WithKeySeparator sets the separator used for flattened nested keys.
@@ -192,6 +194,16 @@ func WithWatchBufferSize(n int) StoreOption {
 		if n > 0 {
 			o.watchBufSize = n
 		}
+	}
+}
+
+// WithOnDropped sets a callback invoked when a watch event is dropped because
+// a subscriber's channel buffer is full. Use it for logging or metrics. The
+// callback runs synchronously on the notify path, so it must be fast and must
+// not block. The dropped-event count is also available via Store.DroppedEvents.
+func WithOnDropped(fn func(event config.ChangeEvent)) StoreOption {
+	return func(o *storeOptions) {
+		o.onDropped = fn
 	}
 }
 

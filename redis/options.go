@@ -34,6 +34,8 @@ package redis
 import (
 	"crypto/tls"
 	"time"
+
+	"github.com/rbaliyan/config"
 )
 
 type storeOptions struct {
@@ -47,6 +49,7 @@ type storeOptions struct {
 	writeTimeout time.Duration
 	tlsConfig    *tls.Config
 	clusterAddrs []string
+	onDropped    func(event config.ChangeEvent) // optional callback when a watch event is dropped
 }
 
 func defaultOptions() storeOptions {
@@ -154,5 +157,15 @@ func WithWriteTimeout(d time.Duration) Option {
 		if d > 0 {
 			o.writeTimeout = d
 		}
+	}
+}
+
+// WithOnDropped sets a callback invoked when a watch event is dropped because
+// a subscriber's channel buffer is full. Use it for logging or metrics. The
+// callback runs synchronously on the notify path, so it must be fast and must
+// not block. The dropped-event count is also available via Store.DroppedEvents.
+func WithOnDropped(fn func(event config.ChangeEvent)) Option {
+	return func(o *storeOptions) {
+		o.onDropped = fn
 	}
 }

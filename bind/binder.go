@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"log/slog"
 	"maps"
 	"slices"
 
@@ -23,6 +24,7 @@ type Binder struct {
 	validator *TagValidator // nil means no validation
 	fieldTag  string        // struct tag for field mapping (default: "json")
 	mapper    *FieldMapper  // field mapper for struct conversion
+	logger    *slog.Logger  // logs entries skipped during struct mapping
 }
 
 // New creates a new Binder wrapping the given Config.
@@ -31,6 +33,7 @@ func New(cfg config.Config, opts ...Option) *Binder {
 		cfg:      cfg,
 		codec:    codec.Default(),
 		fieldTag: "json", // default tag
+		logger:   slog.Default(),
 	}
 
 	for _, opt := range opts {
@@ -54,6 +57,20 @@ func (b *Binder) Bind() StructConfig {
 // Config returns the underlying Config interface.
 func (b *Binder) Config() config.Config {
 	return b.cfg
+}
+
+// logSkippedEntry logs a config entry that could not be decoded during struct
+// mapping. It is a no-op when no logger is configured.
+func (b *Binder) logSkippedEntry(ctx context.Context, op, prefix, entryKey string, err error) {
+	if b.logger == nil {
+		return
+	}
+	b.logger.WarnContext(ctx, "bind: skipping undecodable config entry",
+		"op", op,
+		"prefix", prefix,
+		"key", entryKey,
+		"error", err,
+	)
 }
 
 // Validate validates a struct using tag-based validation.
@@ -113,6 +130,10 @@ func (bc *boundConfig) GetStruct(ctx context.Context, key string, target any) er
 	for entryKey, val := range entries {
 		var value any
 		if err := val.Unmarshal(ctx, &value); err != nil {
+			// Skip entries that fail to decode rather than failing the whole
+			// bind (the prefix may match sibling keys that aren't part of the
+			// target struct), but log so the drop is observable.
+			bc.binder.logSkippedEntry(ctx, "GetStruct", key, entryKey, err)
 			continue
 		}
 		data[entryKey] = value
@@ -155,6 +176,9 @@ func (bc *boundConfig) GetStructDigest(ctx context.Context, key string, target a
 	for entryKey, val := range entries {
 		var value any
 		if err := val.Unmarshal(ctx, &value); err != nil {
+			// Skipped entries are excluded from the digest; log so a key that
+			// flips to undecodable doesn't silently change the digest unseen.
+			bc.binder.logSkippedEntry(ctx, "GetStructDigest", key, entryKey, err)
 			continue
 		}
 		data[entryKey] = value

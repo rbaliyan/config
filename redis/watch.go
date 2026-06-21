@@ -42,5 +42,16 @@ func (s *Store) sendToWatcher(we *watchEntry, event config.ChangeEvent) {
 	select {
 	case we.ch <- event:
 	default:
+		// Channel full; drop the event and record it for observability.
+		s.droppedEvents.Add(1)
+		if s.opts.onDropped != nil {
+			s.opts.onDropped(event)
+		}
 	}
+}
+
+// DroppedEvents returns the total number of watch events dropped due to full
+// subscriber channel buffers since the store was created.
+func (s *Store) DroppedEvents() int64 {
+	return s.droppedEvents.Load()
 }

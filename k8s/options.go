@@ -1,5 +1,7 @@
 package k8s
 
+import "github.com/rbaliyan/config"
+
 const (
 	defaultSecretPrefix = "secret/"
 	defaultWatchBufSize = 100
@@ -9,6 +11,8 @@ type storeOptions struct {
 	k8sNamespace string // k8s namespace to scope to; "" = all namespaces
 	secretPrefix string // config keys with this prefix → Secret; default "secret/"
 	watchBufSize int    // per-subscriber buffer for Store.Watch channels; default 100
+
+	onDropped func(event config.ChangeEvent) // optional callback when a watch event is dropped
 }
 
 func defaultOptions() storeOptions {
@@ -50,5 +54,15 @@ func WithWatchBufferSize(n int) Option {
 		if n > 0 {
 			o.watchBufSize = n
 		}
+	}
+}
+
+// WithOnDropped sets a callback invoked when a watch event is dropped because
+// a subscriber's channel buffer is full. Use it for logging or metrics. The
+// callback runs synchronously on the notify path, so it must be fast and must
+// not block. The dropped-event count is also available via Store.DroppedEvents.
+func WithOnDropped(fn func(event config.ChangeEvent)) Option {
+	return func(o *storeOptions) {
+		o.onDropped = fn
 	}
 }

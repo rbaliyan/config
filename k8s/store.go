@@ -83,6 +83,9 @@ type Store struct {
 
 	watchMu  sync.RWMutex
 	watchers map[*watchEntry]struct{}
+
+	// droppedEvents counts watch events dropped due to full subscriber buffers.
+	droppedEvents atomic.Int64
 }
 
 var (
@@ -109,8 +112,18 @@ func (s *Store) BackendName() string { return "k8s" }
 
 // Connect starts the background watch loop. The first read after Connect
 // hits the Kubernetes API via the Client; there is no initial cache sync.
-// The watch lifetime is bounded by Close, not by ctx — ctx is only used for
-// validation prior to starting the watch.
+//
+// The watch lifetime is bounded by Close, not by the Connect ctx: the watch
+// must outlive the (often short-lived) ctx passed to Connect. To make Close a
+// full teardown, the upstream client.Watch is driven by an internal
+// store-scoped context that Close cancels — so closing the store also cancels
+// the Kubernetes watch stream, not just the local fan-out goroutine. The
+// Connect ctx is used only for validation prior to starting the watch.
+//
+// Connect and Close manage the watchCtx/watchCancel/watchDone lifecycle fields
+// without a mutex (only the connected/closed atomics gate them), so they are
+// not safe to call concurrently with each other or while Watch is running.
+// Drive the store's lifecycle (Connect → use → Close) from a single goroutine.
 func (s *Store) Connect(ctx context.Context) error {
 	if s.closed.Load() {
 		return config.ErrStoreClosed
@@ -119,13 +132,17 @@ func (s *Store) Connect(ctx context.Context) error {
 		return nil // already connected
 	}
 
-	events, err := s.client.Watch(context.Background(), s.opts.k8sNamespace)
+	// Establish the store-scoped watch context first so it bounds the upstream
+	// watch stream as well as the local fan-out goroutine.
+	s.watchCtx, s.watchCancel = context.WithCancel(context.Background())
+
+	events, err := s.client.Watch(s.watchCtx, s.opts.k8sNamespace)
 	if err != nil {
+		s.watchCancel()
 		s.connected.Store(false)
 		return config.WrapStoreError("connect", "k8s", "watch", err)
 	}
 
-	s.watchCtx, s.watchCancel = context.WithCancel(context.Background())
 	s.watchDone = make(chan struct{})
 
 	go s.runWatch(events)

@@ -1,11 +1,23 @@
 package bind
 
 import (
+	"log/slog"
+
 	"github.com/rbaliyan/config/codec"
 )
 
 // Option configures the Binder.
 type Option func(*Binder)
+
+// WithLogger sets the logger used to report config entries that are skipped
+// because they could not be decoded during struct mapping (GetStruct /
+// GetStructDigest). Defaults to slog.Default(). Pass a logger backed by
+// io.Discard to silence these warnings.
+func WithLogger(logger *slog.Logger) Option {
+	return func(b *Binder) {
+		b.logger = logger
+	}
+}
 
 // WithCodec sets the codec for encoding/decoding values.
 func WithCodec(c codec.Codec) Option {

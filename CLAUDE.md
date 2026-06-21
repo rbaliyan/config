@@ -257,14 +257,14 @@ BSON storage. Codecs that do not implement `BSONValueCodec` are stored as BinDat
 val := config.NewValue(42, config.WithValueType(config.TypeInt))
 
 // Create from bytes
-val, err := config.NewValueFromBytes(data, "json",
+val, err := config.NewValueFromBytes(ctx, data, "json",
     config.WithValueType(config.TypeInt),
     config.WithValueMetadata(version, createdAt, updatedAt),
 )
 
 // Access methods (Value interface) - return errors
-data, err := val.Marshal()
-err = val.Unmarshal(&target)
+data, err := val.Marshal(ctx)
+err = val.Unmarshal(ctx, &target)
 i, err := val.Int64()   // Error if not convertible
 s, err := val.String()  // Error if not convertible
 meta := val.Metadata()
@@ -281,17 +281,7 @@ The `Value` interface provides error-returning methods for type-safe access:
 | `String()` | `(string, error)` | Error if not convertible |
 | `Bool()` | `(bool, error)` | Error if not convertible |
 
-The concrete value type (unexported `val`) also provides convenience methods (zero on error):
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `Int()` | `int` | Returns 0 on error |
-| `Float()` | `float64` | Returns 0.0 on error |
-| `BoolValue()` | `bool` | Returns false on error |
-| `IntOr(default)` | `int` | Returns default on error |
-| `FloatOr(default)` | `float64` | Returns default on error |
-
-**Best Practice**: Use error-returning methods (`Int64()`, `String()`, etc.) when you need to handle errors. Use convenience methods (`Int()`, `IntOr()`) for cases where a default value is acceptable.
+**Best Practice**: Use the error-returning methods (`Int64()`, `Float64()`, `String()`, `Bool()`) so type-mismatch and not-found errors are handled explicitly.
 
 ## Testing
 
