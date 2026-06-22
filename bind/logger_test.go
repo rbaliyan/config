@@ -27,6 +27,7 @@ func (undecodableValue) Unmarshal(context.Context, any) error {
 // decode is skipped (so the bind still succeeds for the decodable siblings)
 // but is logged via the configured WithLogger, rather than dropped silently.
 func TestGetStruct_LogsUndecodableEntry(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := memory.NewStore()
 	mgr, err := config.New(config.WithStore(store))

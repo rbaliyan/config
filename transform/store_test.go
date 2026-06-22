@@ -45,6 +45,7 @@ func newTestStore(t *testing.T) (*transformStore, *memory.Store) {
 }
 
 func TestWrapStore_NilStore(t *testing.T) {
+	t.Parallel()
 	_, err := WrapStore(nil, &xorTransformer{key: 0x42})
 	if err == nil {
 		t.Fatal("expected error for nil store")
@@ -52,6 +53,7 @@ func TestWrapStore_NilStore(t *testing.T) {
 }
 
 func TestWrapStore_NilTransformer(t *testing.T) {
+	t.Parallel()
 	_, err := WrapStore(memory.NewStore(), nil)
 	if err == nil {
 		t.Fatal("expected error for nil transformer")
@@ -59,6 +61,7 @@ func TestWrapStore_NilTransformer(t *testing.T) {
 }
 
 func TestUnwrap(t *testing.T) {
+	t.Parallel()
 	inner := memory.NewStore()
 	s, err := WrapStore(inner, &xorTransformer{key: 0x42})
 	if err != nil {
@@ -70,6 +73,7 @@ func TestUnwrap(t *testing.T) {
 }
 
 func TestRoundTrip(t *testing.T) {
+	t.Parallel()
 	ts, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -103,6 +107,7 @@ func TestRoundTrip(t *testing.T) {
 }
 
 func TestStoredBytesAreTransformed(t *testing.T) {
+	t.Parallel()
 	ts, inner := newTestStore(t)
 	ctx := context.Background()
 
@@ -131,6 +136,7 @@ func TestStoredBytesAreTransformed(t *testing.T) {
 }
 
 func TestMetadataPreservation(t *testing.T) {
+	t.Parallel()
 	ts, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -161,6 +167,7 @@ func TestMetadataPreservation(t *testing.T) {
 }
 
 func TestFind(t *testing.T) {
+	t.Parallel()
 	ts, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -206,6 +213,7 @@ func TestFind(t *testing.T) {
 }
 
 func TestWatch(t *testing.T) {
+	t.Parallel()
 	ts, _ := newTestStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -258,6 +266,7 @@ func TestWatch(t *testing.T) {
 }
 
 func TestWatchContextCancellation(t *testing.T) {
+	t.Parallel()
 	ts, _ := newTestStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -282,6 +291,7 @@ func TestWatchContextCancellation(t *testing.T) {
 }
 
 func TestBulkStore(t *testing.T) {
+	t.Parallel()
 	ts, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -335,6 +345,7 @@ func TestBulkStore(t *testing.T) {
 }
 
 func TestOptionalInterfaces(t *testing.T) {
+	t.Parallel()
 	ts, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -359,6 +370,7 @@ func TestOptionalInterfaces(t *testing.T) {
 }
 
 func TestWithWatchBufferSize(t *testing.T) {
+	t.Parallel()
 	inner := memory.NewStore()
 	s, err := WrapStore(inner, &xorTransformer{key: 0x42}, WithWatchBufferSize(10))
 	if err != nil {

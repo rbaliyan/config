@@ -10,6 +10,7 @@ import (
 )
 
 func TestTagValidatorRequiredString(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -25,6 +26,7 @@ func TestTagValidatorRequiredString(t *testing.T) {
 }
 
 func TestTagValidatorRequiredInt(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -40,6 +42,7 @@ func TestTagValidatorRequiredInt(t *testing.T) {
 }
 
 func TestTagValidatorRequiredBool(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -55,6 +58,7 @@ func TestTagValidatorRequiredBool(t *testing.T) {
 }
 
 func TestTagValidatorRequiredPointer(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -71,6 +75,7 @@ func TestTagValidatorRequiredPointer(t *testing.T) {
 }
 
 func TestTagValidatorMinInt(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -89,6 +94,7 @@ func TestTagValidatorMinInt(t *testing.T) {
 }
 
 func TestTagValidatorMinUint(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -107,6 +113,7 @@ func TestTagValidatorMinUint(t *testing.T) {
 }
 
 func TestTagValidatorMinFloat(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -125,6 +132,7 @@ func TestTagValidatorMinFloat(t *testing.T) {
 }
 
 func TestTagValidatorMinString(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -143,6 +151,7 @@ func TestTagValidatorMinString(t *testing.T) {
 }
 
 func TestTagValidatorMinSlice(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -158,6 +167,7 @@ func TestTagValidatorMinSlice(t *testing.T) {
 }
 
 func TestTagValidatorMinMap(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -173,6 +183,7 @@ func TestTagValidatorMinMap(t *testing.T) {
 }
 
 func TestTagValidatorMinInvalidValue(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -186,6 +197,7 @@ func TestTagValidatorMinInvalidValue(t *testing.T) {
 }
 
 func TestTagValidatorMaxInt(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -204,6 +216,7 @@ func TestTagValidatorMaxInt(t *testing.T) {
 }
 
 func TestTagValidatorMaxUint(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -219,6 +232,7 @@ func TestTagValidatorMaxUint(t *testing.T) {
 }
 
 func TestTagValidatorMaxFloat(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -234,6 +248,7 @@ func TestTagValidatorMaxFloat(t *testing.T) {
 }
 
 func TestTagValidatorMaxString(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -249,6 +264,7 @@ func TestTagValidatorMaxString(t *testing.T) {
 }
 
 func TestTagValidatorMaxSlice(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -264,6 +280,7 @@ func TestTagValidatorMaxSlice(t *testing.T) {
 }
 
 func TestTagValidatorMaxMap(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -279,6 +296,7 @@ func TestTagValidatorMaxMap(t *testing.T) {
 }
 
 func TestTagValidatorMaxInvalidValue(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -292,6 +310,7 @@ func TestTagValidatorMaxInvalidValue(t *testing.T) {
 }
 
 func TestTagValidatorEnumString(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -309,6 +328,7 @@ func TestTagValidatorEnumString(t *testing.T) {
 }
 
 func TestTagValidatorEnumInt(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -327,6 +347,7 @@ func TestTagValidatorEnumInt(t *testing.T) {
 }
 
 func TestTagValidatorEnumUint(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -342,6 +363,7 @@ func TestTagValidatorEnumUint(t *testing.T) {
 }
 
 func TestTagValidatorEnumNonComparable(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -355,6 +377,7 @@ func TestTagValidatorEnumNonComparable(t *testing.T) {
 }
 
 func TestTagValidatorPatternValid(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -370,6 +393,7 @@ func TestTagValidatorPatternValid(t *testing.T) {
 }
 
 func TestTagValidatorPatternInvalidRegex(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -383,6 +407,7 @@ func TestTagValidatorPatternInvalidRegex(t *testing.T) {
 }
 
 func TestTagValidatorPatternNonString(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -396,6 +421,7 @@ func TestTagValidatorPatternNonString(t *testing.T) {
 }
 
 func TestTagValidatorCombinedRules(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -414,6 +440,7 @@ func TestTagValidatorCombinedRules(t *testing.T) {
 }
 
 func TestTagValidatorNestedStruct(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type Inner struct {
@@ -432,6 +459,7 @@ func TestTagValidatorNestedStruct(t *testing.T) {
 }
 
 func TestTagValidatorNestedStructPointer(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type Inner struct {
@@ -454,6 +482,7 @@ func TestTagValidatorNestedStructPointer(t *testing.T) {
 }
 
 func TestTagValidatorPointerInput(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -469,6 +498,7 @@ func TestTagValidatorPointerInput(t *testing.T) {
 }
 
 func TestTagValidatorNilPointerInput(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	if err := v.Validate((*struct{})(nil)); err != nil {
@@ -477,6 +507,7 @@ func TestTagValidatorNilPointerInput(t *testing.T) {
 }
 
 func TestTagValidatorNonStructInput(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	if err := v.Validate("not a struct"); err != nil {
@@ -488,6 +519,7 @@ func TestTagValidatorNonStructInput(t *testing.T) {
 }
 
 func TestTagValidatorSkipDash(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -502,6 +534,7 @@ func TestTagValidatorSkipDash(t *testing.T) {
 }
 
 func TestTagValidatorUnknownRule(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -515,6 +548,7 @@ func TestTagValidatorUnknownRule(t *testing.T) {
 }
 
 func TestTagValidatorNestedFieldPrefix(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type Inner struct {
@@ -538,6 +572,7 @@ func TestTagValidatorNestedFieldPrefix(t *testing.T) {
 }
 
 func TestTagValidatorCustomTagName(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("check")
 
 	type S struct {
@@ -554,6 +589,7 @@ func TestTagValidatorCustomTagName(t *testing.T) {
 }
 
 func TestParseTagRules(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		tag   string
 		count int
@@ -568,6 +604,7 @@ func TestParseTagRules(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.tag, func(t *testing.T) {
+			t.Parallel()
 			rules := parseTagRules(tt.tag)
 			if len(rules) != tt.count {
 				t.Errorf("expected %d rules, got %d", tt.count, len(rules))
@@ -580,6 +617,7 @@ func TestParseTagRules(t *testing.T) {
 }
 
 func TestParseTagRulesWithValues(t *testing.T) {
+	t.Parallel()
 	rules := parseTagRules("min=1,max=100,enum=a|b|c")
 	if len(rules) != 3 {
 		t.Fatalf("expected 3 rules, got %d", len(rules))
@@ -596,6 +634,7 @@ func TestParseTagRulesWithValues(t *testing.T) {
 }
 
 func TestValidationErrorFormatting(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		err      *ValidationError
@@ -630,6 +669,7 @@ func TestValidationErrorFormatting(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := tt.err.Error()
 			if got != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, got)
@@ -639,6 +679,7 @@ func TestValidationErrorFormatting(t *testing.T) {
 }
 
 func TestValidationErrorValue(t *testing.T) {
+	t.Parallel()
 	err := &ValidationError{
 		Key:    "config",
 		Field:  "Port",
@@ -652,6 +693,7 @@ func TestValidationErrorValue(t *testing.T) {
 }
 
 func TestValidationErrorUnwrap(t *testing.T) {
+	t.Parallel()
 	underlying := fmt.Errorf("custom error")
 	err := &ValidationError{Err: underlying}
 	if !errors.Is(err, underlying) {
@@ -668,6 +710,7 @@ func TestValidationErrorUnwrap(t *testing.T) {
 }
 
 func TestBindErrorFormatting(t *testing.T) {
+	t.Parallel()
 	err := &BindError{
 		Key: "database",
 		Op:  "marshal",
@@ -681,6 +724,7 @@ func TestBindErrorFormatting(t *testing.T) {
 }
 
 func TestBindErrorUnwrap(t *testing.T) {
+	t.Parallel()
 	underlying := fmt.Errorf("inner error")
 	err := &BindError{Key: "k", Op: "op", Err: underlying}
 	if !errors.Is(err, underlying) {
@@ -697,6 +741,7 @@ func TestBindErrorUnwrap(t *testing.T) {
 }
 
 func TestIsValidationErrorWrapped(t *testing.T) {
+	t.Parallel()
 	inner := &ValidationError{Key: "test", Reason: "fail"}
 	wrapped := fmt.Errorf("wrap: %w", inner)
 	if !IsValidationError(wrapped) {
@@ -705,6 +750,7 @@ func TestIsValidationErrorWrapped(t *testing.T) {
 }
 
 func TestIsBindErrorWrapped(t *testing.T) {
+	t.Parallel()
 	inner := &BindError{Key: "test", Op: "op"}
 	wrapped := fmt.Errorf("wrap: %w", inner)
 	if !IsBindError(wrapped) {
@@ -713,12 +759,14 @@ func TestIsBindErrorWrapped(t *testing.T) {
 }
 
 func TestIsValidationErrorNil(t *testing.T) {
+	t.Parallel()
 	if IsValidationError(nil) {
 		t.Error("expected false for nil error")
 	}
 }
 
 func TestIsBindErrorNil(t *testing.T) {
+	t.Parallel()
 	if IsBindError(nil) {
 		t.Error("expected false for nil error")
 	}
@@ -728,11 +776,12 @@ type testCodec struct {
 	name string
 }
 
-func (c *testCodec) Name() string                                               { return c.name }
-func (c *testCodec) Encode(_ context.Context, _ any) ([]byte, error)             { return nil, nil }
-func (c *testCodec) Decode(_ context.Context, _ []byte, _ any) error             { return nil }
+func (c *testCodec) Name() string                                    { return c.name }
+func (c *testCodec) Encode(_ context.Context, _ any) ([]byte, error) { return nil, nil }
+func (c *testCodec) Decode(_ context.Context, _ []byte, _ any) error { return nil }
 
 func TestWithCodecOption(t *testing.T) {
+	t.Parallel()
 	cfg := setupTestConfig(t)
 	tc := &testCodec{name: "test-codec"}
 
@@ -746,6 +795,7 @@ func TestWithCodecOption(t *testing.T) {
 }
 
 func TestWithFieldTagOption(t *testing.T) {
+	t.Parallel()
 	cfg := setupTestConfig(t)
 
 	b := New(cfg, WithFieldTag("config"))
@@ -758,6 +808,7 @@ func TestWithFieldTagOption(t *testing.T) {
 }
 
 func TestWithFieldTagEmptyIgnored(t *testing.T) {
+	t.Parallel()
 	cfg := setupTestConfig(t)
 
 	b := New(cfg, WithFieldTag(""))
@@ -767,6 +818,7 @@ func TestWithFieldTagEmptyIgnored(t *testing.T) {
 }
 
 func TestWithTagValidationOption(t *testing.T) {
+	t.Parallel()
 	cfg := setupTestConfig(t)
 
 	b := New(cfg, WithTagValidation())
@@ -779,6 +831,7 @@ func TestWithTagValidationOption(t *testing.T) {
 }
 
 func TestWithCustomTagValidationOption(t *testing.T) {
+	t.Parallel()
 	cfg := setupTestConfig(t)
 
 	b := New(cfg, WithCustomTagValidation("check"))
@@ -791,6 +844,7 @@ func TestWithCustomTagValidationOption(t *testing.T) {
 }
 
 func TestWithCustomTagValidationIntegration(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
@@ -810,6 +864,7 @@ func TestWithCustomTagValidationIntegration(t *testing.T) {
 }
 
 func TestWithFieldTagIntegration(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
@@ -840,6 +895,7 @@ func TestWithFieldTagIntegration(t *testing.T) {
 }
 
 func TestGetStructDigest(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
@@ -898,6 +954,7 @@ func TestGetStructDigest(t *testing.T) {
 }
 
 func TestGetStructDigestNotFound(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
@@ -912,6 +969,7 @@ func TestGetStructDigestNotFound(t *testing.T) {
 }
 
 func TestGetStructDigestWithValidation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
@@ -934,6 +992,7 @@ func TestGetStructDigestWithValidation(t *testing.T) {
 }
 
 func TestDefaultCodec(t *testing.T) {
+	t.Parallel()
 	cfg := setupTestConfig(t)
 	b := New(cfg)
 	if b.codec == nil {
@@ -946,6 +1005,7 @@ func TestDefaultCodec(t *testing.T) {
 }
 
 func TestValidateWithoutValidator(t *testing.T) {
+	t.Parallel()
 	cfg := setupTestConfig(t)
 	b := New(cfg)
 
@@ -959,6 +1019,7 @@ func TestValidateWithoutValidator(t *testing.T) {
 }
 
 func TestSetStructWithNonStructReturnsBindError(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 	b := New(cfg)
@@ -974,6 +1035,7 @@ func TestSetStructWithNonStructReturnsBindError(t *testing.T) {
 }
 
 func TestValidationErrorHasFieldInfo(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -1001,6 +1063,7 @@ func TestValidationErrorHasFieldInfo(t *testing.T) {
 }
 
 func TestTagValidatorStructWithNoValidateTag(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type S struct {
@@ -1014,6 +1077,7 @@ func TestTagValidatorStructWithNoValidateTag(t *testing.T) {
 }
 
 func TestTagValidatorNestedStructWithTag(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type Inner struct {
@@ -1031,6 +1095,7 @@ func TestTagValidatorNestedStructWithTag(t *testing.T) {
 }
 
 func TestTagValidatorPointerToStructWithTag(t *testing.T) {
+	t.Parallel()
 	v := NewTagValidator("validate")
 
 	type Inner struct {

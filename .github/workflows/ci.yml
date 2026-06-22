@@ -43,6 +43,34 @@ jobs:
       - name: Test
         run: go test -v -race ./...
 
+      # Per-package coverage gate over the unit-runnable set. Excludes the
+      # service-backed backends (postgres/mongodb/etcd/redis) — those run with
+      # real databases in the `integration` job — plus test-support packages.
+      # Fails the build if any unit package regresses below COVER_MIN.
+      - name: Coverage gate
+        env:
+          COVER_MIN: "75.0"
+        run: |
+          set -euo pipefail
+          excluded='/postgres|/mongodb|/etcd|/redis|/internal/testutil|/internal/storetest'
+          pkgs=$(go list ./... | grep -Ev "${excluded}")
+          fail=0
+          while read -r line; do
+            case "${line}" in
+              *"coverage:"*)
+                pkg=$(echo "${line}" | awk '{print $2}')
+                cov=$(echo "${line}" | sed -E 's/.*coverage: ([0-9.]+)%.*/\1/')
+                echo "  ${pkg}: ${cov}%"
+                awk -v p="${cov}" -v m="${COVER_MIN}" -v pk="${pkg}" \
+                  'BEGIN { if (p+0 < m+0) { printf("  -> %s below %.1f%% gate\n", pk, m); exit 1 } }' \
+                  || fail=1 ;;
+            esac
+          done < <(go test -cover ${pkgs})
+          if [ "${fail}" -ne 0 ]; then
+            echo "coverage gate FAILED (COVER_MIN=${COVER_MIN}%)"; exit 1
+          fi
+          echo "coverage gate PASSED (all unit packages >= ${COVER_MIN}%)"
+
   integration:
     name: Integration (mongo+postgres+sqlite)
     runs-on: ubuntu-latest
@@ -50,8 +78,9 @@ jobs:
     # MongoDB is NOT a service container because mongo's change-stream tests
     # need `--replSet rs0` on the mongod CMD, and GHA service containers
     # cannot override an image's CMD. We start mongo manually via docker run.
-    # PostgreSQL is fine as a service container and uses the standard
-    # postgres init env vars to create the test role + database.
+    # PostgreSQL and Redis are fine as service containers. etcd is not wired as
+    # a real backend here: the etcd store tests use an in-memory fake for unit
+    # coverage and skip their ETCD_ENDPOINTS-gated integration cases.
     services:
       postgres:
         image: postgres:16
@@ -63,6 +92,15 @@ jobs:
           - 5433:5432
         options: >-
           --health-cmd "pg_isready -U config_test -d config_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -117,7 +155,8 @@ jobs:
         env:
           MONGO_URI: mongodb://localhost:27019/?directConnection=true
           POSTGRES_DSN: postgres://config_test:config_test@localhost:5433/config_test?sslmode=disable
-        run: go test -v -race -count=1 ./mongodb/... ./postgres/... ./sqlite/...
+          REDIS_ADDR: localhost:6379
+        run: go test -v -race -count=1 ./mongodb/... ./postgres/... ./sqlite/... ./redis/... ./etcd/...
 
       - name: Stop MongoDB
         if: always()
@@ -138,7 +177,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9
         with:
-          version: v2.11.4
+          version: v2.12.2
           args: --tests=false
 
   codeql:

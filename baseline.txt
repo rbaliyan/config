@@ -1,0 +1,110 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/rbaliyan/config
+cpu: Apple M4
+BenchmarkManagerGet-10          	 2669030	       419.8 ns/op	     224 B/op	       3 allocs/op
+BenchmarkCacheGetHit-10         	14619386	        79.16 ns/op	     112 B/op	       1 allocs/op
+BenchmarkNewValue-10            	38926440	        33.80 ns/op	      80 B/op	       1 allocs/op
+BenchmarkNewValueByType/int-10  	36340831	        36.83 ns/op	      80 B/op	       1 allocs/op
+BenchmarkNewValueByType/string-10         	35245006	        33.72 ns/op	      80 B/op	       1 allocs/op
+BenchmarkNewValueByType/bool-10           	29425226	        37.84 ns/op	      80 B/op	       1 allocs/op
+BenchmarkNewValueByType/float-10          	36347894	        37.59 ns/op	      80 B/op	       1 allocs/op
+BenchmarkNewValueByType/map-10            	38630132	        40.88 ns/op	      80 B/op	       1 allocs/op
+BenchmarkNewValueByType/slice-10          	32456226	        34.76 ns/op	      80 B/op	       1 allocs/op
+BenchmarkValueInt64-10                    	546630421	         2.252 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValueString-10                   	574638680	         2.078 ns/op	       0 B/op	       0 allocs/op
+BenchmarkValueMarshal-10                  	 3362030	       362.5 ns/op	     272 B/op	       8 allocs/op
+BenchmarkValueFromBytes-10                	 2062885	       562.4 ns/op	     640 B/op	      13 allocs/op
+BenchmarkValueUnmarshal-10                	 1000000	      1136 ns/op	     888 B/op	      24 allocs/op
+BenchmarkMarkStale-10                     	16648639	        61.97 ns/op	     192 B/op	       2 allocs/op
+BenchmarkStoreGet-10                      	 7644230	       155.7 ns/op	     112 B/op	       1 allocs/op
+BenchmarkStoreSet_Update-10               	 1908834	       614.4 ns/op	    1257 B/op	       7 allocs/op
+BenchmarkStoreSet_Insert-10               	 1755289	       683.1 ns/op	     516 B/op	       8 allocs/op
+BenchmarkStoreFind/100-10                 	   98143	     12440 ns/op	   14666 B/op	      71 allocs/op
+BenchmarkStoreFind/1000-10                	   10000	    122311 ns/op	   45406 B/op	      74 allocs/op
+BenchmarkStoreFind/10000-10               	     842	   1398054 ns/op	  676371 B/op	      81 allocs/op
+BenchmarkStoreGetMany/10-10               	 1434418	       839.6 ns/op	        10.00 keys/op	    1784 B/op	      14 allocs/op
+BenchmarkStoreGetMany/100-10              	  142800	      7363 ns/op	       100.0 keys/op	   16157 B/op	     104 allocs/op
+BenchmarkStoreGetMany/1000-10             	   15126	     78949 ns/op	      1000 keys/op	  194106 B/op	    1006 allocs/op
+BenchmarkStoreSetMany/10-10               	  182864	      6088 ns/op	        10.00 keys/op	   13680 B/op	      73 allocs/op
+BenchmarkStoreSetMany/100-10              	   21783	     57638 ns/op	       100.0 keys/op	  135770 B/op	     703 allocs/op
+BenchmarkStoreSetMany/1000-10             	    2121	    654164 ns/op	      1000 keys/op	 1353041 B/op	    7003 allocs/op
+BenchmarkStoreDeleteMany/10-10            	  906529	      1200 ns/op	        10.00 keys/op	     896 B/op	       1 allocs/op
+BenchmarkStoreDeleteMany/100-10           	  181203	      6739 ns/op	       100.0 keys/op	    8193 B/op	       1 allocs/op
+BenchmarkStoreDeleteMany/1000-10          	   19226	     62135 ns/op	      1000 keys/op	   81922 B/op	       1 allocs/op
+BenchmarkStoreGetParallel-10              	 9578788	       122.8 ns/op	     127 B/op	       2 allocs/op
+BenchmarkStoreSetParallel-10              	 1714746	       694.8 ns/op	    1256 B/op	       8 allocs/op
+PASS
+ok  	github.com/rbaliyan/config	109.579s
+PASS
+ok  	github.com/rbaliyan/config/bind	0.475s
+PASS
+ok  	github.com/rbaliyan/config/codec	0.468s
+goos: darwin
+goarch: arm64
+pkg: github.com/rbaliyan/config/codec/json
+cpu: Apple M4
+BenchmarkEncode/small-10         	 4140028	       303.7 ns/op	     272 B/op	       8 allocs/op
+BenchmarkEncode/medium-10        	 1325542	       970.0 ns/op	     704 B/op	      19 allocs/op
+BenchmarkEncode/large-10         	    8533	    139264 ns/op	   69922 B/op	    1801 allocs/op
+BenchmarkDecode/large-10         	    4743	    219948 ns/op	   92666 B/op	    2398 allocs/op
+BenchmarkDecode/small-10         	 1806471	       566.4 ns/op	     560 B/op	      12 allocs/op
+BenchmarkDecode/medium-10        	 1000000	      1099 ns/op	    1168 B/op	      32 allocs/op
+PASS
+ok  	github.com/rbaliyan/config/codec/json	7.383s
+goos: darwin
+goarch: arm64
+pkg: github.com/rbaliyan/config/codec/toml
+cpu: Apple M4
+BenchmarkEncode/small-10         	  891450	      1292 ns/op	    5018 B/op	      37 allocs/op
+BenchmarkEncode/medium-10        	  352413	      3701 ns/op	    6480 B/op	     104 allocs/op
+BenchmarkEncode/large-10         	    3786	    324461 ns/op	  261579 B/op	   10414 allocs/op
+BenchmarkDecode/small-10         	  534594	      2271 ns/op	    4096 B/op	      46 allocs/op
+BenchmarkDecode/medium-10        	  238980	      6513 ns/op	    5720 B/op	      85 allocs/op
+BenchmarkDecode/large-10         	    1795	    900061 ns/op	  391353 B/op	    5456 allocs/op
+PASS
+ok  	github.com/rbaliyan/config/codec/toml	8.577s
+goos: darwin
+goarch: arm64
+pkg: github.com/rbaliyan/config/codec/yaml
+cpu: Apple M4
+BenchmarkEncode/medium-10         	  140072	      9584 ns/op	   17120 B/op	      67 allocs/op
+BenchmarkEncode/large-10          	     930	   1277839 ns/op	 2308736 B/op	    4735 allocs/op
+BenchmarkEncode/small-10          	  310664	      4543 ns/op	    7008 B/op	      33 allocs/op
+BenchmarkDecode/small-10          	  161340	      7987 ns/op	    8352 B/op	      70 allocs/op
+BenchmarkDecode/medium-10         	   89714	     13860 ns/op	   12128 B/op	     155 allocs/op
+BenchmarkDecode/large-10          	    1189	    952261 ns/op	  547681 B/op	   11858 allocs/op
+PASS
+ok  	github.com/rbaliyan/config/codec/yaml	8.115s
+PASS
+ok  	github.com/rbaliyan/config/etcd	0.374s
+PASS
+ok  	github.com/rbaliyan/config/expand	0.493s
+PASS
+ok  	github.com/rbaliyan/config/file	0.542s
+PASS
+ok  	github.com/rbaliyan/config/internal/cursor	0.527s
+PASS
+ok  	github.com/rbaliyan/config/internal/storetest	0.496s
+PASS
+ok  	github.com/rbaliyan/config/k8s	0.526s
+PASS
+ok  	github.com/rbaliyan/config/live	0.529s
+PASS
+ok  	github.com/rbaliyan/config/memory	0.536s
+PASS
+ok  	github.com/rbaliyan/config/mongodb	0.574s
+PASS
+ok  	github.com/rbaliyan/config/multi	0.473s
+PASS
+ok  	github.com/rbaliyan/config/otel	0.542s
+PASS
+ok  	github.com/rbaliyan/config/postgres	0.543s
+PASS
+ok  	github.com/rbaliyan/config/redis	0.565s
+PASS
+ok  	github.com/rbaliyan/config/replica	0.632s
+PASS
+ok  	github.com/rbaliyan/config/sqlite	0.615s
+PASS
+ok  	github.com/rbaliyan/config/transform	0.616s

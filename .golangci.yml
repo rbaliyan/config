@@ -2,3 +2,30 @@ version: "2"
 
 run:
   tests: false
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (net.Conn).Close
+        - (*database/sql.Tx).Rollback
+        - (*database/sql.Rows).Close
+        - (*database/sql.Stmt).Close
+        - (*go.mongodb.org/mongo-driver/v2/mongo.Cursor).Close
+        - encoding/json.Unmarshal
+  exclusions:
+    rules:
+      - path: k8s/example/
+        linters:
+          - errcheck
+          - unused
+    paths:
+      - internal/storetest/

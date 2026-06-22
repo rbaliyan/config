@@ -310,16 +310,18 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		return nil, err
 	}
 
-	// Encode value with default codec to get raw bytes for the storeEntry.
-	c := codec.Default()
-	data, err := c.Encode(ctx, value)
-	if err != nil {
+	// Extract the value's native content (decoded via its own codec), not the
+	// Value wrapper itself — encoding the wrapper would persist an empty object.
+	var raw any
+	if err := value.Unmarshal(ctx, &raw); err != nil {
 		return nil, config.WrapStoreError("set", "file", key, err)
 	}
 
-	// Decode back to raw any for sidecar (YAML storage needs native values).
-	var raw any
-	if err := c.Decode(ctx, data, &raw); err != nil {
+	// Re-encode the native value with the default codec so the stored bytes and
+	// the recorded codec name stay consistent.
+	c := codec.Default()
+	data, err := c.Encode(ctx, raw)
+	if err != nil {
 		return nil, config.WrapStoreError("set", "file", key, err)
 	}
 

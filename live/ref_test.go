@@ -437,7 +437,11 @@ func TestRef_OnChangeSkipsUnchanged(t *testing.T) {
 
 	// Now make an actual change
 	_ = cfg.Set(ctx, "database/host", "changed-host")
-	time.Sleep(200 * time.Millisecond)
+
+	// Wait for the poll cycle to observe the change and fire onChange.
+	testutil.WaitUntil(t, 2*time.Second,
+		func() bool { return callCount.Load() >= 1 },
+		"expected onChange to be called after config change")
 
 	// onChange should have been called exactly once (for the change)
 	if callCount.Load() < 1 {

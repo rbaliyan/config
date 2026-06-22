@@ -83,8 +83,10 @@ func TestPostgresStore_Watch(t *testing.T) {
 		t.Fatalf("Watch failed: %v", err)
 	}
 
-	// Give the listener time to initialize
-	time.Sleep(100 * time.Millisecond)
+	// Wait until the LISTEN/NOTIFY subscription is actually live by probing
+	// with throwaway writes and draining their events, rather than sleeping
+	// a fixed amount and hoping the listener registered in time.
+	waitForWatchReady(t, store, changes, "watchtest")
 
 	// Set a value
 	value := config.NewValue("test", config.WithValueType(config.TypeString))

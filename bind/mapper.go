@@ -87,7 +87,7 @@ func (m *FieldMapper) structToMapRecursive(val reflect.Value) (map[string]any, e
 				}
 				mapVal = nested
 			}
-		case reflect.Ptr:
+		case reflect.Pointer:
 			if fieldVal.IsNil() {
 				if hasOption(opts, "omitempty") {
 					continue
@@ -208,7 +208,7 @@ func (m *FieldMapper) flattenStruct(val reflect.Value, prefix string, result map
 				// Recursively flatten nested struct
 				m.flattenStruct(fieldVal, key, result)
 			}
-		case reflect.Ptr:
+		case reflect.Pointer:
 			if fieldVal.IsNil() {
 				if !hasOption(opts, "omitempty") {
 					result[key] = nil
@@ -232,7 +232,7 @@ func (m *FieldMapper) flattenStruct(val reflect.Value, prefix string, result map
 // Keys are expected to use "/" as separator for nested fields.
 func (m *FieldMapper) FlatMapToStruct(data map[string]any, prefix string, target any) error {
 	val := reflect.ValueOf(target)
-	if val.Kind() != reflect.Ptr || val.IsNil() {
+	if val.Kind() != reflect.Pointer || val.IsNil() {
 		return fmt.Errorf("target must be a non-nil pointer")
 	}
 	val = val.Elem()
@@ -307,7 +307,7 @@ func buildNestedMap(data map[string]any, prefix string) map[string]any {
 // Fields tagged with `tagname:"-"` are ignored.
 func (m *FieldMapper) MapToStruct(data map[string]any, target any) error {
 	val := reflect.ValueOf(target)
-	if val.Kind() != reflect.Ptr || val.IsNil() {
+	if val.Kind() != reflect.Pointer || val.IsNil() {
 		return fmt.Errorf("target must be a non-nil pointer")
 	}
 	val = val.Elem()
@@ -383,8 +383,8 @@ func (m *FieldMapper) setValue(fieldVal reflect.Value, value any, field reflect.
 		// Try JSON conversion as fallback
 		return m.jsonConvert(value, fieldVal.Addr().Interface())
 
-	case reflect.Ptr:
-		if valueVal.Kind() == reflect.Invalid || (valueVal.Kind() == reflect.Ptr && valueVal.IsNil()) {
+	case reflect.Pointer:
+		if valueVal.Kind() == reflect.Invalid || (valueVal.Kind() == reflect.Pointer && valueVal.IsNil()) {
 			return nil
 		}
 		// Create new instance
@@ -488,7 +488,7 @@ func isEmptyValue(v reflect.Value) bool {
 		return v.Uint() == 0
 	case reflect.Float32, reflect.Float64:
 		return v.Float() == 0
-	case reflect.Interface, reflect.Ptr:
+	case reflect.Interface, reflect.Pointer:
 		return v.IsNil()
 	}
 	return false

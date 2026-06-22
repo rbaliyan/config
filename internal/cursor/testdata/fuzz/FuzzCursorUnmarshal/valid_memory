@@ -1,0 +1,5 @@
+go test fuzz v1
+string("memory")
+string("postgres")
+[]byte("ns-alpha")
+string("AQZtZW1vcnlucy1hbHBoYQ")

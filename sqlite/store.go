@@ -230,16 +230,51 @@ func (s *Store) createSchema(ctx context.Context) error {
 // Safe to call on tables that already have the column (uses IF NOT EXISTS guards).
 // Call this once during application startup when upgrading from a schema without TTL support.
 func (s *Store) MigrateAddTTL(ctx context.Context) error {
-	steps := []string{
-		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS expires_at TEXT NULL`, s.cfg.Table), // #nosec G201 -- table name validated in Connect
-		fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_expires_at ON %s(expires_at) WHERE expires_at IS NOT NULL`, s.cfg.Table, s.cfg.Table),
+	// SQLite does not support "ADD COLUMN IF NOT EXISTS", so guard the ALTER with
+	// a PRAGMA table_info lookup to keep the migration idempotent.
+	hasCol, err := s.columnExists(ctx, "expires_at")
+	if err != nil {
+		return config.WrapStoreError("migrate_add_ttl", "sqlite", "", err)
 	}
-	for _, step := range steps {
-		if _, err := s.db.ExecContext(ctx, step); err != nil {
+	if !hasCol {
+		stmt := fmt.Sprintf(`ALTER TABLE %s ADD COLUMN expires_at TEXT NULL`, s.cfg.Table) // #nosec G201 -- table name validated in Connect
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			return config.WrapStoreError("migrate_add_ttl", "sqlite", "", err)
 		}
 	}
+	idx := fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_%s_expires_at ON %s(expires_at) WHERE expires_at IS NOT NULL`, s.cfg.Table, s.cfg.Table) // #nosec G201 -- table name validated in Connect
+	if _, err := s.db.ExecContext(ctx, idx); err != nil {
+		return config.WrapStoreError("migrate_add_ttl", "sqlite", "", err)
+	}
 	return nil
+}
+
+// columnExists reports whether the store's table has a column with the given
+// name, via PRAGMA table_info (which does not support placeholder binding for
+// the table name — the table is validated in Connect).
+func (s *Store) columnExists(ctx context.Context, column string) (bool, error) {
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, s.cfg.Table)) // #nosec G201 -- table name validated in Connect
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			ctype     string
+			notNull   int
+			dfltValue sql.NullString
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dfltValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // Close stops all watchers and releases resources.

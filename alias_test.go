@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rbaliyan/config"
+	"github.com/rbaliyan/config/internal/testutil"
 	"github.com/rbaliyan/config/memory"
 )
 
@@ -585,15 +586,10 @@ func TestAliasWatchPropagation(t *testing.T) {
 		t.Fatalf("store.SetAlias: %v", err)
 	}
 
-	// Wait for the watch event to propagate.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if got := am.ResolveAlias("external/alias"); got == "external/target" {
-			return // Success
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Errorf("ResolveAlias(external/alias) never resolved to %q", "external/target")
+	// Wait for the watch event to propagate (bounded poll instead of a fixed sleep).
+	testutil.WaitUntil(t, 2*time.Second, func() bool {
+		return am.ResolveAlias("external/alias") == "external/target"
+	}, "ResolveAlias(external/alias) never resolved to external/target")
 }
 
 func TestAliasGetVersions(t *testing.T) {

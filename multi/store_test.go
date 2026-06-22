@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rbaliyan/config"
+	"github.com/rbaliyan/config/internal/testutil"
 	"github.com/rbaliyan/config/memory"
 )
 
@@ -81,6 +82,7 @@ func (s *noWatchStore) Watch(ctx context.Context, filter config.WatchFilter) (<-
 }
 
 func TestNewStore(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -94,6 +96,7 @@ func TestNewStore(t *testing.T) {
 }
 
 func TestMultiStore_Connect(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -106,6 +109,7 @@ func TestMultiStore_Connect(t *testing.T) {
 }
 
 func TestMultiStore_Close(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -119,6 +123,7 @@ func TestMultiStore_Close(t *testing.T) {
 }
 
 func TestMultiStore_SetAndGet_Fallback(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -160,6 +165,7 @@ func TestMultiStore_SetAndGet_Fallback(t *testing.T) {
 }
 
 func TestMultiStore_SetAndGet_ReadThrough(t *testing.T) {
+	t.Parallel()
 	cache := memory.NewStore()
 	backend := memory.NewStore()
 
@@ -197,6 +203,7 @@ func TestMultiStore_SetAndGet_ReadThrough(t *testing.T) {
 }
 
 func TestMultiStore_SetAndGet_ReadThrough_WriteAll(t *testing.T) {
+	t.Parallel()
 	cache := memory.NewStore()
 	backend := memory.NewStore()
 
@@ -234,6 +241,7 @@ func TestMultiStore_SetAndGet_ReadThrough_WriteAll(t *testing.T) {
 }
 
 func TestMultiStore_Delete_Fallback(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -262,6 +270,7 @@ func TestMultiStore_Delete_Fallback(t *testing.T) {
 }
 
 func TestMultiStore_Fallback_PrimaryFailure(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -288,6 +297,7 @@ func TestMultiStore_Fallback_PrimaryFailure(t *testing.T) {
 }
 
 func TestMultiStore_Find(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -316,6 +326,7 @@ func TestMultiStore_Find(t *testing.T) {
 }
 
 func TestMultiStore_Watch(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -337,6 +348,7 @@ func TestMultiStore_Watch(t *testing.T) {
 }
 
 func TestMultiStore_Primary(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -349,6 +361,7 @@ func TestMultiStore_Primary(t *testing.T) {
 }
 
 func TestMultiStore_Stores(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -361,6 +374,7 @@ func TestMultiStore_Stores(t *testing.T) {
 }
 
 func TestMultiStore_EmptyStores(t *testing.T) {
+	t.Parallel()
 	ms := NewStore(nil)
 	ctx := context.Background()
 
@@ -383,6 +397,7 @@ func TestMultiStore_EmptyStores(t *testing.T) {
 }
 
 func TestMultiStore_WriteThrough(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -411,6 +426,7 @@ func TestMultiStore_WriteThrough(t *testing.T) {
 }
 
 func TestMultiStore_Health(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -427,6 +443,7 @@ func TestMultiStore_Health(t *testing.T) {
 }
 
 func TestMultiStore_Health_EmptyStores(t *testing.T) {
+	t.Parallel()
 	ms := NewStore(nil)
 	ctx := context.Background()
 
@@ -437,6 +454,7 @@ func TestMultiStore_Health_EmptyStores(t *testing.T) {
 }
 
 func TestMultiStore_Stats(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -467,6 +485,7 @@ func TestMultiStore_Stats(t *testing.T) {
 }
 
 func TestMultiStore_Stats_EmptyStores(t *testing.T) {
+	t.Parallel()
 	ms := NewStore(nil)
 	ctx := context.Background()
 
@@ -477,6 +496,7 @@ func TestMultiStore_Stats_EmptyStores(t *testing.T) {
 }
 
 func TestMultiStore_Get_AllStoresFail(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -492,6 +512,7 @@ func TestMultiStore_Get_AllStoresFail(t *testing.T) {
 }
 
 func TestMultiStore_Get_ErrorFromLastStore(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{getErr: &config.KeyNotFoundError{Key: "k", Namespace: "ns"}}
 	f2 := &failStore{getErr: &config.KeyNotFoundError{Key: "k", Namespace: "ns"}}
 
@@ -505,6 +526,7 @@ func TestMultiStore_Get_ErrorFromLastStore(t *testing.T) {
 }
 
 func TestMultiStore_Get_NonRetryableError(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{getErr: errMock}
 	store2 := memory.NewStore()
 	_, _ = store2.Set(context.Background(), "ns", "key", config.NewValue("val"))
@@ -519,6 +541,7 @@ func TestMultiStore_Get_NonRetryableError(t *testing.T) {
 }
 
 func TestMultiStore_Get_ClosedStoreRetries(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{getErr: config.ErrStoreClosed}
 	store2 := memory.NewStore()
 	_, _ = store2.Set(context.Background(), "ns", "key", config.NewValue("val"))
@@ -537,6 +560,7 @@ func TestMultiStore_Get_ClosedStoreRetries(t *testing.T) {
 }
 
 func TestMultiStore_Get_NotConnectedRetries(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{getErr: config.ErrStoreNotConnected}
 	store2 := memory.NewStore()
 	_, _ = store2.Set(context.Background(), "ns", "key", config.NewValue("hello"))
@@ -555,6 +579,7 @@ func TestMultiStore_Get_NotConnectedRetries(t *testing.T) {
 }
 
 func TestMultiStore_Set_EmptyStores(t *testing.T) {
+	t.Parallel()
 	ms := NewStore(nil)
 	ctx := context.Background()
 
@@ -565,6 +590,7 @@ func TestMultiStore_Set_EmptyStores(t *testing.T) {
 }
 
 func TestMultiStore_Set_AllStoresFail(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{setErr: errMock}
 	f2 := &failStore{setErr: errMock}
 
@@ -578,6 +604,7 @@ func TestMultiStore_Set_AllStoresFail(t *testing.T) {
 }
 
 func TestMultiStore_Set_PartialFailure(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{setErr: errMock}
 	store2 := memory.NewStore()
 
@@ -595,6 +622,7 @@ func TestMultiStore_Set_PartialFailure(t *testing.T) {
 }
 
 func TestMultiStore_PartialWrite_CounterAndHook(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{setErr: errMock}
 	store2 := memory.NewStore()
 
@@ -623,6 +651,7 @@ func TestMultiStore_PartialWrite_CounterAndHook(t *testing.T) {
 }
 
 func TestMultiStore_StrictWrites_ReturnsPartialError(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{setErr: errMock}
 	store2 := memory.NewStore()
 
@@ -646,6 +675,7 @@ func TestMultiStore_StrictWrites_ReturnsPartialError(t *testing.T) {
 }
 
 func TestMultiStore_Delete_EmptyStores(t *testing.T) {
+	t.Parallel()
 	ms := NewStore(nil)
 	ctx := context.Background()
 
@@ -656,6 +686,7 @@ func TestMultiStore_Delete_EmptyStores(t *testing.T) {
 }
 
 func TestMultiStore_Delete_AllNotFound(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -671,6 +702,7 @@ func TestMultiStore_Delete_AllNotFound(t *testing.T) {
 }
 
 func TestMultiStore_Delete_PartialPresence(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -693,6 +725,7 @@ func TestMultiStore_Delete_PartialPresence(t *testing.T) {
 }
 
 func TestMultiStore_Delete_MixedErrors(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{deleteErr: errMock}
 	f2 := &failStore{deleteErr: errMock}
 
@@ -706,6 +739,7 @@ func TestMultiStore_Delete_MixedErrors(t *testing.T) {
 }
 
 func TestMultiStore_Find_PrimaryOnly(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -733,6 +767,7 @@ func TestMultiStore_Find_PrimaryOnly(t *testing.T) {
 }
 
 func TestMultiStore_Watch_FallbackOnUnsupported(t *testing.T) {
+	t.Parallel()
 	nw := &noWatchStore{Store: memory.NewStore()}
 	store2 := memory.NewStore()
 
@@ -751,6 +786,7 @@ func TestMultiStore_Watch_FallbackOnUnsupported(t *testing.T) {
 }
 
 func TestMultiStore_Watch_AllUnsupported(t *testing.T) {
+	t.Parallel()
 	nw1 := &noWatchStore{Store: memory.NewStore()}
 	nw2 := &noWatchStore{Store: memory.NewStore()}
 
@@ -764,6 +800,7 @@ func TestMultiStore_Watch_AllUnsupported(t *testing.T) {
 }
 
 func TestMultiStore_Watch_NonWatchError(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{watchErr: errMock}
 	store2 := memory.NewStore()
 
@@ -777,6 +814,7 @@ func TestMultiStore_Watch_NonWatchError(t *testing.T) {
 }
 
 func TestMultiStore_Close_PropagatesErrors(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{closeErr: errors.New("close1")}
 	f2 := &failStore{closeErr: errors.New("close2")}
 
@@ -796,6 +834,7 @@ func TestMultiStore_Close_PropagatesErrors(t *testing.T) {
 }
 
 func TestMultiStore_Connect_AllFail(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{connectErr: errors.New("conn1")}
 	f2 := &failStore{connectErr: errors.New("conn2")}
 
@@ -809,6 +848,7 @@ func TestMultiStore_Connect_AllFail(t *testing.T) {
 }
 
 func TestMultiStore_Connect_PartialFailure(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{connectErr: errors.New("conn1")}
 	store2 := memory.NewStore()
 
@@ -822,6 +862,7 @@ func TestMultiStore_Connect_PartialFailure(t *testing.T) {
 }
 
 func TestMultiStore_Health_AllUnhealthy(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{healthErr: errors.New("unhealthy1")}
 	f2 := &failStore{healthErr: errors.New("unhealthy2")}
 
@@ -835,6 +876,7 @@ func TestMultiStore_Health_AllUnhealthy(t *testing.T) {
 }
 
 func TestMultiStore_Health_OneHealthy(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{healthErr: errors.New("unhealthy")}
 	store2 := memory.NewStore()
 
@@ -848,6 +890,7 @@ func TestMultiStore_Health_OneHealthy(t *testing.T) {
 }
 
 func TestMultiStore_Health_NoHealthCheckers(t *testing.T) {
+	t.Parallel()
 	f1 := &noHealthStore{}
 	f2 := &noHealthStore{}
 
@@ -869,6 +912,7 @@ func (s *noHealthStore) Health(_ context.Context) error {
 }
 
 func TestMultiStore_Stats_NoStatsProviders(t *testing.T) {
+	t.Parallel()
 	ms := NewStore([]config.Store{&plainStore{}, &plainStore{}})
 	ctx := context.Background()
 
@@ -900,6 +944,7 @@ func (s *plainStore) Watch(ctx context.Context, f config.WatchFilter) (<-chan co
 }
 
 func TestMultiStore_Stats_Aggregation(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -930,6 +975,7 @@ func TestMultiStore_Stats_Aggregation(t *testing.T) {
 }
 
 func TestMultiStore_Stats_StatsErrorSkipped(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{statsErr: errMock}
 	store2 := memory.NewStore()
 
@@ -952,6 +998,7 @@ func TestMultiStore_Stats_StatsErrorSkipped(t *testing.T) {
 }
 
 func TestMultiStore_GetMany_Fallback(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -979,6 +1026,7 @@ func TestMultiStore_GetMany_Fallback(t *testing.T) {
 }
 
 func TestMultiStore_GetMany_EmptyStores(t *testing.T) {
+	t.Parallel()
 	ms := NewStore(nil)
 	ctx := context.Background()
 
@@ -989,6 +1037,7 @@ func TestMultiStore_GetMany_EmptyStores(t *testing.T) {
 }
 
 func TestMultiStore_GetMany_FallbackToSecondStore(t *testing.T) {
+	t.Parallel()
 	f1 := &failBulkStore{failStore: failStore{getErr: config.ErrStoreClosed}, getManyErr: config.ErrStoreClosed}
 	store2 := memory.NewStore()
 
@@ -1008,6 +1057,7 @@ func TestMultiStore_GetMany_FallbackToSecondStore(t *testing.T) {
 }
 
 func TestMultiStore_GetMany_AllFail(t *testing.T) {
+	t.Parallel()
 	f1 := &failBulkStore{failStore: failStore{getErr: config.ErrStoreClosed}, getManyErr: config.ErrStoreClosed}
 	f2 := &failBulkStore{failStore: failStore{getErr: config.ErrStoreClosed}, getManyErr: config.ErrStoreClosed}
 
@@ -1021,6 +1071,7 @@ func TestMultiStore_GetMany_AllFail(t *testing.T) {
 }
 
 func TestMultiStore_GetMany_ReadThrough(t *testing.T) {
+	t.Parallel()
 	f1 := &failBulkStore{getManyErr: errMock}
 	backend := memory.NewStore()
 
@@ -1041,6 +1092,7 @@ func TestMultiStore_GetMany_ReadThrough(t *testing.T) {
 }
 
 func TestMultiStore_GetMany_NonBulkStoreFallback(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{getErr: &config.KeyNotFoundError{Key: "k1", Namespace: "ns"}}
 	store2 := memory.NewStore()
 
@@ -1060,6 +1112,7 @@ func TestMultiStore_GetMany_NonBulkStoreFallback(t *testing.T) {
 }
 
 func TestMultiStore_SetMany_EmptyStores(t *testing.T) {
+	t.Parallel()
 	ms := NewStore(nil)
 	ctx := context.Background()
 
@@ -1070,6 +1123,7 @@ func TestMultiStore_SetMany_EmptyStores(t *testing.T) {
 }
 
 func TestMultiStore_SetMany_WritesToAll(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -1110,6 +1164,7 @@ func TestMultiStore_SetMany_WritesToAll(t *testing.T) {
 }
 
 func TestMultiStore_SetMany_AllFail(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{setErr: errMock}
 	f2 := &failStore{setErr: errMock}
 
@@ -1123,6 +1178,7 @@ func TestMultiStore_SetMany_AllFail(t *testing.T) {
 }
 
 func TestMultiStore_SetMany_PartialFailure(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{setErr: errMock}
 	store2 := memory.NewStore()
 
@@ -1146,6 +1202,7 @@ func TestMultiStore_SetMany_PartialFailure(t *testing.T) {
 }
 
 func TestMultiStore_DeleteMany_EmptyStores(t *testing.T) {
+	t.Parallel()
 	ms := NewStore(nil)
 	ctx := context.Background()
 
@@ -1156,6 +1213,7 @@ func TestMultiStore_DeleteMany_EmptyStores(t *testing.T) {
 }
 
 func TestMultiStore_DeleteMany_FromAll(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -1186,6 +1244,7 @@ func TestMultiStore_DeleteMany_FromAll(t *testing.T) {
 }
 
 func TestMultiStore_DeleteMany_NonBulkFallback(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	f2 := &failStore{}
 
@@ -1205,6 +1264,7 @@ func TestMultiStore_DeleteMany_NonBulkFallback(t *testing.T) {
 }
 
 func TestMultiStore_DeleteMany_BulkAllFail(t *testing.T) {
+	t.Parallel()
 	f1 := &failBulkStore{failStore: failStore{deleteErr: errMock}, delManyErr: errMock}
 	f2 := &failBulkStore{failStore: failStore{deleteErr: errMock}, delManyErr: errMock}
 
@@ -1240,6 +1300,7 @@ func (f *failBulkStore) DeleteMany(ctx context.Context, namespace string, keys [
 }
 
 func TestMultiStore_GetMany_BulkStoreUsed(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -1262,6 +1323,7 @@ func TestMultiStore_GetMany_BulkStoreUsed(t *testing.T) {
 }
 
 func TestMultiStore_GetMany_NonBulkStoreIndividualGets(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	f2 := &failStore{}
 
@@ -1282,6 +1344,7 @@ func TestMultiStore_GetMany_NonBulkStoreIndividualGets(t *testing.T) {
 }
 
 func TestMultiStore_SetMany_NonBulkStoreFallback(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{setErr: nil}
 	store2 := memory.NewStore()
 
@@ -1309,6 +1372,7 @@ func TestMultiStore_SetMany_NonBulkStoreFallback(t *testing.T) {
 }
 
 func TestMultiStore_SetMany_NonBulkStoreError(t *testing.T) {
+	t.Parallel()
 	f1 := &failStore{setErr: errMock}
 	f2 := &failStore{setErr: errMock}
 
@@ -1326,6 +1390,7 @@ func TestMultiStore_SetMany_NonBulkStoreError(t *testing.T) {
 }
 
 func TestMultiStore_ReadThrough_PopulatesMultipleEarlierStores(t *testing.T) {
+	t.Parallel()
 	cache1 := memory.NewStore()
 	cache2 := memory.NewStore()
 	backend := memory.NewStore()
@@ -1346,7 +1411,13 @@ func TestMultiStore_ReadThrough_PopulatesMultipleEarlierStores(t *testing.T) {
 		t.Errorf("Expected 'deep-value', got %s", s)
 	}
 
-	time.Sleep(10 * time.Millisecond)
+	// ReadThrough populates the earlier caches asynchronously; poll until
+	// both caches observe the value rather than guessing at a fixed delay.
+	testutil.WaitUntil(t, 2*time.Second, func() bool {
+		_, e1 := cache1.Get(ctx, "ns", "key")
+		_, e2 := cache2.Get(ctx, "ns", "key")
+		return e1 == nil && e2 == nil
+	}, "expected ReadThrough to populate both earlier caches")
 
 	v1, err := cache1.Get(ctx, "ns", "key")
 	if err != nil {
@@ -1368,6 +1439,7 @@ func TestMultiStore_ReadThrough_PopulatesMultipleEarlierStores(t *testing.T) {
 }
 
 func TestMultiStore_WithStrategy_Option(t *testing.T) {
+	t.Parallel()
 	ms := NewStore(nil, WithStrategy(StrategyReadThrough))
 	if ms.strategy != StrategyReadThrough {
 		t.Errorf("Expected StrategyReadThrough, got %d", ms.strategy)
@@ -1385,6 +1457,7 @@ func TestMultiStore_WithStrategy_Option(t *testing.T) {
 }
 
 func TestMultiStore_Stores_ReturnsCopy(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 
@@ -1399,6 +1472,7 @@ func TestMultiStore_Stores_ReturnsCopy(t *testing.T) {
 }
 
 func TestMultiStore_GetMany_ReadThrough_PopulatesBulkCache(t *testing.T) {
+	t.Parallel()
 	f1 := &failBulkStore{getManyErr: errMock}
 	backend := memory.NewStore()
 
@@ -1419,6 +1493,7 @@ func TestMultiStore_GetMany_ReadThrough_PopulatesBulkCache(t *testing.T) {
 }
 
 func TestMultiStore_GetMany_ReadThrough_NonBulkCachePopulated(t *testing.T) {
+	t.Parallel()
 	f1 := &failBulkStore{getManyErr: errMock, setManyErr: errMock}
 	backend := memory.NewStore()
 
@@ -1438,6 +1513,7 @@ func TestMultiStore_GetMany_ReadThrough_NonBulkCachePopulated(t *testing.T) {
 }
 
 func TestMultiStore_GetMany_NonBulkStoreFallsThrough(t *testing.T) {
+	t.Parallel()
 	// A non-BulkStore that returns a non-NotFound error is treated as a
 	// store-level failure; GetMany falls through to the next store.
 	f1 := &failStore{getErr: config.ErrStoreNotConnected}
@@ -1459,6 +1535,7 @@ func TestMultiStore_GetMany_NonBulkStoreFallsThrough(t *testing.T) {
 }
 
 func TestMultiStore_SetMany_BulkStoreError(t *testing.T) {
+	t.Parallel()
 	f1 := &failBulkStore{setManyErr: errMock}
 	store2 := memory.NewStore()
 
@@ -1473,6 +1550,7 @@ func TestMultiStore_SetMany_BulkStoreError(t *testing.T) {
 }
 
 func TestMultiStore_DeleteMany_MaxDeleted(t *testing.T) {
+	t.Parallel()
 	store1 := memory.NewStore()
 	store2 := memory.NewStore()
 

@@ -55,3 +55,9 @@ func TestSQLite_BulkStoreConformance(t *testing.T) {
 func TestSQLite_VersionedStoreConformance(t *testing.T) {
 	storetest.RunVersionedStoreSuite(t, sqliteFactory)
 }
+
+// TestSQLite_WatchOrdering runs the shared watch-ordering contract: N
+// sequential Sets must arrive in order on the watch channel.
+func TestSQLite_WatchOrdering(t *testing.T) {
+	storetest.RunWatchOrderingContract(t, sqliteFactory)
+}
