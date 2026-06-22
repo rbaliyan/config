@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"name\":\"svc\",\"port\":8080,\"level\":\"info\",\"host\":\"a.b.c\"}")

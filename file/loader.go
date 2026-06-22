@@ -66,7 +66,7 @@ func (l *Loader) Register(name string, config any) error {
 		return fmt.Errorf("file: Register(%q): config must be a non-nil pointer to a struct", name)
 	}
 	rv := reflect.ValueOf(config)
-	if rv.Kind() != reflect.Ptr || rv.IsNil() {
+	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return fmt.Errorf("file: Register(%q): config must be a non-nil pointer to a struct, got %T", name, config)
 	}
 	if rv.Elem().Kind() != reflect.Struct {
@@ -143,7 +143,7 @@ func (l *Loader) NameOf(config any) string {
 		return ""
 	}
 	rv := reflect.ValueOf(config)
-	if rv.Kind() != reflect.Ptr {
+	if rv.Kind() != reflect.Pointer {
 		return ""
 	}
 	ptr := rv.Pointer()

@@ -27,11 +27,13 @@ func memoryFactory(t *testing.T) config.Store {
 // Memory is the spec's reference implementation; this is the gating
 // signal for shipping the same suite against SQL/document backends.
 func TestMemory_StoreConformance(t *testing.T) {
+	t.Parallel()
 	storetest.RunStoreConformanceSuite(t, memoryFactory)
 }
 
 // TestMemory_BulkStoreConformance runs the shared [config.BulkStore] suite.
 func TestMemory_BulkStoreConformance(t *testing.T) {
+	t.Parallel()
 	storetest.RunBulkStoreSuite(t, memoryFactory)
 }
 
@@ -39,5 +41,13 @@ func TestMemory_BulkStoreConformance(t *testing.T) {
 // [config.VersionedStore] suite. Memory is the reference VersionedStore
 // implementation today.
 func TestMemory_VersionedStoreConformance(t *testing.T) {
+	t.Parallel()
 	storetest.RunVersionedStoreSuite(t, memoryFactory)
+}
+
+// TestMemory_WatchOrdering runs the shared watch-ordering contract: N
+// sequential Sets must arrive in order on the watch channel.
+func TestMemory_WatchOrdering(t *testing.T) {
+	t.Parallel()
+	storetest.RunWatchOrderingContract(t, memoryFactory)
 }

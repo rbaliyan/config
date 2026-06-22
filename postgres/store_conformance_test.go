@@ -111,3 +111,11 @@ func TestPostgres_VersionedStoreConformance(t *testing.T) {
 	probePostgresOnce(t)
 	storetest.RunVersionedStoreSuite(t, pgFactory)
 }
+
+// TestPostgres_WatchOrdering runs the shared watch-ordering contract over
+// LISTEN/NOTIFY: N sequential Sets must arrive in order on the watch
+// channel. Docker-gated via probePostgresOnce.
+func TestPostgres_WatchOrdering(t *testing.T) {
+	probePostgresOnce(t)
+	storetest.RunWatchOrderingContract(t, pgFactory)
+}

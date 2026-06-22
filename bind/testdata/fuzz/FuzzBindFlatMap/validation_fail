@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"name\":\"\",\"level\":\"nope\",\"port\":999999}")

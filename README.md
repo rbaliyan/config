@@ -896,6 +896,12 @@ mgr, err := config.New(
 )
 ```
 
+## Benchmarks
+
+Run the benchmark suite (memory store, `Value`, cache, and json/yaml/toml
+codecs) with `just bench`, or compare against the committed `baseline.txt`.
+See [BENCHMARKS.md](BENCHMARKS.md) for details.
+
 ## License
 
 MIT License

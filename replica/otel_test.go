@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/rbaliyan/config"
+	"github.com/rbaliyan/config/internal/testutil"
 	"github.com/rbaliyan/config/memory"
 )
 
@@ -69,6 +70,7 @@ func spanAttrValue(span sdktrace.ReadOnlySpan, key string) string {
 }
 
 func TestOTel_Options(t *testing.T) {
+	t.Parallel()
 	recorder, tracer := newTestTracer()
 	reader, meter := newTestMeter()
 	_ = recorder
@@ -103,6 +105,7 @@ func TestOTel_Options(t *testing.T) {
 }
 
 func TestOTel_Connect_InitializesTracer(t *testing.T) {
+	t.Parallel()
 	recorder, tracer := newTestTracer()
 
 	primary := memory.NewStore()
@@ -128,6 +131,7 @@ func TestOTel_Connect_InitializesTracer(t *testing.T) {
 }
 
 func TestOTel_Connect_InitializesMetrics(t *testing.T) {
+	t.Parallel()
 	reader, meter := newTestMeter()
 
 	primary := memory.NewStore()
@@ -153,6 +157,7 @@ func TestOTel_Connect_InitializesMetrics(t *testing.T) {
 }
 
 func TestOTel_Get_EmitsSpan(t *testing.T) {
+	t.Parallel()
 	recorder, tracer := newTestTracer()
 
 	primary := memory.NewStore()
@@ -186,6 +191,7 @@ func TestOTel_Get_EmitsSpan(t *testing.T) {
 }
 
 func TestOTel_Set_EmitsSpan(t *testing.T) {
+	t.Parallel()
 	recorder, tracer := newTestTracer()
 
 	primary := memory.NewStore()
@@ -213,6 +219,7 @@ func TestOTel_Set_EmitsSpan(t *testing.T) {
 }
 
 func TestOTel_Delete_EmitsSpan(t *testing.T) {
+	t.Parallel()
 	recorder, tracer := newTestTracer()
 
 	primary := memory.NewStore()
@@ -238,6 +245,7 @@ func TestOTel_Delete_EmitsSpan(t *testing.T) {
 }
 
 func TestOTel_Find_EmitsSpan(t *testing.T) {
+	t.Parallel()
 	recorder, tracer := newTestTracer()
 
 	primary := memory.NewStore()
@@ -262,6 +270,7 @@ func TestOTel_Find_EmitsSpan(t *testing.T) {
 }
 
 func TestOTel_Watch_EmitsSpan(t *testing.T) {
+	t.Parallel()
 	recorder, tracer := newTestTracer()
 
 	primary := memory.NewStore()
@@ -283,6 +292,7 @@ func TestOTel_Watch_EmitsSpan(t *testing.T) {
 }
 
 func TestOTel_Metrics_OperationCountIncremented(t *testing.T) {
+	t.Parallel()
 	reader, meter := newTestMeter()
 
 	primary := memory.NewStore()
@@ -311,6 +321,7 @@ func TestOTel_Metrics_OperationCountIncremented(t *testing.T) {
 }
 
 func TestOTel_Metrics_ErrorCountIncremented(t *testing.T) {
+	t.Parallel()
 	reader, meter := newTestMeter()
 
 	primary := memory.NewStore()
@@ -332,6 +343,7 @@ func TestOTel_Metrics_ErrorCountIncremented(t *testing.T) {
 }
 
 func TestOTel_Metrics_AsyncReplication(t *testing.T) {
+	t.Parallel()
 	reader, meter := newTestMeter()
 
 	primary := memory.NewStore()
@@ -348,14 +360,11 @@ func TestOTel_Metrics_AsyncReplication(t *testing.T) {
 
 	_, _ = s.Set(ctx, "ns", "key", config.NewValue("v"))
 
-	// Wait for async replication to complete
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if _, err := secondary.Get(ctx, "ns", "key"); err == nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// Wait for async replication to complete.
+	testutil.WaitUntil(t, 2*time.Second, func() bool {
+		_, err := secondary.Get(ctx, "ns", "key")
+		return err == nil
+	}, "secondary did not receive async replication within timeout")
 
 	names := collectMetricNames(t, reader)
 	if !names["config.replica.replication.events.total"] {
@@ -367,6 +376,7 @@ func TestOTel_Metrics_AsyncReplication(t *testing.T) {
 }
 
 func TestOTel_Metrics_InitialSync(t *testing.T) {
+	t.Parallel()
 	reader, meter := newTestMeter()
 
 	primary := memory.NewStore()
@@ -395,6 +405,7 @@ func TestOTel_Metrics_InitialSync(t *testing.T) {
 }
 
 func TestOTel_InitialSync_EmitsSpan(t *testing.T) {
+	t.Parallel()
 	recorder, tracer := newTestTracer()
 
 	primary := memory.NewStore()
@@ -423,6 +434,7 @@ func TestOTel_InitialSync_EmitsSpan(t *testing.T) {
 }
 
 func TestOTel_BackendName_AppearsInSpan(t *testing.T) {
+	t.Parallel()
 	recorder, tracer := newTestTracer()
 
 	primary := memory.NewStore()
@@ -448,6 +460,7 @@ func TestOTel_BackendName_AppearsInSpan(t *testing.T) {
 }
 
 func TestOTel_ModeAttr_SyncAppearsInSpan(t *testing.T) {
+	t.Parallel()
 	recorder, tracer := newTestTracer()
 
 	primary := memory.NewStore()
@@ -473,6 +486,7 @@ func TestOTel_ModeAttr_SyncAppearsInSpan(t *testing.T) {
 }
 
 func TestOTel_ReadPreferenceAttr_AppearsInSpan(t *testing.T) {
+	t.Parallel()
 	recorder, tracer := newTestTracer()
 
 	primary := memory.NewStore()
@@ -499,6 +513,7 @@ func TestOTel_ReadPreferenceAttr_AppearsInSpan(t *testing.T) {
 }
 
 func TestOTel_NoTraces_NoMetrics_NoOp(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	s := NewStore(primary, nil)
 
@@ -517,6 +532,7 @@ func TestOTel_NoTraces_NoMetrics_NoOp(t *testing.T) {
 }
 
 func TestOTel_GetMany_EmitsSpan(t *testing.T) {
+	t.Parallel()
 	recorder, tracer := newTestTracer()
 
 	primary := memory.NewStore()
@@ -548,6 +564,7 @@ func TestOTel_GetMany_EmitsSpan(t *testing.T) {
 }
 
 func TestOTel_SetMany_EmitsSpan(t *testing.T) {
+	t.Parallel()
 	recorder, tracer := newTestTracer()
 
 	primary := memory.NewStore()
@@ -570,6 +587,7 @@ func TestOTel_SetMany_EmitsSpan(t *testing.T) {
 }
 
 func TestOTel_DeleteMany_EmitsSpan(t *testing.T) {
+	t.Parallel()
 	recorder, tracer := newTestTracer()
 
 	primary := memory.NewStore()
@@ -592,6 +610,7 @@ func TestOTel_DeleteMany_EmitsSpan(t *testing.T) {
 }
 
 func TestOTel_Close_EmitsSpan(t *testing.T) {
+	t.Parallel()
 	recorder, tracer := newTestTracer()
 
 	primary := memory.NewStore()

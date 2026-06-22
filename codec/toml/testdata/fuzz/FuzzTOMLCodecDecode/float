@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("f = 1.5\ng = 2.0")

@@ -6,6 +6,7 @@ import (
 )
 
 func TestNewFieldMapperDefaultTag(t *testing.T) {
+	t.Parallel()
 	m := NewFieldMapper("")
 	if m.tagName != "json" {
 		t.Errorf("expected default tag 'json', got %q", m.tagName)
@@ -13,6 +14,7 @@ func TestNewFieldMapperDefaultTag(t *testing.T) {
 }
 
 func TestNewFieldMapperCustomTag(t *testing.T) {
+	t.Parallel()
 	m := NewFieldMapper("yaml")
 	if m.tagName != "yaml" {
 		t.Errorf("expected tag 'yaml', got %q", m.tagName)
@@ -20,6 +22,7 @@ func TestNewFieldMapperCustomTag(t *testing.T) {
 }
 
 func TestStructToMapBasic(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name  string `json:"name"`
 		Count int    `json:"count"`
@@ -39,6 +42,7 @@ func TestStructToMapBasic(t *testing.T) {
 }
 
 func TestStructToMapPointer(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name string `json:"name"`
 	}
@@ -55,6 +59,7 @@ func TestStructToMapPointer(t *testing.T) {
 }
 
 func TestStructToMapNonStruct(t *testing.T) {
+	t.Parallel()
 	m := NewFieldMapper("json")
 	_, err := m.StructToMap("not a struct")
 	if err == nil {
@@ -63,6 +68,7 @@ func TestStructToMapNonStruct(t *testing.T) {
 }
 
 func TestStructToMapNestedStruct(t *testing.T) {
+	t.Parallel()
 	type Inner struct {
 		Value string `json:"value"`
 	}
@@ -89,6 +95,7 @@ func TestStructToMapNestedStruct(t *testing.T) {
 }
 
 func TestStructToMapIgnoredField(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name   string `json:"name"`
 		Secret string `json:"-"`
@@ -111,6 +118,7 @@ func TestStructToMapIgnoredField(t *testing.T) {
 }
 
 func TestStructToMapOmitempty(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name  string `json:"name,omitempty"`
 		Count int    `json:"count,omitempty"`
@@ -139,6 +147,7 @@ func TestStructToMapOmitempty(t *testing.T) {
 }
 
 func TestStructToMapNonrecursive(t *testing.T) {
+	t.Parallel()
 	type Inner struct {
 		A string `json:"a"`
 		B int    `json:"b"`
@@ -170,6 +179,7 @@ func TestStructToMapNonrecursive(t *testing.T) {
 }
 
 func TestStructToMapUnexportedFieldsSkipped(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name     string `json:"name"`
 		internal string //nolint:unused
@@ -186,6 +196,7 @@ func TestStructToMapUnexportedFieldsSkipped(t *testing.T) {
 }
 
 func TestStructToMapNoTagUsesFieldName(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		MyField string
 	}
@@ -201,6 +212,7 @@ func TestStructToMapNoTagUsesFieldName(t *testing.T) {
 }
 
 func TestStructToMapPointerFieldNil(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name *string `json:"name"`
 	}
@@ -216,6 +228,7 @@ func TestStructToMapPointerFieldNil(t *testing.T) {
 }
 
 func TestStructToMapPointerFieldNonNil(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name *string `json:"name"`
 	}
@@ -232,6 +245,7 @@ func TestStructToMapPointerFieldNonNil(t *testing.T) {
 }
 
 func TestStructToMapPointerToStruct(t *testing.T) {
+	t.Parallel()
 	type Inner struct {
 		Val string `json:"val"`
 	}
@@ -265,6 +279,7 @@ func TestStructToMapPointerToStruct(t *testing.T) {
 }
 
 func TestStructToMapPointerToStructNonrecursive(t *testing.T) {
+	t.Parallel()
 	type Inner struct {
 		Val string `json:"val"`
 	}
@@ -285,6 +300,7 @@ func TestStructToMapPointerToStructNonrecursive(t *testing.T) {
 }
 
 func TestStructToMapPointerNilOmitempty(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name *string `json:"name,omitempty"`
 	}
@@ -300,6 +316,7 @@ func TestStructToMapPointerNilOmitempty(t *testing.T) {
 }
 
 func TestStructToMapSlice(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Items []string `json:"items"`
 	}
@@ -322,6 +339,7 @@ func TestStructToMapSlice(t *testing.T) {
 }
 
 func TestStructToMapSliceNil(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Items []string `json:"items"`
 	}
@@ -337,6 +355,7 @@ func TestStructToMapSliceNil(t *testing.T) {
 }
 
 func TestStructToMapSliceOfStructs(t *testing.T) {
+	t.Parallel()
 	type Item struct {
 		Name string `json:"name"`
 	}
@@ -366,6 +385,7 @@ func TestStructToMapSliceOfStructs(t *testing.T) {
 }
 
 func TestStructToMapMapField(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Labels map[string]string `json:"labels"`
 	}
@@ -386,6 +406,7 @@ func TestStructToMapMapField(t *testing.T) {
 }
 
 func TestStructToMapNilMapField(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Labels map[string]string `json:"labels"`
 	}
@@ -401,6 +422,7 @@ func TestStructToMapNilMapField(t *testing.T) {
 }
 
 func TestStructToMapCustomTag(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name string `config:"my_name"`
 		Age  int    `config:"my_age"`
@@ -420,6 +442,7 @@ func TestStructToMapCustomTag(t *testing.T) {
 }
 
 func TestStructToFlatMapNonStruct(t *testing.T) {
+	t.Parallel()
 	m := NewFieldMapper("json")
 	_, err := m.StructToFlatMap(42, "prefix")
 	if err == nil {
@@ -428,6 +451,7 @@ func TestStructToFlatMapNonStruct(t *testing.T) {
 }
 
 func TestStructToFlatMapPointerInput(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name string `json:"name"`
 	}
@@ -442,6 +466,7 @@ func TestStructToFlatMapPointerInput(t *testing.T) {
 }
 
 func TestStructToFlatMapEmptyPrefix(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`
@@ -461,6 +486,7 @@ func TestStructToFlatMapEmptyPrefix(t *testing.T) {
 }
 
 func TestStructToFlatMapNested(t *testing.T) {
+	t.Parallel()
 	type Pool struct {
 		Size int `json:"size"`
 	}
@@ -483,6 +509,7 @@ func TestStructToFlatMapNested(t *testing.T) {
 }
 
 func TestStructToFlatMapPointerField(t *testing.T) {
+	t.Parallel()
 	type Inner struct {
 		Val string `json:"val"`
 	}
@@ -512,6 +539,7 @@ func TestStructToFlatMapPointerField(t *testing.T) {
 }
 
 func TestStructToFlatMapPointerFieldOmitempty(t *testing.T) {
+	t.Parallel()
 	type Inner struct {
 		Val string `json:"val"`
 	}
@@ -530,6 +558,7 @@ func TestStructToFlatMapPointerFieldOmitempty(t *testing.T) {
 }
 
 func TestStructToFlatMapPointerToNonStruct(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Count *int `json:"count"`
 	}
@@ -546,6 +575,7 @@ func TestStructToFlatMapPointerToNonStruct(t *testing.T) {
 }
 
 func TestStructToFlatMapNonrecursive(t *testing.T) {
+	t.Parallel()
 	type Creds struct {
 		User string `json:"user"`
 		Pass string `json:"pass"`
@@ -569,6 +599,7 @@ func TestStructToFlatMapNonrecursive(t *testing.T) {
 }
 
 func TestStructToFlatMapNonrecursivePointer(t *testing.T) {
+	t.Parallel()
 	type Inner struct {
 		Val string `json:"val"`
 	}
@@ -590,6 +621,7 @@ func TestStructToFlatMapNonrecursivePointer(t *testing.T) {
 }
 
 func TestStructToFlatMapIgnoredField(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name   string `json:"name"`
 		Secret string `json:"-"`
@@ -611,6 +643,7 @@ func TestStructToFlatMapIgnoredField(t *testing.T) {
 }
 
 func TestStructToFlatMapOmitempty(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name  string  `json:"name,omitempty"`
 		Count int     `json:"count,omitempty"`
@@ -629,6 +662,7 @@ func TestStructToFlatMapOmitempty(t *testing.T) {
 }
 
 func TestFlatMapToStructNonPointerTarget(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name string `json:"name"`
 	}
@@ -642,6 +676,7 @@ func TestFlatMapToStructNonPointerTarget(t *testing.T) {
 }
 
 func TestFlatMapToStructNilTarget(t *testing.T) {
+	t.Parallel()
 	m := NewFieldMapper("json")
 	err := m.FlatMapToStruct(map[string]any{"name": "test"}, "", (*struct{})(nil))
 	if err == nil {
@@ -650,6 +685,7 @@ func TestFlatMapToStructNilTarget(t *testing.T) {
 }
 
 func TestFlatMapToStructNonStructTarget(t *testing.T) {
+	t.Parallel()
 	m := NewFieldMapper("json")
 	var s string
 	err := m.FlatMapToStruct(map[string]any{"name": "test"}, "", &s)
@@ -659,6 +695,7 @@ func TestFlatMapToStructNonStructTarget(t *testing.T) {
 }
 
 func TestFlatMapToStructWithPrefix(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Host string `json:"host"`
 		Port int    `json:"port"`
@@ -683,6 +720,7 @@ func TestFlatMapToStructWithPrefix(t *testing.T) {
 }
 
 func TestFlatMapToStructNoPrefix(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name string `json:"name"`
 	}
@@ -701,6 +739,7 @@ func TestFlatMapToStructNoPrefix(t *testing.T) {
 }
 
 func TestFlatMapToStructNestedStruct(t *testing.T) {
+	t.Parallel()
 	type Pool struct {
 		Size    int `json:"size"`
 		MaxIdle int `json:"max_idle"`
@@ -732,6 +771,7 @@ func TestFlatMapToStructNestedStruct(t *testing.T) {
 }
 
 func TestFlatMapToStructIgnoredField(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name   string `json:"name"`
 		Secret string `json:"-"`
@@ -755,6 +795,7 @@ func TestFlatMapToStructIgnoredField(t *testing.T) {
 }
 
 func TestFlatMapToStructUnmatchedKeysIgnored(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name string `json:"name"`
 	}
@@ -774,6 +815,7 @@ func TestFlatMapToStructUnmatchedKeysIgnored(t *testing.T) {
 }
 
 func TestMapToStructBasic(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name string `json:"name"`
 		Age  int    `json:"age"`
@@ -797,6 +839,7 @@ func TestMapToStructBasic(t *testing.T) {
 }
 
 func TestMapToStructNonPointerTarget(t *testing.T) {
+	t.Parallel()
 	type S struct{ Name string }
 	m := NewFieldMapper("json")
 	var s S
@@ -807,6 +850,7 @@ func TestMapToStructNonPointerTarget(t *testing.T) {
 }
 
 func TestMapToStructNonStructTarget(t *testing.T) {
+	t.Parallel()
 	m := NewFieldMapper("json")
 	var s string
 	err := m.MapToStruct(map[string]any{"Name": "test"}, &s)
@@ -816,6 +860,7 @@ func TestMapToStructNonStructTarget(t *testing.T) {
 }
 
 func TestMapToStructNestedMap(t *testing.T) {
+	t.Parallel()
 	type Inner struct {
 		Val string `json:"val"`
 	}
@@ -839,6 +884,7 @@ func TestMapToStructNestedMap(t *testing.T) {
 }
 
 func TestMapToStructPointerField(t *testing.T) {
+	t.Parallel()
 	type Inner struct {
 		Val string `json:"val"`
 	}
@@ -865,6 +911,7 @@ func TestMapToStructPointerField(t *testing.T) {
 }
 
 func TestMapToStructPointerToNonStruct(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Count *int `json:"count"`
 	}
@@ -886,6 +933,7 @@ func TestMapToStructPointerToNonStruct(t *testing.T) {
 }
 
 func TestMapToStructNilValue(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name *string `json:"name"`
 	}
@@ -904,6 +952,7 @@ func TestMapToStructNilValue(t *testing.T) {
 }
 
 func TestMapToStructSliceField(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Tags []string `json:"tags"`
 	}
@@ -925,6 +974,7 @@ func TestMapToStructSliceField(t *testing.T) {
 }
 
 func TestMapToStructSliceOfStructs(t *testing.T) {
+	t.Parallel()
 	type Item struct {
 		Name string `json:"name"`
 	}
@@ -955,6 +1005,7 @@ func TestMapToStructSliceOfStructs(t *testing.T) {
 }
 
 func TestMapToStructMapField(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Labels map[string]string `json:"labels"`
 	}
@@ -976,6 +1027,7 @@ func TestMapToStructMapField(t *testing.T) {
 }
 
 func TestMapToStructNumericConversions(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		IntVal    int     `json:"int_val"`
 		UintVal   uint    `json:"uint_val"`
@@ -1015,6 +1067,7 @@ func TestMapToStructNumericConversions(t *testing.T) {
 }
 
 func TestMapToStructCaseInsensitiveMatch(t *testing.T) {
+	t.Parallel()
 	type S struct {
 		Name string `json:"name"`
 	}
@@ -1035,6 +1088,7 @@ func TestMapToStructCaseInsensitiveMatch(t *testing.T) {
 }
 
 func TestSetNumericValueIntFromInt(t *testing.T) {
+	t.Parallel()
 	var target int64
 	fieldVal := reflect.ValueOf(&target).Elem()
 	valueVal := reflect.ValueOf(int64(42))
@@ -1047,6 +1101,7 @@ func TestSetNumericValueIntFromInt(t *testing.T) {
 }
 
 func TestSetNumericValueIntFromUint(t *testing.T) {
+	t.Parallel()
 	var target int64
 	fieldVal := reflect.ValueOf(&target).Elem()
 	valueVal := reflect.ValueOf(uint64(42))
@@ -1059,6 +1114,7 @@ func TestSetNumericValueIntFromUint(t *testing.T) {
 }
 
 func TestSetNumericValueUintFromFloat(t *testing.T) {
+	t.Parallel()
 	var target uint64
 	fieldVal := reflect.ValueOf(&target).Elem()
 	valueVal := reflect.ValueOf(float64(99))
@@ -1071,6 +1127,7 @@ func TestSetNumericValueUintFromFloat(t *testing.T) {
 }
 
 func TestSetNumericValueUintFromInt(t *testing.T) {
+	t.Parallel()
 	var target uint64
 	fieldVal := reflect.ValueOf(&target).Elem()
 	valueVal := reflect.ValueOf(int64(50))
@@ -1083,6 +1140,7 @@ func TestSetNumericValueUintFromInt(t *testing.T) {
 }
 
 func TestSetNumericValueUintFromUint(t *testing.T) {
+	t.Parallel()
 	var target uint64
 	fieldVal := reflect.ValueOf(&target).Elem()
 	valueVal := reflect.ValueOf(uint64(77))
@@ -1095,6 +1153,7 @@ func TestSetNumericValueUintFromUint(t *testing.T) {
 }
 
 func TestSetNumericValueFloatFromInt(t *testing.T) {
+	t.Parallel()
 	var target float64
 	fieldVal := reflect.ValueOf(&target).Elem()
 	valueVal := reflect.ValueOf(int64(10))
@@ -1107,6 +1166,7 @@ func TestSetNumericValueFloatFromInt(t *testing.T) {
 }
 
 func TestSetNumericValueFloatFromUint(t *testing.T) {
+	t.Parallel()
 	var target float64
 	fieldVal := reflect.ValueOf(&target).Elem()
 	valueVal := reflect.ValueOf(uint64(20))
@@ -1119,6 +1179,7 @@ func TestSetNumericValueFloatFromUint(t *testing.T) {
 }
 
 func TestSetNumericValueFloatFromFloat(t *testing.T) {
+	t.Parallel()
 	var target float64
 	fieldVal := reflect.ValueOf(&target).Elem()
 	valueVal := reflect.ValueOf(float64(3.14))
@@ -1131,6 +1192,7 @@ func TestSetNumericValueFloatFromFloat(t *testing.T) {
 }
 
 func TestIsEmptyValue(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		val      any
@@ -1156,6 +1218,7 @@ func TestIsEmptyValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			v := reflect.ValueOf(tt.val)
 			got := isEmptyValue(v)
 			if got != tt.expected {
@@ -1166,6 +1229,7 @@ func TestIsEmptyValue(t *testing.T) {
 }
 
 func TestIsEmptyValuePointer(t *testing.T) {
+	t.Parallel()
 	var nilPtr *string
 	v := reflect.ValueOf(nilPtr)
 	if !isEmptyValue(v) {
@@ -1180,6 +1244,7 @@ func TestIsEmptyValuePointer(t *testing.T) {
 }
 
 func TestIsNumeric(t *testing.T) {
+	t.Parallel()
 	numericKinds := []reflect.Kind{
 		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
@@ -1202,6 +1267,7 @@ func TestIsNumeric(t *testing.T) {
 }
 
 func TestParseTag(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		tag      string
 		name     string
@@ -1217,6 +1283,7 @@ func TestParseTag(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.tag, func(t *testing.T) {
+			t.Parallel()
 			name, opts := parseTag(tt.tag)
 			if name != tt.name {
 				t.Errorf("expected name %q, got %q", tt.name, name)
@@ -1232,6 +1299,7 @@ func TestParseTag(t *testing.T) {
 }
 
 func TestHasOption(t *testing.T) {
+	t.Parallel()
 	opts := []string{"omitempty", "nonrecursive"}
 	if !hasOption(opts, "omitempty") {
 		t.Error("expected to find 'omitempty'")
@@ -1248,6 +1316,7 @@ func TestHasOption(t *testing.T) {
 }
 
 func TestBuildNestedMap(t *testing.T) {
+	t.Parallel()
 	data := map[string]any{
 		"db/host":       "localhost",
 		"db/port":       5432,
@@ -1277,6 +1346,7 @@ func TestBuildNestedMap(t *testing.T) {
 }
 
 func TestBuildNestedMapEmptyPrefix(t *testing.T) {
+	t.Parallel()
 	data := map[string]any{
 		"host": "localhost",
 		"port": 5432,
@@ -1292,6 +1362,7 @@ func TestBuildNestedMapEmptyPrefix(t *testing.T) {
 }
 
 func TestBuildNestedMapPathConflict(t *testing.T) {
+	t.Parallel()
 	// If a key appears both as a leaf and as a prefix
 	data := map[string]any{
 		"db":      "value",
@@ -1311,6 +1382,7 @@ func TestBuildNestedMapPathConflict(t *testing.T) {
 }
 
 func TestFlatMapToStructRoundTrip(t *testing.T) {
+	t.Parallel()
 	type Inner struct {
 		A string `json:"a"`
 		B int    `json:"b"`

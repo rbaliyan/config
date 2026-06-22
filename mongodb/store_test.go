@@ -75,8 +75,12 @@ func TestMongoDBStore_Watch(t *testing.T) {
 		t.Fatalf("Watch failed: %v", err)
 	}
 
-	// Give the change stream time to initialize
-	time.Sleep(100 * time.Millisecond)
+	// Wait until the change stream is actually live by probing with
+	// throwaway writes and draining their events, rather than sleeping a
+	// fixed amount and hoping the stream registered in time.
+	if !mongoWatchReady(ctx, t, store, changes, "watchtest") {
+		t.Fatal("change stream never became ready")
+	}
 
 	// Set a value
 	value := config.NewValue("test", config.WithValueType(config.TypeString))

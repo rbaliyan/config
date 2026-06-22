@@ -75,9 +75,9 @@ func TestRegisterNilReturnsError(t *testing.T) {
 
 type emptyNameCodec struct{}
 
-func (e emptyNameCodec) Name() string                                        { return "" }
-func (e emptyNameCodec) Encode(_ context.Context, _ any) ([]byte, error)     { return nil, nil }
-func (e emptyNameCodec) Decode(_ context.Context, _ []byte, _ any) error     { return nil }
+func (e emptyNameCodec) Name() string                                    { return "" }
+func (e emptyNameCodec) Encode(_ context.Context, _ any) ([]byte, error) { return nil, nil }
+func (e emptyNameCodec) Decode(_ context.Context, _ []byte, _ any) error { return nil }
 
 func TestRegisterEmptyNameReturnsError(t *testing.T) {
 	if err := codec.Register(emptyNameCodec{}); err == nil {

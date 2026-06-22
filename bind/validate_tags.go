@@ -24,7 +24,7 @@ func (v *TagValidator) Validate(value any) error {
 	val := reflect.ValueOf(value)
 
 	// Handle pointers
-	if val.Kind() == reflect.Ptr {
+	if val.Kind() == reflect.Pointer {
 		if val.IsNil() {
 			return nil
 		}
@@ -69,7 +69,7 @@ func (v *TagValidator) validateStruct(val reflect.Value, prefix string) error {
 		}
 
 		// Handle pointer to struct
-		if field.Kind() == reflect.Ptr && !field.IsNil() {
+		if field.Kind() == reflect.Pointer && !field.IsNil() {
 			elem := field.Elem()
 			if elem.Kind() == reflect.Struct && tag == "" {
 				if err := v.validateStruct(elem, fieldName); err != nil {

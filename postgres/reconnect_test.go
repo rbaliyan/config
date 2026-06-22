@@ -207,6 +207,34 @@ func waitForChangeEvent(t *testing.T, ch <-chan config.ChangeEvent, wantKey stri
 	}
 }
 
+// waitForWatchReady proves the watch subscription is live by issuing
+// throwaway probe writes and draining their events, replacing the old
+// fixed `time.Sleep` after Watch. It fails the test if no probe event is
+// delivered within a bounded budget. Probe keys are namespaced under
+// "__ready_" so they cannot be mistaken for the test's real assertions.
+func waitForWatchReady(t *testing.T, store *postgres.Store, ch <-chan config.ChangeEvent, ns string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for attempt := 0; attempt < 50; attempt++ {
+		probe := fmt.Sprintf("__ready_%d", attempt)
+		if _, err := store.Set(ctx, ns, probe, config.NewValue("ready")); err != nil {
+			t.Fatalf("readiness probe Set: %v", err)
+		}
+		select {
+		case ev := <-ch:
+			if len(ev.Key) >= len("__ready_") && ev.Key[:len("__ready_")] == "__ready_" {
+				return
+			}
+		case <-time.After(200 * time.Millisecond):
+			// retry with a fresh probe
+		case <-ctx.Done():
+			t.Fatal("watch channel never became ready (no probe event delivered)")
+		}
+	}
+	t.Fatal("watch channel never became ready after 50 probes")
+}
+
 func waitForChangeEventSoft(ch <-chan config.ChangeEvent, wantKey string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -221,4 +249,3 @@ func waitForChangeEventSoft(ch <-chan config.ChangeEvent, wantKey string, timeou
 	}
 	return false
 }
-

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("xs = [1, 2, 3]\nys = [[1,2],[3,4]]")

@@ -7,10 +7,12 @@ import (
 	"time"
 
 	"github.com/rbaliyan/config"
+	"github.com/rbaliyan/config/internal/testutil"
 	"github.com/rbaliyan/config/memory"
 )
 
 func TestNewStore(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -33,6 +35,7 @@ func TestNewStore(t *testing.T) {
 }
 
 func TestStore_Connect_Close(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -48,6 +51,7 @@ func TestStore_Connect_Close(t *testing.T) {
 }
 
 func TestStore_Connect_PrimaryFails(t *testing.T) {
+	t.Parallel()
 	primary := &failStore{connectErr: errors.New("primary down")}
 	secondary := memory.NewStore()
 
@@ -60,6 +64,7 @@ func TestStore_Connect_PrimaryFails(t *testing.T) {
 }
 
 func TestStore_Connect_AllSecondariesFail(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	f1 := &failStore{connectErr: errors.New("sec1 down")}
 	f2 := &failStore{connectErr: errors.New("sec2 down")}
@@ -73,6 +78,7 @@ func TestStore_Connect_AllSecondariesFail(t *testing.T) {
 }
 
 func TestStore_Connect_OneSecondaryFails(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	f1 := &failStore{connectErr: errors.New("sec1 down")}
 	sec2 := memory.NewStore()
@@ -87,6 +93,7 @@ func TestStore_Connect_OneSecondaryFails(t *testing.T) {
 }
 
 func TestStore_Set_Get_ReadPrimary(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -111,6 +118,7 @@ func TestStore_Set_Get_ReadPrimary(t *testing.T) {
 }
 
 func TestStore_Set_ModeSync_PropagatestoSecondary(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -136,6 +144,7 @@ func TestStore_Set_ModeSync_PropagatestoSecondary(t *testing.T) {
 }
 
 func TestStore_Delete_ModeSync_PropagatestoSecondary(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -157,6 +166,7 @@ func TestStore_Delete_ModeSync_PropagatestoSecondary(t *testing.T) {
 }
 
 func TestStore_Set_ModeAsync_ReplicatesViaWatch(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -170,22 +180,19 @@ func TestStore_Set_ModeAsync_ReplicatesViaWatch(t *testing.T) {
 		t.Fatalf("Set failed: %v", err)
 	}
 
-	// Give the background goroutine time to replicate
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
+	// Wait for the background goroutine to replicate to the secondary.
+	testutil.WaitUntil(t, 2*time.Second, func() bool {
 		got, err := secondary.Get(ctx, "ns", "key")
-		if err == nil {
-			str, _ := got.String()
-			if str == "async-val" {
-				return // success
-			}
+		if err != nil {
+			return false
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Error("Secondary did not receive async replication within timeout")
+		str, _ := got.String()
+		return str == "async-val"
+	}, "secondary did not receive async replication within timeout")
 }
 
 func TestStore_Delete_ModeAsync_ReplicatesViaWatch(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -197,30 +204,24 @@ func TestStore_Delete_ModeAsync_ReplicatesViaWatch(t *testing.T) {
 	// Seed both stores
 	_, _ = s.Set(ctx, "ns", "key", config.NewValue("v"))
 
-	// Wait for async replication of Set
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if _, err := secondary.Get(ctx, "ns", "key"); err == nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// Wait for async replication of Set.
+	testutil.WaitUntil(t, 2*time.Second, func() bool {
+		_, err := secondary.Get(ctx, "ns", "key")
+		return err == nil
+	}, "secondary did not receive async replication of Set within timeout")
 
 	if err := s.Delete(ctx, "ns", "key"); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
 
-	deadline = time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if _, err := secondary.Get(ctx, "ns", "key"); config.IsNotFound(err) {
-			return // success
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Error("Secondary did not replicate Delete within timeout")
+	testutil.WaitUntil(t, 2*time.Second, func() bool {
+		_, err := secondary.Get(ctx, "ns", "key")
+		return config.IsNotFound(err)
+	}, "secondary did not replicate Delete within timeout")
 }
 
 func TestStore_Get_ReadSecondary(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -246,6 +247,7 @@ func TestStore_Get_ReadSecondary(t *testing.T) {
 }
 
 func TestStore_Get_ReadPrimaryPreferred_FallsBack(t *testing.T) {
+	t.Parallel()
 	primary := &failStore{getErr: config.ErrStoreNotConnected}
 	secondary := memory.NewStore()
 	ctx := context.Background()
@@ -267,6 +269,7 @@ func TestStore_Get_ReadPrimaryPreferred_FallsBack(t *testing.T) {
 }
 
 func TestStore_Get_ReadPrimaryPreferred_UsePrimary(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 	ctx := context.Background()
@@ -288,6 +291,7 @@ func TestStore_Get_ReadPrimaryPreferred_UsePrimary(t *testing.T) {
 }
 
 func TestStore_Find_ReadPrimary(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -313,6 +317,7 @@ func TestStore_Find_ReadPrimary(t *testing.T) {
 }
 
 func TestStore_Find_ReadSecondary(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -348,6 +353,7 @@ func TestStore_Find_ReadSecondary(t *testing.T) {
 }
 
 func TestStore_Watch_DelegatesToPrimary(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -366,6 +372,7 @@ func TestStore_Watch_DelegatesToPrimary(t *testing.T) {
 }
 
 func TestStore_Health_Delegates(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -380,6 +387,7 @@ func TestStore_Health_Delegates(t *testing.T) {
 }
 
 func TestStore_Health_NoHealthChecker(t *testing.T) {
+	t.Parallel()
 	primary := &plainStore{}
 	s := NewStore(primary, nil)
 
@@ -389,6 +397,7 @@ func TestStore_Health_NoHealthChecker(t *testing.T) {
 }
 
 func TestStore_Stats_DelegatesToPrimary(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -398,7 +407,13 @@ func TestStore_Stats_DelegatesToPrimary(t *testing.T) {
 	defer s.Close(ctx)
 
 	_, _ = s.Set(ctx, "ns", "k1", config.NewValue("v1"))
-	time.Sleep(20 * time.Millisecond) // async settle
+
+	// Stats delegates to the primary, which is written synchronously by Set,
+	// but poll to stay robust against any async settling.
+	testutil.WaitUntil(t, 2*time.Second, func() bool {
+		stats, err := s.Stats(ctx)
+		return err == nil && stats != nil && stats.TotalEntries() >= 1
+	}, "expected primary stats to report at least 1 entry")
 
 	stats, err := s.Stats(ctx)
 	if err != nil {
@@ -413,6 +428,7 @@ func TestStore_Stats_DelegatesToPrimary(t *testing.T) {
 }
 
 func TestStore_Stats_NoStatsProvider(t *testing.T) {
+	t.Parallel()
 	primary := &plainStore{}
 	s := NewStore(primary, nil)
 
@@ -426,6 +442,7 @@ func TestStore_Stats_NoStatsProvider(t *testing.T) {
 }
 
 func TestStore_InitialSync(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 	ctx := context.Background()
@@ -462,6 +479,7 @@ func TestStore_InitialSync(t *testing.T) {
 }
 
 func TestStore_Primary_Secondaries(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	sec1 := memory.NewStore()
 	sec2 := memory.NewStore()
@@ -485,6 +503,7 @@ func TestStore_Primary_Secondaries(t *testing.T) {
 }
 
 func TestStore_GetMany_ReadPrimary(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -506,6 +525,7 @@ func TestStore_GetMany_ReadPrimary(t *testing.T) {
 }
 
 func TestStore_GetMany_ReadSecondary(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -526,6 +546,7 @@ func TestStore_GetMany_ReadSecondary(t *testing.T) {
 }
 
 func TestStore_SetMany_ModeSync(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -553,6 +574,7 @@ func TestStore_SetMany_ModeSync(t *testing.T) {
 }
 
 func TestStore_DeleteMany_ModeSync(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -581,6 +603,7 @@ func TestStore_DeleteMany_ModeSync(t *testing.T) {
 }
 
 func TestStore_GetVersions_NotSupported(t *testing.T) {
+	t.Parallel()
 	primary := &plainStore{}
 	s := NewStore(primary, nil)
 
@@ -591,6 +614,7 @@ func TestStore_GetVersions_NotSupported(t *testing.T) {
 }
 
 func TestStore_SupportsCodec_NoValidator(t *testing.T) {
+	t.Parallel()
 	primary := &plainStore{}
 	s := NewStore(primary, nil)
 
@@ -600,6 +624,7 @@ func TestStore_SupportsCodec_NoValidator(t *testing.T) {
 }
 
 func TestStore_AsyncReplication_WatchNotSupported(t *testing.T) {
+	t.Parallel()
 	primary := &noWatchStore{Store: memory.NewStore()}
 	secondary := memory.NewStore()
 
@@ -618,6 +643,7 @@ func TestStore_AsyncReplication_WatchNotSupported(t *testing.T) {
 }
 
 func TestStore_Close_StopsReplication(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	secondary := memory.NewStore()
 
@@ -640,6 +666,7 @@ func TestStore_Close_StopsReplication(t *testing.T) {
 }
 
 func TestStore_WithWatchBackoff(t *testing.T) {
+	t.Parallel()
 	primary := memory.NewStore()
 	s := NewStore(primary, nil, WithWatchBackoff(1*time.Second))
 	if s.opts.watchBackoff != time.Second {

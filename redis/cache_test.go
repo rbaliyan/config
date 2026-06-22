@@ -178,9 +178,9 @@ func TestRedisCache_Stats(t *testing.T) {
 	v := config.NewValue("x", config.WithValueType(config.TypeString))
 	_ = c.Set(ctx, "ns", "k", v)
 
-	_, _ = c.Get(ctx, "ns", "k")        // hit
-	_, _ = c.Get(ctx, "ns", "k")        // hit
-	_, _ = c.Get(ctx, "ns", "missing")  // miss
+	_, _ = c.Get(ctx, "ns", "k")       // hit
+	_, _ = c.Get(ctx, "ns", "k")       // hit
+	_, _ = c.Get(ctx, "ns", "missing") // miss
 
 	stats := c.Stats()
 	if stats.Hits != 2 {

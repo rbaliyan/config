@@ -24,6 +24,7 @@ func setupTestConfig(t *testing.T) config.Config {
 }
 
 func TestNew(t *testing.T) {
+	t.Parallel()
 	cfg := setupTestConfig(t)
 	b := New(cfg)
 
@@ -42,6 +43,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestNewWithOptions(t *testing.T) {
+	t.Parallel()
 	cfg := setupTestConfig(t)
 	b := New(cfg,
 		WithFieldTag("yaml"),
@@ -53,6 +55,7 @@ func TestNewWithOptions(t *testing.T) {
 }
 
 func TestBind(t *testing.T) {
+	t.Parallel()
 	cfg := setupTestConfig(t)
 	b := New(cfg)
 	bound := b.Bind()
@@ -68,6 +71,7 @@ func TestBind(t *testing.T) {
 }
 
 func TestConfig(t *testing.T) {
+	t.Parallel()
 	cfg := setupTestConfig(t)
 	b := New(cfg)
 
@@ -77,6 +81,7 @@ func TestConfig(t *testing.T) {
 }
 
 func TestGetStruct(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
@@ -110,6 +115,7 @@ func TestGetStruct(t *testing.T) {
 }
 
 func TestGetStructNested(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
@@ -160,6 +166,7 @@ func TestGetStructNested(t *testing.T) {
 }
 
 func TestGetStructNotFound(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 	b := New(cfg)
@@ -176,6 +183,7 @@ func TestGetStructNotFound(t *testing.T) {
 }
 
 func TestSetStruct(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 	b := New(cfg)
@@ -218,6 +226,7 @@ func TestSetStruct(t *testing.T) {
 }
 
 func TestSetStructNested(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 	b := New(cfg)
@@ -270,6 +279,7 @@ func TestSetStructNested(t *testing.T) {
 }
 
 func TestSetGetRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 	b := New(cfg)
@@ -302,6 +312,7 @@ func TestSetGetRoundTrip(t *testing.T) {
 }
 
 func TestNonrecursiveTag(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 	b := New(cfg)
@@ -381,6 +392,7 @@ func TestNonrecursiveTag(t *testing.T) {
 }
 
 func TestWithTagValidation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
@@ -410,6 +422,7 @@ func TestWithTagValidation(t *testing.T) {
 }
 
 func TestValidationError(t *testing.T) {
+	t.Parallel()
 	// Test with key and field
 	err := &ValidationError{
 		Key:    "config/key",
@@ -452,6 +465,7 @@ func TestValidationError(t *testing.T) {
 }
 
 func TestBindError(t *testing.T) {
+	t.Parallel()
 	underlyingErr := ErrBindingFailed
 	err := &BindError{
 		Key: "config/key",
@@ -476,6 +490,7 @@ func TestBindError(t *testing.T) {
 }
 
 func TestIsValidationError(t *testing.T) {
+	t.Parallel()
 	validationErr := &ValidationError{Key: "test"}
 	if !IsValidationError(validationErr) {
 		t.Error("expected IsValidationError to return true")
@@ -488,6 +503,7 @@ func TestIsValidationError(t *testing.T) {
 }
 
 func TestIsBindError(t *testing.T) {
+	t.Parallel()
 	bindErr := &BindError{Key: "test"}
 	if !IsBindError(bindErr) {
 		t.Error("expected IsBindError to return true")
@@ -500,6 +516,7 @@ func TestIsBindError(t *testing.T) {
 }
 
 func TestTagValidationRequired(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
@@ -518,6 +535,7 @@ func TestTagValidationRequired(t *testing.T) {
 }
 
 func TestTagValidationMinMax(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
@@ -548,6 +566,7 @@ func TestTagValidationMinMax(t *testing.T) {
 }
 
 func TestSetStructValidationError(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
@@ -566,6 +585,7 @@ func TestSetStructValidationError(t *testing.T) {
 }
 
 func TestGetStructValidationError(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
@@ -589,6 +609,7 @@ func TestGetStructValidationError(t *testing.T) {
 }
 
 func TestBinderValidate(t *testing.T) {
+	t.Parallel()
 	cfg := setupTestConfig(t)
 
 	type Config struct {
@@ -616,6 +637,7 @@ func TestBinderValidate(t *testing.T) {
 }
 
 func TestFieldMapperStructToFlatMap(t *testing.T) {
+	t.Parallel()
 	type Inner struct {
 		Value string `json:"value"`
 	}
@@ -644,6 +666,7 @@ func TestFieldMapperStructToFlatMap(t *testing.T) {
 }
 
 func TestFieldMapperFlatMapToStruct(t *testing.T) {
+	t.Parallel()
 	type Inner struct {
 		Value string `json:"value"`
 	}
@@ -672,6 +695,7 @@ func TestFieldMapperFlatMapToStruct(t *testing.T) {
 }
 
 func TestFieldMapperIgnoredField(t *testing.T) {
+	t.Parallel()
 	type TestStruct struct {
 		Name     string `json:"name"`
 		Password string `json:"-"`
@@ -700,6 +724,7 @@ func TestFieldMapperIgnoredField(t *testing.T) {
 }
 
 func TestFieldMapperOmitempty(t *testing.T) {
+	t.Parallel()
 	type TestStruct struct {
 		Name  string `json:"name,omitempty"`
 		Value int    `json:"value,omitempty"`
@@ -720,6 +745,7 @@ func TestFieldMapperOmitempty(t *testing.T) {
 }
 
 func TestSetStructValidationFailsAtomically(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
@@ -750,6 +776,7 @@ func TestSetStructValidationFailsAtomically(t *testing.T) {
 }
 
 func TestTagValidationEnum(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 
@@ -774,6 +801,7 @@ func TestTagValidationEnum(t *testing.T) {
 }
 
 func TestTagValidationPattern(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cfg := setupTestConfig(t)
 

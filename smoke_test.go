@@ -23,12 +23,15 @@ import (
 	"github.com/rbaliyan/config/codec"
 	_ "github.com/rbaliyan/config/codec/toml"
 	_ "github.com/rbaliyan/config/codec/yaml"
+	"github.com/rbaliyan/config/expand"
 	"github.com/rbaliyan/config/file"
 	"github.com/rbaliyan/config/live"
 	"github.com/rbaliyan/config/memory"
 	"github.com/rbaliyan/config/multi"
 	"github.com/rbaliyan/config/otel"
+	"github.com/rbaliyan/config/replica"
 	"github.com/rbaliyan/config/sqlite"
+	"github.com/rbaliyan/config/transform"
 
 	_ "modernc.org/sqlite"
 )
@@ -548,3 +551,312 @@ func TestSmoke_SecretValue(t *testing.T) {
 	}
 }
 
+// smokeXORTransformer is a deterministic, reversible byte transformer used to
+// exercise the transform decorator without pulling in a real codec. XOR with a
+// fixed key is its own inverse, so Transform then Reverse is the identity.
+type smokeXORTransformer struct{ key byte }
+
+func (x smokeXORTransformer) Name() string { return "smoke-xor" }
+
+func (x smokeXORTransformer) Transform(_ context.Context, data []byte) ([]byte, error) {
+	out := make([]byte, len(data))
+	for i, b := range data {
+		out[i] = b ^ x.key
+	}
+	return out, nil
+}
+
+func (x smokeXORTransformer) Reverse(ctx context.Context, data []byte) ([]byte, error) {
+	return x.Transform(ctx, data) // XOR is its own inverse.
+}
+
+// TestSmoke_TransformRoundTrip pins the transform decorator: a value written
+// through the wrapper must come back out byte-identical after the
+// Transform/Reverse pair. A broken transformer would corrupt every read.
+func TestSmoke_TransformRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := smokeCtx(t)
+
+	s, err := transform.WrapStore(memory.NewStore(), smokeXORTransformer{key: 0x42})
+	if err != nil {
+		t.Fatalf("WrapStore: %v", err)
+	}
+	if err := s.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close(ctx) })
+
+	if _, err := s.Set(ctx, "smoke", "k", config.NewValue("hello")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	got, err := s.Get(ctx, "smoke", "k")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if v, _ := got.String(); v != "hello" {
+		t.Fatalf("Get returned %q, want %q (transform round-trip broken)", v, "hello")
+	}
+}
+
+// TestSmoke_ExpandStore pins query-time placeholder expansion: a value seeded
+// with ${VAR} in the backing store must be substituted from the environment on
+// read. Regressions here silently ship unresolved placeholders to callers.
+func TestSmoke_ExpandStore(t *testing.T) {
+	// No t.Parallel(): t.Setenv is incompatible with parallel tests.
+	t.Setenv("SMOKE_EXPAND_VAR", "resolved")
+	ctx := smokeCtx(t)
+
+	base := memory.NewStore()
+	if err := base.Connect(ctx); err != nil {
+		t.Fatalf("base.Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = base.Close(ctx) })
+
+	if _, err := base.Set(ctx, "smoke", "k", config.NewValue("v=${SMOKE_EXPAND_VAR}")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	s, err := expand.NewStore(base, expand.WithDollarExpander(expand.EnvExpander()))
+	if err != nil {
+		t.Fatalf("expand.NewStore: %v", err)
+	}
+
+	got, err := s.Get(ctx, "smoke", "k")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if v, _ := got.String(); v != "v=resolved" {
+		t.Fatalf("Get returned %q, want %q (env expansion broken)", v, "v=resolved")
+	}
+}
+
+// TestSmoke_ReplicaStore pins the replica primary/secondary contract: a write
+// to the primary is readable through the replica facade. Two in-memory stores
+// keep it hermetic.
+func TestSmoke_ReplicaStore(t *testing.T) {
+	t.Parallel()
+	ctx := smokeCtx(t)
+
+	primary := memory.NewStore()
+	secondary := memory.NewStore()
+	s := replica.NewStore(primary, []config.Store{secondary})
+	if err := s.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close(ctx) })
+
+	if _, err := s.Set(ctx, "smoke", "k", config.NewValue("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	got, err := s.Get(ctx, "smoke", "k")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if v, _ := got.String(); v != "v" {
+		t.Fatalf("Get returned %q, want %q", v, "v")
+	}
+}
+
+// TestSmoke_SQLiteFullRoundTrip extends the SQLite smoke past Get: it pins the
+// full Set -> Get -> Delete -> Get(ErrNotFound) lifecycle so a regression in
+// SQL DELETE or the not-found mapping surfaces in the fast gate.
+func TestSmoke_SQLiteFullRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := smokeCtx(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+
+	store := sqlite.NewStore(db)
+	if err := store.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close(ctx) })
+
+	if _, err := store.Set(ctx, "smoke", "k", config.NewValue("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if _, err := store.Get(ctx, "smoke", "k"); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := store.Delete(ctx, "smoke", "k"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := store.Get(ctx, "smoke", "k"); !errors.Is(err, config.ErrNotFound) {
+		t.Fatalf("Get after Delete returned %v, want ErrNotFound", err)
+	}
+}
+
+// TestSmoke_ManagerCacheHit pins the Manager's resilience cache. The cache is
+// store-first: a normal Get reads the backend and refreshes the cache, so a
+// genuine cache hit is only recorded when the backend errors and the warmed
+// value is served as a fallback. This test warms the cache, fails the backend,
+// and asserts the stale value is served and CacheStats().Hits advances. A
+// regression that drops the fallback path would surface as a failed Get here.
+func TestSmoke_ManagerCacheHit(t *testing.T) {
+	t.Parallel()
+	ctx := smokeCtx(t)
+
+	store := memory.NewStore()
+	mgr, err := config.New(config.WithStore(store))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := mgr.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Close(ctx) })
+
+	cfg := mgr.Namespace("smoke")
+	if err := cfg.Set(ctx, "k", "v"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if _, err := cfg.Get(ctx, "k"); err != nil { // warms the resilience cache
+		t.Fatalf("Get (warm): %v", err)
+	}
+
+	// Fail the backend out from under the manager. The next Get must fall back
+	// to the warmed cache rather than propagating the store error.
+	if err := store.Close(ctx); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
+
+	got, err := cfg.Get(ctx, "k")
+	if err != nil {
+		t.Fatalf("Get (fallback): %v (resilience cache not serving stale value)", err)
+	}
+	if v, _ := got.String(); v != "v" {
+		t.Fatalf("fallback Get returned %q, want %q", v, "v")
+	}
+
+	obs, ok := mgr.(config.ManagerObserver)
+	if !ok {
+		t.Fatal("Manager does not implement ManagerObserver")
+	}
+	if hits := obs.CacheStats().Hits; hits < 1 {
+		t.Fatalf("CacheStats().Hits = %d, want >= 1 (cache fallback not recorded)", hits)
+	}
+}
+
+// TestSmoke_FindPagination pins the Find limit contract: with three keys
+// seeded and a limit of two, exactly two results must come back. A broken
+// limit would either return everything or nothing.
+func TestSmoke_FindPagination(t *testing.T) {
+	t.Parallel()
+	ctx := smokeCtx(t)
+
+	store := memory.NewStore()
+	if err := store.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close(ctx) })
+
+	for _, k := range []string{"a", "b", "c"} {
+		if _, err := store.Set(ctx, "smoke", k, config.NewValue(1)); err != nil {
+			t.Fatalf("Set %q: %v", k, err)
+		}
+	}
+
+	page, err := store.Find(ctx, "smoke", config.NewFilter().WithLimit(2).Build())
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	if got := len(page.Results()); got != 2 {
+		t.Fatalf("Find with limit 2 returned %d results, want 2", got)
+	}
+}
+
+// TestSmoke_MultiReadThrough pins StrategyReadThrough cache population: a key
+// present only in the backend must be copied into the front cache store after
+// a Get goes through the multi-store. Catches a read-through that reads but
+// never back-fills.
+func TestSmoke_MultiReadThrough(t *testing.T) {
+	t.Parallel()
+	ctx := smokeCtx(t)
+
+	cache := memory.NewStore()
+	backend := memory.NewStore()
+	m := multi.NewStore([]config.Store{cache, backend}, multi.WithStrategy(multi.StrategyReadThrough))
+	if err := m.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close(ctx) })
+
+	// Seed only the backend directly so the cache starts empty.
+	if _, err := backend.Set(ctx, "smoke", "k", config.NewValue("v")); err != nil {
+		t.Fatalf("backend.Set: %v", err)
+	}
+	if _, err := cache.Get(ctx, "smoke", "k"); !config.IsNotFound(err) {
+		t.Fatalf("cache pre-Get returned %v, want ErrNotFound (cache should start empty)", err)
+	}
+
+	// Read through the multi-store; this should back-fill the cache.
+	got, err := m.Get(ctx, "smoke", "k")
+	if err != nil {
+		t.Fatalf("multi.Get: %v", err)
+	}
+	if v, _ := got.String(); v != "v" {
+		t.Fatalf("multi.Get returned %q, want %q", v, "v")
+	}
+
+	// The cache store must now hold the key.
+	cached, err := cache.Get(ctx, "smoke", "k")
+	if err != nil {
+		t.Fatalf("cache.Get after read-through: %v (cache not populated)", err)
+	}
+	if v, _ := cached.String(); v != "v" {
+		t.Fatalf("cache holds %q, want %q", v, "v")
+	}
+}
+
+// TestSmoke_SQLiteNamespaceLister pins the SQLite NamespaceLister: two seeded
+// namespaces must come back byte-sorted with an empty next cursor. Exercises
+// the SQL DISTINCT/ORDER BY path that the memory lister cannot cover.
+func TestSmoke_SQLiteNamespaceLister(t *testing.T) {
+	t.Parallel()
+	ctx := smokeCtx(t)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+
+	store := sqlite.NewStore(db)
+	if err := store.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close(ctx) })
+
+	for _, ns := range []string{"beta", "alpha"} {
+		if _, err := store.Set(ctx, ns, "k", config.NewValue(1)); err != nil {
+			t.Fatalf("Set %q: %v", ns, err)
+		}
+	}
+
+	nl, ok := any(store).(config.NamespaceLister)
+	if !ok {
+		t.Fatal("sqlite store does not implement NamespaceLister")
+	}
+	names, cursor, err := nl.ListNamespaces(ctx, "", 10, "")
+	if err != nil {
+		t.Fatalf("ListNamespaces: %v", err)
+	}
+	if cursor != "" {
+		t.Errorf("nextCursor = %q, want empty (only 2 namespaces, limit 10)", cursor)
+	}
+	want := []string{"alpha", "beta"}
+	if len(names) != len(want) {
+		t.Fatalf("got %d names, want %d: %v", len(names), len(want), names)
+	}
+	for i, n := range want {
+		if names[i] != n {
+			t.Errorf("names[%d] = %q, want %q (byte-wise sort broken)", i, names[i], n)
+		}
+	}
+}

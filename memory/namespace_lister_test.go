@@ -14,6 +14,7 @@ import (
 // for the [config.NamespaceLister] contract — passing this suite is the
 // gating signal for adding similar tests to every other backend.
 func TestMemory_NamespaceListerConformance(t *testing.T) {
+	t.Parallel()
 	storetest.RunNamespaceListerSuite(t, func(t *testing.T) config.Store {
 		s := memory.NewStore()
 		ctx := context.Background()

@@ -1,0 +1,104 @@
+name: Bench
+
+on:
+  schedule:
+    - cron: "30 3 * * *" # nightly
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+
+permissions: read-all
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  bench:
+    name: Benchmark regression gate
+    runs-on: ubuntu-latest
+    # NOT run under -race: race instrumentation distorts timings and would make
+    # the ns/op comparison meaningless. Only the hermetic, in-process benches
+    # (memory store + codecs + Value) run here; no external services needed.
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Benchmark PR head
+        run: go test -run '^$' -bench=. -benchmem -count=6 ./... | tee new.txt
+
+      - name: Benchmark base
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git checkout --quiet "$BASE_SHA"
+          if [ -f benchmark_test.go ]; then
+            go test -run '^$' -bench=. -benchmem -count=6 ./... | tee old.txt
+          else
+            echo "base has no benchmarks; skipping regression comparison"
+          fi
+          git checkout --quiet -
+
+      - name: Compare with benchstat
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ ! -f old.txt ]; then
+            echo "no baseline (base predates benchmarks); informational only"; exit 0
+          fi
+          go run golang.org/x/perf/cmd/benchstat@latest old.txt new.txt | tee benchstat.txt
+
+      - name: Regression gate
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ ! -f old.txt ]; then
+            echo "no baseline to gate against; skipping"; exit 0
+          fi
+          # Version-independent gate: take the best (min) ns/op per benchmark
+          # across the -count runs in each file and fail if any benchmark on
+          # head regresses past the threshold vs base. Min-of-N is used to damp
+          # hosted-runner noise; the threshold is deliberately loose so only
+          # real regressions trip it (benchstat above remains the nuanced view).
+          THRESHOLD=1.30
+          awk -v thr="$THRESHOLD" '
+            FNR==1 { file++ }
+            /ns\/op/ {
+              name=$1
+              for (i=1;i<=NF;i++) if ($(i+1)=="ns/op") v=$i+0
+              if (v<=0) next
+              if (file==1) { if (!(name in o) || v<o[name]) o[name]=v }
+              else         { if (!(name in n) || v<n[name]) n[name]=v }
+            }
+            END {
+              bad=0
+              for (k in n) {
+                if (k in o && o[k]>0) {
+                  ratio=n[k]/o[k]
+                  if (ratio>thr) {
+                    printf "REGRESSION %s: %.0f -> %.0f ns/op (%.2fx)\n", k, o[k], n[k], ratio
+                    bad=1
+                  }
+                }
+              }
+              if (bad) { print "benchmark regression gate failed (threshold " thr "x)"; exit 1 }
+              print "benchmark regression gate passed (threshold " thr "x)"
+            }
+          ' old.txt new.txt
+
+      - name: Upload benchmark output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bench-results
+          path: |
+            new.txt
+            old.txt
+            benchstat.txt
+          if-no-files-found: ignore

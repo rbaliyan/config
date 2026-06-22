@@ -12,6 +12,7 @@ import (
 )
 
 func TestNewStore(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	if store == nil {
 		t.Fatal("NewStore returned nil")
@@ -19,6 +20,7 @@ func TestNewStore(t *testing.T) {
 }
 
 func TestStore_ConnectClose(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 
@@ -32,6 +34,7 @@ func TestStore_ConnectClose(t *testing.T) {
 }
 
 func TestStore_SetGet(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -59,6 +62,7 @@ func TestStore_SetGet(t *testing.T) {
 }
 
 func TestStore_GetNotFound(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -71,6 +75,7 @@ func TestStore_GetNotFound(t *testing.T) {
 }
 
 func TestStore_Delete(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -93,6 +98,7 @@ func TestStore_Delete(t *testing.T) {
 }
 
 func TestStore_DeleteNotFound(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -105,6 +111,7 @@ func TestStore_DeleteNotFound(t *testing.T) {
 }
 
 func TestStore_Find(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -129,6 +136,7 @@ func TestStore_Find(t *testing.T) {
 }
 
 func TestStore_FindWithLimit(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -154,6 +162,7 @@ func TestStore_FindWithLimit(t *testing.T) {
 }
 
 func TestStore_Watch(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -166,11 +175,10 @@ func TestStore_Watch(t *testing.T) {
 		t.Fatalf("Watch failed: %v", err)
 	}
 
-	// Set a value (triggers event)
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		_, _ = store.Set(ctx, "ns", "watch-key", config.NewValue("watch-value"))
-	}()
+	// Set a value (triggers event). The watcher is registered synchronously
+	// before Watch returns and the channel is buffered, so a direct call is
+	// race-free — no producer goroutine or sleep needed.
+	_, _ = store.Set(ctx, "ns", "watch-key", config.NewValue("watch-value"))
 
 	// Wait for event
 	select {
@@ -187,6 +195,7 @@ func TestStore_Watch(t *testing.T) {
 }
 
 func TestStore_WatchDelete(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -205,11 +214,9 @@ func TestStore_WatchDelete(t *testing.T) {
 		t.Fatalf("Watch failed: %v", err)
 	}
 
-	// Delete the value
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		_ = store.Delete(ctx, "ns", "delete-key")
-	}()
+	// Delete the value. The watcher is registered synchronously before Watch
+	// returns and the channel is buffered, so a direct call is race-free.
+	_ = store.Delete(ctx, "ns", "delete-key")
 
 	// Wait for event
 	select {
@@ -223,6 +230,7 @@ func TestStore_WatchDelete(t *testing.T) {
 }
 
 func TestStore_NamespaceIsolation(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -254,6 +262,7 @@ func TestStore_NamespaceIsolation(t *testing.T) {
 }
 
 func TestStore_Health(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -265,6 +274,7 @@ func TestStore_Health(t *testing.T) {
 }
 
 func TestStore_Stats(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -286,6 +296,7 @@ func TestStore_Stats(t *testing.T) {
 }
 
 func TestStore_GetMany(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -307,6 +318,7 @@ func TestStore_GetMany(t *testing.T) {
 }
 
 func TestStore_SetMany(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -330,6 +342,7 @@ func TestStore_SetMany(t *testing.T) {
 }
 
 func TestStore_DeleteMany(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -357,6 +370,7 @@ func TestStore_DeleteMany(t *testing.T) {
 }
 
 func TestStore_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -396,6 +410,7 @@ func TestStore_ConcurrentAccess(t *testing.T) {
 }
 
 func TestStore_ValueMetadata(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -426,6 +441,7 @@ func TestStore_ValueMetadata(t *testing.T) {
 }
 
 func TestStore_SetWithIfNotExists(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -453,6 +469,7 @@ func TestStore_SetWithIfNotExists(t *testing.T) {
 }
 
 func TestStore_SetWithIfExists(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -483,6 +500,7 @@ func TestStore_SetWithIfExists(t *testing.T) {
 }
 
 func TestStore_SetUpsertIsDefault(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -519,6 +537,7 @@ var (
 // --- Additional coverage tests ---
 
 func TestStore_SetManyPartialFailure_InvalidKey(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -562,6 +581,7 @@ func TestStore_SetManyPartialFailure_InvalidKey(t *testing.T) {
 }
 
 func TestStore_SetManyClosedStore(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -576,6 +596,7 @@ func TestStore_SetManyClosedStore(t *testing.T) {
 }
 
 func TestStore_SetManyInvalidNamespace(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -590,6 +611,7 @@ func TestStore_SetManyInvalidNamespace(t *testing.T) {
 }
 
 func TestStore_DroppedEvents(t *testing.T) {
+	t.Parallel()
 	// Create store with very small watch buffer
 	store := NewStore(WithWatchBufferSize(1))
 	ctx := context.Background()
@@ -618,6 +640,7 @@ func TestStore_DroppedEvents(t *testing.T) {
 }
 
 func TestStore_DroppedEventsCallback(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var droppedKeys []string
 
@@ -656,6 +679,7 @@ func TestStore_DroppedEventsCallback(t *testing.T) {
 }
 
 func TestStore_FindWithEmptyPrefix(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -677,6 +701,7 @@ func TestStore_FindWithEmptyPrefix(t *testing.T) {
 }
 
 func TestStore_FindWithKeysFilterNonExistent(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -705,6 +730,7 @@ func TestStore_FindWithKeysFilterNonExistent(t *testing.T) {
 }
 
 func TestStore_FindCursorPagination(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -771,6 +797,7 @@ func TestStore_FindCursorPagination(t *testing.T) {
 }
 
 func TestStore_FindCursorWithNoMoreResults(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -790,6 +817,7 @@ func TestStore_FindCursorWithNoMoreResults(t *testing.T) {
 }
 
 func TestStore_DeleteManyMixedExistingNonExisting(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -833,6 +861,7 @@ func TestStore_DeleteManyMixedExistingNonExisting(t *testing.T) {
 }
 
 func TestStore_DeleteManyClosedStore(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -845,6 +874,7 @@ func TestStore_DeleteManyClosedStore(t *testing.T) {
 }
 
 func TestStore_DeleteManyInvalidNamespace(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -857,6 +887,7 @@ func TestStore_DeleteManyInvalidNamespace(t *testing.T) {
 }
 
 func TestStore_WatchMultipleWatchers(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -874,11 +905,10 @@ func TestStore_WatchMultipleWatchers(t *testing.T) {
 		t.Fatalf("Watch 2 failed: %v", err)
 	}
 
-	// Set a value
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		_, _ = store.Set(ctx, "ns", "shared-key", config.NewValue("shared-val"))
-	}()
+	// Set a value. Both watchers are registered synchronously before their
+	// Watch calls returned and the channels are buffered, so a direct call is
+	// race-free.
+	_, _ = store.Set(ctx, "ns", "shared-key", config.NewValue("shared-val"))
 
 	// Both watchers should receive the event
 	received := make([]bool, 2)
@@ -918,6 +948,7 @@ func TestStore_WatchMultipleWatchers(t *testing.T) {
 }
 
 func TestStore_WatchCloseOneDoesNotAffectOther(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -940,19 +971,17 @@ func TestStore_WatchCloseOneDoesNotAffectOther(t *testing.T) {
 
 	// Cancel watcher 1
 	cancel1()
-	time.Sleep(50 * time.Millisecond) // Let cleanup goroutine run
 
-	// Verify ch1 is closed
+	// Verify ch1 is closed. The receive blocks until the cleanup goroutine
+	// closes the channel, so no sleep is needed.
 	_, ok := <-ch1
 	if ok {
 		t.Error("Expected ch1 to be closed after context cancellation")
 	}
 
-	// Watcher 2 should still work
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		_, _ = store.Set(ctx2, "ns", "after-cancel", config.NewValue("still-watching"))
-	}()
+	// Watcher 2 should still work. ch2 is registered synchronously and
+	// buffered, so a direct Set is race-free.
+	_, _ = store.Set(ctx2, "ns", "after-cancel", config.NewValue("still-watching"))
 
 	select {
 	case ev := <-ch2:
@@ -965,6 +994,7 @@ func TestStore_WatchCloseOneDoesNotAffectOther(t *testing.T) {
 }
 
 func TestStore_WatchWithPrefixFilter(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -980,12 +1010,10 @@ func TestStore_WatchWithPrefixFilter(t *testing.T) {
 		t.Fatalf("Watch failed: %v", err)
 	}
 
-	// Set two keys: one matching prefix and one not
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		_, _ = store.Set(ctx, "ns", "other/key", config.NewValue("should-not-see"))
-		_, _ = store.Set(ctx, "ns", "app/key", config.NewValue("should-see"))
-	}()
+	// Set two keys: one matching prefix and one not. The watcher is registered
+	// synchronously and buffered, so direct calls are race-free.
+	_, _ = store.Set(ctx, "ns", "other/key", config.NewValue("should-not-see"))
+	_, _ = store.Set(ctx, "ns", "app/key", config.NewValue("should-see"))
 
 	select {
 	case ev := <-ch:
@@ -998,6 +1026,7 @@ func TestStore_WatchWithPrefixFilter(t *testing.T) {
 }
 
 func TestStore_WatchNamespaceFilter(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -1012,12 +1041,10 @@ func TestStore_WatchNamespaceFilter(t *testing.T) {
 		t.Fatalf("Watch failed: %v", err)
 	}
 
-	// Set in a different namespace first, then target
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		_, _ = store.Set(ctx, "other", "key", config.NewValue("wrong-ns"))
-		_, _ = store.Set(ctx, "target", "key", config.NewValue("right-ns"))
-	}()
+	// Set in a different namespace first, then target. The watcher is
+	// registered synchronously and buffered, so direct calls are race-free.
+	_, _ = store.Set(ctx, "other", "key", config.NewValue("wrong-ns"))
+	_, _ = store.Set(ctx, "target", "key", config.NewValue("right-ns"))
 
 	select {
 	case ev := <-ch:
@@ -1030,6 +1057,7 @@ func TestStore_WatchNamespaceFilter(t *testing.T) {
 }
 
 func TestStore_WatchClosedStore(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1042,6 +1070,7 @@ func TestStore_WatchClosedStore(t *testing.T) {
 }
 
 func TestStore_OperationsOnClosedStore(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1091,6 +1120,7 @@ func TestStore_OperationsOnClosedStore(t *testing.T) {
 }
 
 func TestStore_DoubleClose(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1106,6 +1136,7 @@ func TestStore_DoubleClose(t *testing.T) {
 }
 
 func TestStore_InvalidNamespace(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1143,6 +1174,7 @@ func TestStore_InvalidNamespace(t *testing.T) {
 }
 
 func TestStore_SetInvalidKey(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1162,6 +1194,7 @@ func TestStore_SetInvalidKey(t *testing.T) {
 }
 
 func TestStore_SetReturnsValueWithMetadata(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1188,6 +1221,7 @@ func TestStore_SetReturnsValueWithMetadata(t *testing.T) {
 }
 
 func TestStore_FindWithKeysEmptySlice(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1207,6 +1241,7 @@ func TestStore_FindWithKeysEmptySlice(t *testing.T) {
 }
 
 func TestStore_DefaultOptions(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	if store == nil {
 		t.Fatal("NewStore returned nil")
@@ -1224,6 +1259,7 @@ func TestStore_DefaultOptions(t *testing.T) {
 }
 
 func TestStore_WithWatchBufferSizeZero(t *testing.T) {
+	t.Parallel()
 	// WithWatchBufferSize(0) should be ignored (keep default)
 	store := NewStore(WithWatchBufferSize(0))
 	if store.bufferSize != 100 {
@@ -1232,6 +1268,7 @@ func TestStore_WithWatchBufferSizeZero(t *testing.T) {
 }
 
 func TestStore_FindDifferentNamespaces(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1254,6 +1291,7 @@ func TestStore_FindDifferentNamespaces(t *testing.T) {
 }
 
 func TestStore_WatchAllNamespaces(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -1266,10 +1304,9 @@ func TestStore_WatchAllNamespaces(t *testing.T) {
 		t.Fatalf("Watch failed: %v", err)
 	}
 
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		_, _ = store.Set(ctx, "any-ns", "key", config.NewValue("val"))
-	}()
+	// The watcher is registered synchronously and buffered, so a direct Set
+	// is race-free.
+	_, _ = store.Set(ctx, "any-ns", "key", config.NewValue("val"))
 
 	select {
 	case ev := <-ch:
@@ -1282,6 +1319,7 @@ func TestStore_WatchAllNamespaces(t *testing.T) {
 }
 
 func TestStore_SetManyUpdatesExisting(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1317,6 +1355,7 @@ func TestStore_SetManyUpdatesExisting(t *testing.T) {
 }
 
 func TestStore_DeleteManyNotifications(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -1334,10 +1373,9 @@ func TestStore_DeleteManyNotifications(t *testing.T) {
 		t.Fatalf("Watch failed: %v", err)
 	}
 
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		_, _ = store.DeleteMany(ctx, "ns", []string{"del1", "del2"})
-	}()
+	// The watcher is registered synchronously and buffered, so a direct
+	// DeleteMany is race-free.
+	_, _ = store.DeleteMany(ctx, "ns", []string{"del1", "del2"})
 
 	// Should receive at least one delete event
 	select {
@@ -1351,6 +1389,7 @@ func TestStore_DeleteManyNotifications(t *testing.T) {
 }
 
 func TestStore_BulkWriteErrorDetails(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1391,6 +1430,7 @@ func TestStore_BulkWriteErrorDetails(t *testing.T) {
 }
 
 func TestStore_GetVersions_SpecificVersion(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1423,6 +1463,7 @@ func TestStore_GetVersions_SpecificVersion(t *testing.T) {
 }
 
 func TestStore_GetVersions_VersionNotFound(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1437,6 +1478,7 @@ func TestStore_GetVersions_VersionNotFound(t *testing.T) {
 }
 
 func TestStore_GetVersions_KeyNotFound(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1449,6 +1491,7 @@ func TestStore_GetVersions_KeyNotFound(t *testing.T) {
 }
 
 func TestStore_GetVersions_ListAll(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1480,6 +1523,7 @@ func TestStore_GetVersions_ListAll(t *testing.T) {
 }
 
 func TestStore_GetVersions_Pagination(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1539,6 +1583,7 @@ func TestStore_GetVersions_Pagination(t *testing.T) {
 }
 
 func TestStore_GetVersions_SingleVersion(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1561,6 +1606,7 @@ func TestStore_GetVersions_SingleVersion(t *testing.T) {
 }
 
 func TestStore_GetVersions_ClosedStore(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1573,6 +1619,7 @@ func TestStore_GetVersions_ClosedStore(t *testing.T) {
 }
 
 func TestStore_GetVersions_InvalidNamespace(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1585,6 +1632,7 @@ func TestStore_GetVersions_InvalidNamespace(t *testing.T) {
 }
 
 func TestStore_GetVersions_InvalidKey(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1597,6 +1645,7 @@ func TestStore_GetVersions_InvalidKey(t *testing.T) {
 }
 
 func TestStore_GetVersions_NilFilter(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1617,6 +1666,7 @@ func TestStore_GetVersions_NilFilter(t *testing.T) {
 }
 
 func TestStore_GetVersions_InvalidCursor(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1632,6 +1682,7 @@ func TestStore_GetVersions_InvalidCursor(t *testing.T) {
 }
 
 func TestStore_GetVersions_MaxHistory(t *testing.T) {
+	t.Parallel()
 	store := NewStore(WithMaxHistory(3))
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1662,6 +1713,7 @@ func TestStore_GetVersions_MaxHistory(t *testing.T) {
 }
 
 func TestStore_GetVersions_SetManyPreservesHistory(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1698,6 +1750,7 @@ func TestStore_GetVersions_SetManyPreservesHistory(t *testing.T) {
 }
 
 func TestStore_GetVersions_DeleteDiscardsHistory(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1730,6 +1783,7 @@ func TestStore_GetVersions_DeleteDiscardsHistory(t *testing.T) {
 }
 
 func TestStore_GetVersions_DeleteManyDiscardsHistory(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)
@@ -1756,6 +1810,7 @@ func TestStore_GetVersions_DeleteManyDiscardsHistory(t *testing.T) {
 // and conditional Set paths. This keeps write semantics aligned with read
 // semantics regardless of when the background sweeper runs.
 func TestStore_ExpiredEntryTreatedAsAbsent(t *testing.T) {
+	t.Parallel()
 	store := NewStore()
 	ctx := context.Background()
 	_ = store.Connect(ctx)

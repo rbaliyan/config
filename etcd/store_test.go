@@ -24,8 +24,8 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/rbaliyan/config"
-	"github.com/rbaliyan/config/etcd"
 	_ "github.com/rbaliyan/config/codec/json"
+	"github.com/rbaliyan/config/etcd"
 )
 
 // ----------------------------------------------------------------------------

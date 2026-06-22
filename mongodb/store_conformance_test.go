@@ -127,3 +127,11 @@ func TestMongoDB_VersionedStoreConformance(t *testing.T) {
 	probeMongoOnce(t)
 	storetest.RunVersionedStoreSuite(t, mongoVersionedFactory)
 }
+
+// TestMongoDB_WatchOrdering runs the shared watch-ordering contract over
+// change streams: N sequential Sets must arrive in order on the watch
+// channel. Docker-gated via probeMongoOnce.
+func TestMongoDB_WatchOrdering(t *testing.T) {
+	probeMongoOnce(t)
+	storetest.RunWatchOrderingContract(t, mongoFactory)
+}

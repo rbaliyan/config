@@ -253,6 +253,6 @@ func TestSupportsCodec_UnregisteredCodec(t *testing.T) {
 // used to test the BinData fallback path.
 type plainCodecForTest struct{}
 
-func (c *plainCodecForTest) Name() string                                            { return "test-plain" }
-func (c *plainCodecForTest) Encode(_ context.Context, _ any) ([]byte, error)         { return nil, nil }
-func (c *plainCodecForTest) Decode(_ context.Context, _ []byte, _ any) error         { return nil }
+func (c *plainCodecForTest) Name() string                                    { return "test-plain" }
+func (c *plainCodecForTest) Encode(_ context.Context, _ any) ([]byte, error) { return nil, nil }
+func (c *plainCodecForTest) Decode(_ context.Context, _ []byte, _ any) error { return nil }

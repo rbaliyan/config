@@ -1,0 +1,17 @@
+# libFuzzer dictionary for the cursor envelope decoder (FuzzCursorUnmarshal).
+# The envelope is base64-wrapped: seed both raw structural bytes and the
+# base64 alphabet so the mutator can explore version/tag/length framing.
+"\x01"
+"\x02"
+"\x00"
+"\xff"
+# backend tags the envelope is keyed by
+"memory"
+"sqlite"
+"postgres"
+"mongodb"
+# base64 padding / common prefixes seen in encoded cursors
+"="
+"=="
+"AQ"
+"Ag"
