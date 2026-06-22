@@ -12,9 +12,12 @@ compile_native_go_fuzzer github.com/rbaliyan/config/expand FuzzExpandAngle fuzz_
 
 # Install libFuzzer dictionaries next to their fuzzer binaries (OSS-Fuzz/CFLite
 # convention: a <fuzzer_name>.dict in $OUT is auto-loaded for that target).
-cp "$(dirname "$0")/codec.dict" "$OUT/fuzz_json_codec_decode.dict"
-cp "$(dirname "$0")/codec.dict" "$OUT/fuzz_yaml_codec_decode.dict"
-cp "$(dirname "$0")/codec.dict" "$OUT/fuzz_toml_codec_decode.dict"
-cp "$(dirname "$0")/cursor.dict" "$OUT/fuzz_cursor_unmarshal.dict"
-cp "$(dirname "$0")/expand.dict" "$OUT/fuzz_expand_dollar.dict"
-cp "$(dirname "$0")/expand.dict" "$OUT/fuzz_expand_angle.dict"
+# The dicts live in the repo checkout ($SRC/config), not next to the copied
+# build.sh ($SRC/build.sh), so reference them via the source tree.
+dict_dir="$SRC/config/.clusterfuzzlite"
+cp "$dict_dir/codec.dict" "$OUT/fuzz_json_codec_decode.dict"
+cp "$dict_dir/codec.dict" "$OUT/fuzz_yaml_codec_decode.dict"
+cp "$dict_dir/codec.dict" "$OUT/fuzz_toml_codec_decode.dict"
+cp "$dict_dir/cursor.dict" "$OUT/fuzz_cursor_unmarshal.dict"
+cp "$dict_dir/expand.dict" "$OUT/fuzz_expand_dollar.dict"
+cp "$dict_dir/expand.dict" "$OUT/fuzz_expand_angle.dict"
