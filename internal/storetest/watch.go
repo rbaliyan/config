@@ -84,10 +84,15 @@ func RunWatchOrderingContract(t *testing.T, factory Factory) {
 			if err != nil {
 				t.Fatalf("event value not int64: %v", err)
 			}
-			if cur <= last {
-				t.Fatalf("out-of-order event: got value %d after %d (events must be monotonic)", cur, last)
+			// Allow redelivery of the same value (at-least-once transports such
+			// as MongoDB change streams may repeat an event); only a strictly
+			// smaller value indicates real reordering.
+			if cur < last {
+				t.Fatalf("out-of-order event: got value %d after %d (events must be non-decreasing)", cur, last)
 			}
-			last = cur
+			if cur > last {
+				last = cur
+			}
 			if cur == n {
 				sawFinal = true
 			}
