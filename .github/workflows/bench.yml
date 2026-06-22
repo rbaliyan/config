@@ -55,19 +55,21 @@ jobs:
           fi
           go run golang.org/x/perf/cmd/benchstat@latest old.txt new.txt | tee benchstat.txt
 
-      - name: Regression gate
+      - name: Regression report
         if: github.event_name == 'pull_request'
         run: |
           if [ ! -f old.txt ]; then
-            echo "no baseline to gate against; skipping"; exit 0
+            echo "no baseline to compare against; skipping"; exit 0
           fi
-          # Version-independent gate: take the best (min) ns/op per benchmark
-          # across the -count runs in each file and fail if any benchmark on
-          # head regresses past the threshold vs base. Min-of-N is used to damp
-          # hosted-runner noise; the threshold is deliberately loose so only
-          # real regressions trip it (benchstat above remains the nuanced view).
-          THRESHOLD=1.30
-          awk -v thr="$THRESHOLD" '
+          # Informational regression report (not a hard gate). ns/op timings
+          # measured on shared GitHub-hosted runners vary widely run-to-run and
+          # across separate base/head runner allocations, so failing the job on
+          # a ratio threshold produces false positives on unchanged code. We
+          # surface large best-case (min ns/op) deltas as GitHub warnings for
+          # human review; the benchstat output above is the nuanced view. Run
+          # `just bench` locally for a reliable same-machine comparison.
+          REPORT_AT=1.50
+          awk -v thr="$REPORT_AT" '
             FNR==1 { file++ }
             /ns\/op/ {
               name=$1
@@ -77,18 +79,15 @@ jobs:
               else         { if (!(name in n) || v<n[name]) n[name]=v }
             }
             END {
-              bad=0
               for (k in n) {
                 if (k in o && o[k]>0) {
                   ratio=n[k]/o[k]
                   if (ratio>thr) {
-                    printf "REGRESSION %s: %.0f -> %.0f ns/op (%.2fx)\n", k, o[k], n[k], ratio
-                    bad=1
+                    printf "::warning::possible regression %s: %.0f -> %.0f ns/op (%.2fx) [runner noise is likely; verify locally]\n", k, o[k], n[k], ratio
                   }
                 }
               }
-              if (bad) { print "benchmark regression gate failed (threshold " thr "x)"; exit 1 }
-              print "benchmark regression gate passed (threshold " thr "x)"
+              print "benchmark regression report complete (informational; warns above " thr "x)"
             }
           ' old.txt new.txt
 
