@@ -11,8 +11,8 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/lib/pq v1.12.3
 	github.com/redis/go-redis/v9 v9.21.0
-	go.etcd.io/etcd/api/v3 v3.6.12
-	go.etcd.io/etcd/client/v3 v3.6.12
+	go.etcd.io/etcd/api/v3 v3.6.13
+	go.etcd.io/etcd/client/v3 v3.6.13
 	go.mongodb.org/mongo-driver/v2 v2.7.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/metric v1.44.0
@@ -45,7 +45,7 @@ require (
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
-	go.etcd.io/etcd/client/pkg/v3 v3.6.12 // indirect
+	go.etcd.io/etcd/client/pkg/v3 v3.6.13 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
