@@ -188,6 +188,35 @@ func TestSQLiteStore_ExpiredEntryTreatedAsAbsent(t *testing.T) {
 	}
 }
 
+// TestSQLiteStore_SetAcknowledgesExpiredWrite verifies that Set reports the
+// write it just performed even when the value is already past its TTL. Expiry
+// governs reads (Get), not the acknowledgement of a completed write: the
+// read-back Set uses to fetch server-assigned metadata must not re-apply the
+// liveness filter, or a short/past TTL makes Set spuriously return NotFound.
+func TestSQLiteStore_SetAcknowledgesExpiredWrite(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	past := time.Now().UTC().Add(-1 * time.Hour)
+	val := config.NewValue("stale", config.WithValueExpiresAt(past))
+
+	stored, err := store.Set(ctx, "ns", "k", val)
+	if err != nil {
+		t.Fatalf("Set with past expiry: want success, got %v", err)
+	}
+	if s, _ := stored.String(); s != "stale" {
+		t.Errorf("Set returned value = %q, want %q", s, "stale")
+	}
+	if v := stored.Metadata().Version(); v != 1 {
+		t.Errorf("Set returned version = %d, want 1", v)
+	}
+
+	// Expiry still governs reads: the row is past its TTL, so Get sees nothing.
+	if _, err := store.Get(ctx, "ns", "k"); !config.IsNotFound(err) {
+		t.Errorf("Get on expired entry: want NotFound, got %v", err)
+	}
+}
+
 // Compile-time interface checks
 var (
 	_ config.Store         = (*sqlite.Store)(nil)
