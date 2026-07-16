@@ -16,8 +16,11 @@ import (
 // the shared suites in store_conformance_test.go. This file keeps the SQLite-
 // specific tests: Watch (timing differs from other backends), SecretValue
 // (deeper than the conformance suite: SecretFrom recovery + version
-// increment), and ExpiredEntryTreatedAsAbsent (write/read symmetry on
-// past-TTL rows that is unique to the SQLite TTL implementation).
+// increment), and the TTL tests. Expired-entry read/write symmetry is a
+// contract shared by every TTL-capable backend (memory, postgres, mongodb,
+// sqlite); these tests live here because SQLite stores expires_at at
+// second resolution via datetime(), whose truncation drives edge cases the
+// other backends do not have.
 
 func newTestStore(t *testing.T) (*sqlite.Store, *sql.DB) {
 	t.Helper()
