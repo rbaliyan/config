@@ -150,14 +150,19 @@ func TestSQLiteStore_ExpiredEntryTreatedAsAbsent(t *testing.T) {
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
-	// Seed with a TTL just in the future, then wait past it. SQLite's
-	// datetime() function is second-resolution, so use a buffer of >1s.
-	soonExpiry := time.Now().UTC().Add(1 * time.Second)
+	// Seed with a TTL in the future, then wait past it. expires_at is stored at
+	// second resolution (Format truncates sub-second digits), and Set reads the
+	// row back through the same "expires_at > datetime('now')" filter Get uses.
+	// A 1s buffer is unsafe: when the write lands late in a second, truncation
+	// plus a read-back that crosses the second boundary makes the just-written
+	// row look already-expired, so the seed Set spuriously returns NotFound. Use
+	// a 2s buffer so truncation always leaves >=1s of headroom for the read-back.
+	soonExpiry := time.Now().UTC().Add(2 * time.Second)
 	val := config.NewValue("stale", config.WithValueExpiresAt(soonExpiry))
 	if _, err := store.Set(ctx, "ns", "k", val); err != nil {
 		t.Fatalf("seed Set: %v", err)
 	}
-	time.Sleep(2200 * time.Millisecond)
+	time.Sleep(3200 * time.Millisecond)
 
 	if _, err := store.Get(ctx, "ns", "k"); !config.IsNotFound(err) {
 		t.Errorf("Get on expired entry: want NotFound, got %v", err)
