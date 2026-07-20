@@ -309,8 +309,19 @@ func (s *Store) Close(ctx context.Context) error {
 	return nil
 }
 
-// Get retrieves a configuration value by namespace and key.
+// Get retrieves a configuration value by namespace and key. Entries past their
+// TTL are treated as absent.
 func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, error) {
+	return s.getEntry(ctx, namespace, key, true)
+}
+
+// getEntry fetches a single row. When requireLive is true (public reads) the
+// TTL filter excludes expired rows so they read as absent. When it is false
+// (the read-back after a write) the row is returned regardless of expiry: the
+// caller has just written it and only needs the server-assigned metadata, so
+// re-applying the liveness filter here would spuriously turn a completed write
+// into a NotFound.
+func (s *Store) getEntry(ctx context.Context, namespace, key string, requireLive bool) (config.Value, error) {
 	if s.closed.Load() {
 		return nil, config.ErrStoreClosed
 	}
@@ -318,11 +329,15 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (config.Value, e
 		return nil, err
 	}
 
+	liveFilter := ""
+	if requireLive {
+		liveFilter = "AND (expires_at IS NULL OR expires_at > datetime('now'))"
+	}
 	query := fmt.Sprintf(`
 		SELECT id, key, namespace, value, codec, type, version, created_at, updated_at, expires_at
 		FROM %s WHERE namespace = ? AND key = ?
-		AND (expires_at IS NULL OR expires_at > datetime('now'))
-	`, s.cfg.Table) // #nosec G201 -- table name is from configuration, not user input
+		%s
+	`, s.cfg.Table, liveFilter) // #nosec G201 -- table name is from configuration, not user input
 
 	var (
 		id                         int64
@@ -462,8 +477,10 @@ func (s *Store) Set(ctx context.Context, namespace, key string, value config.Val
 		}
 	}
 
-	// Fetch the stored value with updated metadata
-	stored, err := s.Get(ctx, namespace, key)
+	// Fetch the stored value with server-assigned metadata. Skip the liveness
+	// filter: the write above succeeded, so the row must be returned even when
+	// its TTL is already (or nearly) past. Expiry governs Get, not this ack.
+	stored, err := s.getEntry(ctx, namespace, key, false)
 	if err != nil {
 		return nil, err
 	}
@@ -882,9 +899,10 @@ func (s *Store) SetMany(ctx context.Context, namespace string, values map[string
 		succeeded = append(succeeded, key)
 
 		// Re-read the row so watchers see the same metadata (version, timestamps,
-		// preserved TTL) the other backends emit. A read failure is non-fatal —
-		// the write already succeeded — so we fall back to a value-less event.
-		stored, readErr := s.Get(ctx, namespace, key)
+		// preserved TTL) the other backends emit. Skip the liveness filter: the
+		// write succeeded, so the event must carry the value even for a short/past
+		// TTL. A read failure is non-fatal — fall back to a value-less event.
+		stored, readErr := s.getEntry(ctx, namespace, key, false)
 		event := config.ChangeEvent{
 			Type:      config.ChangeTypeSet,
 			Namespace: namespace,

@@ -16,8 +16,11 @@ import (
 // the shared suites in store_conformance_test.go. This file keeps the SQLite-
 // specific tests: Watch (timing differs from other backends), SecretValue
 // (deeper than the conformance suite: SecretFrom recovery + version
-// increment), and ExpiredEntryTreatedAsAbsent (write/read symmetry on
-// past-TTL rows that is unique to the SQLite TTL implementation).
+// increment), and the TTL tests. Expired-entry read/write symmetry is a
+// contract shared by every TTL-capable backend (memory, postgres, mongodb,
+// sqlite); these tests live here because SQLite stores expires_at at
+// second resolution via datetime(), whose truncation drives edge cases the
+// other backends do not have.
 
 func newTestStore(t *testing.T) (*sqlite.Store, *sql.DB) {
 	t.Helper()
@@ -150,14 +153,19 @@ func TestSQLiteStore_ExpiredEntryTreatedAsAbsent(t *testing.T) {
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
-	// Seed with a TTL just in the future, then wait past it. SQLite's
-	// datetime() function is second-resolution, so use a buffer of >1s.
-	soonExpiry := time.Now().UTC().Add(1 * time.Second)
+	// Seed with a TTL in the future, then wait past it. expires_at is stored at
+	// second resolution (Format truncates sub-second digits), and Set reads the
+	// row back through the same "expires_at > datetime('now')" filter Get uses.
+	// A 1s buffer is unsafe: when the write lands late in a second, truncation
+	// plus a read-back that crosses the second boundary makes the just-written
+	// row look already-expired, so the seed Set spuriously returns NotFound. Use
+	// a 2s buffer so truncation always leaves >=1s of headroom for the read-back.
+	soonExpiry := time.Now().UTC().Add(2 * time.Second)
 	val := config.NewValue("stale", config.WithValueExpiresAt(soonExpiry))
 	if _, err := store.Set(ctx, "ns", "k", val); err != nil {
 		t.Fatalf("seed Set: %v", err)
 	}
-	time.Sleep(2200 * time.Millisecond)
+	time.Sleep(3200 * time.Millisecond)
 
 	if _, err := store.Get(ctx, "ns", "k"); !config.IsNotFound(err) {
 		t.Errorf("Get on expired entry: want NotFound, got %v", err)
@@ -180,6 +188,35 @@ func TestSQLiteStore_ExpiredEntryTreatedAsAbsent(t *testing.T) {
 	gs, _ := got.String()
 	if gs != "fresh" {
 		t.Errorf("post-takeover value = %q, want %q", gs, "fresh")
+	}
+}
+
+// TestSQLiteStore_SetAcknowledgesExpiredWrite verifies that Set reports the
+// write it just performed even when the value is already past its TTL. Expiry
+// governs reads (Get), not the acknowledgement of a completed write: the
+// read-back Set uses to fetch server-assigned metadata must not re-apply the
+// liveness filter, or a short/past TTL makes Set spuriously return NotFound.
+func TestSQLiteStore_SetAcknowledgesExpiredWrite(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	past := time.Now().UTC().Add(-1 * time.Hour)
+	val := config.NewValue("stale", config.WithValueExpiresAt(past))
+
+	stored, err := store.Set(ctx, "ns", "k", val)
+	if err != nil {
+		t.Fatalf("Set with past expiry: want success, got %v", err)
+	}
+	if s, _ := stored.String(); s != "stale" {
+		t.Errorf("Set returned value = %q, want %q", s, "stale")
+	}
+	if v := stored.Metadata().Version(); v != 1 {
+		t.Errorf("Set returned version = %d, want 1", v)
+	}
+
+	// Expiry still governs reads: the row is past its TTL, so Get sees nothing.
+	if _, err := store.Get(ctx, "ns", "k"); !config.IsNotFound(err) {
+		t.Errorf("Get on expired entry: want NotFound, got %v", err)
 	}
 }
 
